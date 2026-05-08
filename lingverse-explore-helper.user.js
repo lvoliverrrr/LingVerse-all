@@ -1,0 +1,1314 @@
+// ==UserScript==
+// @name         灵界 LingVerse 自动开藏宝图
+// @namespace    lingverse-auto-map
+// @version      2.2.8
+// @description  自动开启背包中的藏宝图
+// @author       LingVerse
+// @match        https://ling.muge.info/*
+// @match        http://ling.muge.info/*
+// @grant        GM_addStyle
+// @run-at       document-end
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // 获取全局窗口对象，兼容Tampermonkey等用户脚本环境
+    const _win = (typeof unsafeWindow !== 'undefined') ? unsafeWindow : window;
+    // 选择器简写函数
+    const $ = (sel) => document.querySelector(sel);
+    // 延迟函数
+    const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+    // 配置对象
+    const CONFIG = {
+        openInterval: 3000,        // 开启藏宝图间隔
+        maxMapsPerBatch: 50,       // 每批最大开启数量
+        batchSize: 10,             // 批量处理大小
+        stopOnBattle: true,        // 遇到战斗时是否停止
+        guardian: {                // 护道者相关配置
+            enabled: true,         // 是否启用自动雇护道
+            maxFee: 0,             // 最高雇佣费（0表示不限）
+            minAtk: 0,             // 最低攻击力要求
+            mode: 'together',      // 战斗模式（together或alone）
+            priority: 'incarnation,normal,body', // 雇佣优先级
+            monsterHp: 0,          // 妖兽最高生命值（0表示不限）
+            monsterAtk: 0          // 妖兽最高攻击力（0表示不限）
+        }
+    };
+
+    // 从localStorage加载保存的配置
+    const saved = localStorage.getItem('lingverse_auto_map_config');
+    if (saved) {
+        try {
+            const parsed = JSON.parse(saved);
+            Object.assign(CONFIG, parsed);
+        } catch (e) {}
+    }
+
+    // 状态对象
+    const STATE = {
+        running: false,            // 脚本是否正在运行
+        isOpeningMap: false,       // 是否正在开图
+        stats: {                   // 当前会话统计
+            mapsOpened: 0,         // 已开启的地图数
+            battlesEncountered: 0, // 遇到的战斗数
+            guardianHired: 0,      // 雇佣护道者次数
+            rewards: []            // 获得的奖励
+        }
+    };
+
+    // 总体统计数据
+    const TOTAL_STATS = {
+        totalMapsOpened: 0,        // 总开启地图数
+        totalBattles: 0,           // 总遇敌数
+        totalGuardianHired: 0,     // 总雇护道数
+        totalRewards: {},          // 总获得奖励
+        history: [],               // 历史记录
+        luckStats: {               // 气运统计
+            totalSamples: 0,       // 总样本数
+            totalBattles: 0,       // 总战斗数
+            records: []            // 统计记录
+        }
+    };
+
+    // 从localStorage加载保存的统计数据
+    const savedStats = localStorage.getItem('lingverse_auto_map_total_stats');
+    if (savedStats) {
+        try {
+            Object.assign(TOTAL_STATS, JSON.parse(savedStats));
+        } catch (e) {}
+    }
+
+    // API接口封装
+    const API = {
+        /**
+         * 获取API对象
+         */
+        getApiObj() {
+            const apiObj = typeof api !== 'undefined' ? api : (window.api || _win.api);
+            if (!apiObj) {
+                throw new Error('API对象不可用');
+            }
+            return apiObj;
+        },
+
+        /**
+         * 获取背包信息
+         */
+        async getInventory() {
+            const apiObj = this.getApiObj();
+            return await apiObj.get('/api/game/inventory');
+        },
+
+        /**
+         * 获取玩家信息
+         */
+        async getPlayerInfo() {
+            const apiObj = this.getApiObj();
+            return await apiObj.get('/api/player/info');
+        },
+
+        /**
+         * 使用藏宝图
+         * @param {string} itemId - 物品ID
+         * @param {number} quantity - 数量
+         */
+        async useTreasureMap(itemId, quantity = 1) {
+            const apiObj = this.getApiObj();
+            const body = { itemId: itemId };
+            if (quantity > 1) body.quantity = quantity;
+            return await apiObj.post('/api/game/use-item', body);
+        },
+
+        /**
+         * 获取护道者列表
+         */
+        async getGuardianList() {
+            const apiObj = this.getApiObj();
+            return await apiObj.get('/api/game/guardian/list');
+        },
+
+        /**
+         * 雇佣护道者
+         * @param {string} guardianId - 护道者ID
+         */
+        async hireGuardian(guardianId) {
+            const apiObj = this.getApiObj();
+            return await apiObj.post('/api/game/guardian/hire', { guardianId });
+        },
+
+        /**
+         * 自动雇佣护道者
+         * @param {Object} config - 雇佣配置
+         */
+        async autoHireGuardian(config) {
+            const apiObj = this.getApiObj();
+            return await apiObj.post('/api/game/encounter-auto-hire', config);
+        }
+    };
+
+    // 日志管理器
+    const Logger = {
+        /**
+         * 记录日志
+         * @param {string} msg - 日志消息
+         * @param {string} type - 日志类型
+         */
+        log(msg, type = 'info') {
+            const time = new Date().toLocaleTimeString();
+            const prefix = `[自动开图 ${time}]`;
+            console.log(`${prefix} ${msg}`);
+            
+            const logEl = $('#am-log-content');
+            if (logEl) {
+                const color = type === 'error' ? '#ff6b6b' : type === 'success' ? '#3dab97' : type === 'warning' ? '#f59e0b' : '#94a3b8';
+                logEl.innerHTML += `<div style="color:${color};margin:2px 0;font-size:12px;">${msg}</div>`;
+                logEl.scrollTop = logEl.scrollHeight;
+            }
+        },
+        info(msg) { this.log(msg, 'info'); },
+        success(msg) { this.log(msg, 'success'); },
+        warn(msg) { this.log(msg, 'warning'); },
+        error(msg) { this.log(msg, 'error'); }
+    };
+
+    // 统计管理器
+    const StatsManager = {
+        /**
+         * 保存统计数据到localStorage
+         */
+        save() {
+            localStorage.setItem('lingverse_auto_map_total_stats', JSON.stringify(TOTAL_STATS));
+        },
+        
+        /**
+         * 添加奖励记录
+         * @param {string} rewardText - 奖励文本
+         */
+        addReward(rewardText) {
+            if (!rewardText) return;
+            const items = rewardText.split(/[,，]/);
+            items.forEach(item => {
+                const match = item.trim().match(/(.+?)\s*x\s*(\d+)/);
+                if (match) {
+                    const name = match[1].trim();
+                    const count = parseInt(match[2]) || 1;
+                    TOTAL_STATS.totalRewards[name] = (TOTAL_STATS.totalRewards[name] || 0) + count;
+                }
+            });
+            this.save();
+        },
+        
+        /**
+         * 记录会话统计
+         * @param {Object} sessionStats - 会话统计数据
+         */
+        recordSession(sessionStats) {
+            TOTAL_STATS.history.unshift({
+                date: new Date().toISOString(),
+                mapsOpened: sessionStats.mapsOpened,
+                battles: sessionStats.battlesEncountered,
+                guardianHired: sessionStats.guardianHired,
+                rewards: sessionStats.rewards
+            });
+            if (TOTAL_STATS.history.length > 50) {
+                TOTAL_STATS.history = TOTAL_STATS.history.slice(0, 50);
+            }
+            this.save();
+        },
+        
+        /**
+         * 获取最高奖励列表
+         * @param {number} limit - 限制数量
+         */
+        getTopRewards(limit = 5) {
+            return Object.entries(TOTAL_STATS.totalRewards)
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, limit);
+        },
+
+        /**
+         * 记录气运数据
+         * @param {number} luck - 气运值
+         * @param {boolean} isBattle - 是否为战斗
+         */
+        recordLuckData(luck, isBattle) {
+            const ls = TOTAL_STATS.luckStats;
+            ls.totalSamples++;
+            if (isBattle) ls.totalBattles++;
+
+            if (ls.totalSamples % 100 === 0) {
+                this.calculateAndSaveRate();
+            }
+        },
+
+        /**
+         * 计算并保存比率
+         */
+        calculateAndSaveRate() {
+            const ls = TOTAL_STATS.luckStats;
+            if (ls.totalSamples === 0) return null;
+
+            const rate = (ls.totalBattles / ls.totalSamples * 100).toFixed(1);
+
+            const existingIndex = ls.records.findIndex(r => r.totalSamples === ls.totalSamples);
+            if (existingIndex >= 0) {
+                ls.records[existingIndex] = {
+                    totalSamples: ls.totalSamples,
+                    battleCount: ls.totalBattles,
+                    rate: rate + '%',
+                    date: new Date().toISOString()
+                };
+            } else {
+                ls.records.unshift({
+                    totalSamples: ls.totalSamples,
+                    battleCount: ls.totalBattles,
+                    rate: rate + '%',
+                    date: new Date().toISOString()
+                });
+            }
+
+            if (ls.records.length > 20) {
+                ls.records = ls.records.slice(0, 20);
+            }
+
+            this.save();
+            Logger.info(`📊 累计${ls.totalSamples}次统计 - 总遇敌率: ${rate}%`);
+            return rate;
+        }
+    };
+
+    // 主题相关工具
+    const Theme = {
+        /**
+         * 检测是否为暗色主题
+         */
+        isDark() {
+            const html = document.documentElement;
+            if (html.classList.contains('theme-dark')) return true;
+            if (html.classList.contains('theme-light')) return false;
+            return window.matchMedia('(prefers-color-scheme: dark)').matches;
+        }
+    };
+
+    // UI界面管理器
+    const UI = {
+        /**
+         * 初始化UI界面
+         */
+        init() {
+            this.createPanel();
+            this.createSidebarButton();
+            this.applyStyles();
+            this.updateTotalStats();
+        },
+
+        /**
+         * 创建主面板
+         */
+        createPanel() {
+            if ($('#am-panel')) return;
+
+            const isDark = Theme.isDark();
+            const bg = isDark ? '#252b3a' : '#fafbfc';
+            const text = isDark ? '#e2e8f0' : '#1e293b';
+            const border = isDark ? 'rgba(148,163,184,0.12)' : 'rgba(148,163,184,0.2)';
+
+            const panel = document.createElement('div');
+            panel.id = 'am-panel';
+            panel.style.cssText = `
+                position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+                width:360px;height:600px;max-height:85vh;background:${bg};border:1px solid ${border};
+                border-radius:12px;padding:15px;z-index:99999;display:none;
+                flex-direction:column;gap:10px;font-family:system-ui,sans-serif;
+                box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;
+            `;
+
+            panel.innerHTML = `
+                <div id="am-header" style="display:flex;justify-content:space-between;align-items:center;cursor:move;-webkit-user-select:none;user-select:none;flex-shrink:0;">
+                    <div style="display:flex;align-items:center;gap:8px;">
+                        <h3 style="margin:0;color:${text};font-size:16px;">自动开藏宝图</h3>
+                        <span id="am-status-indicator" style="display:none;width:8px;height:8px;background:#3dab97;border-radius:50%;animation:pulse 1.5s infinite;"></span>
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                        <button id="am-minimize" style="background:transparent;border:1px solid ${border};color:${text};width:28px;height:28px;border-radius:4px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;">−</button>
+                        <button id="am-close" style="background:none;border:none;color:${text};font-size:20px;cursor:pointer;">×</button>
+                    </div>
+                </div>
+                
+                <div id="am-content" style="flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;gap:10px;min-height:0;">
+
+                <div style="padding:10px;background:${isDark?'#1e2330':'#f0f1f2'};border-radius:6px;flex-shrink:0;">
+                    <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:8px;font-weight:bold;">🎲 气运状态</div>
+                    <div style="display:flex;gap:16px;align-items:center;">
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">当前气运</span><div id="am-luck-value" style="color:#f59e0b;font-size:18px;font-weight:bold;">--</div></div>
+                        <div id="am-luck-warning" style="flex:1;font-size:11px;color:#ff6b6b;display:none;">⚠️ 当前气运可能会导致遇敌概率（宝藏守卫）下降</div>
+                    </div>
+                    <div style="margin-top:10px;padding-top:10px;border-top:1px solid ${isDark?'rgba(148,163,184,0.2)':'rgba(148,163,184,0.3)'};display:flex;gap:16px;">
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">累计开启</span><div id="am-luck-total-maps" style="color:${isDark?'#cbd5e1':'#475569'};font-size:14px;font-weight:bold;margin-top:2px;">0</div></div>
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">累计遇敌</span><div id="am-luck-total-battles" style="color:#ff6b6b;font-size:14px;font-weight:bold;margin-top:2px;">0</div></div>
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">遇敌率</span><div id="am-luck-rate" style="color:#3dab97;font-size:14px;font-weight:bold;margin-top:2px;">--</div></div>
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">雇护道率</span><div id="am-luck-guardian-rate" style="color:#4dabf7;font-size:14px;font-weight:bold;margin-top:2px;">--</div></div>
+                    </div>
+                </div>
+
+                <div style="display:flex;gap:8px;flex-shrink:0;">
+                    <button id="am-start" style="flex:1;padding:10px;background:#3dab97;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">▶ 启动</button>
+                    <button id="am-stop" style="flex:1;padding:10px;background:#ff6b6b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:bold;display:none;">⏹ 停止</button>
+                </div>
+
+                <div style="padding:12px;background:${isDark?'#1e2330':'#f0f1f2'};border-radius:6px;margin-top:12px;flex-shrink:0;">
+                    <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:10px;font-weight:bold;">⚙️ 基础配置</div>
+                    
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                        <div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">每次最多开启</div>
+                            <input type="number" id="am-max-per-batch" value="${CONFIG.maxMapsPerBatch}" min="1" max="1000" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                        <div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">批量数量(1-10)</div>
+                            <input type="number" id="am-batch-size" value="${CONFIG.batchSize}" min="1" max="10" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                        <div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">开启间隔 (ms)</div>
+                            <input type="number" id="am-open-interval" value="${CONFIG.openInterval}" min="1000" step="500" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="padding:12px;background:${isDark?'#1e2330':'#f0f1f2'};border-radius:6px;flex-shrink:0;">
+                    <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:10px;font-weight:bold;">🛡️ 自动护道配置</div>
+                    
+                    <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+                        <input type="checkbox" id="am-guardian-enabled" ${CONFIG.guardian.enabled?'checked':''} style="cursor:pointer;">
+                        <span style="font-size:13px;color:${text};">启用自动雇护道</span>
+                    </label>
+                    
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                        <div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">最高雇佣费</div>
+                            <input type="number" id="am-guardian-maxfee" value="${CONFIG.guardian.maxFee}" placeholder="0=不限" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                        <div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">最低攻击力</div>
+                            <input type="number" id="am-guardian-minatk" value="${CONFIG.guardian.minAtk}" placeholder="0=不限" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                    </div>
+                    
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">作战模式</div>
+                        <select id="am-guardian-mode" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;cursor:pointer;">
+                            <option value="together" ${CONFIG.guardian.mode==='together'?'selected':''}>协同作战（与玩家一起）</option>
+                            <option value="alone" ${CONFIG.guardian.mode==='alone'?'selected':''}>独立作战（护道单独战斗）</option>
+                        </select>
+                    </div>
+                    
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">档次优先级</div>
+                        <select id="am-guardian-priority" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;cursor:pointer;">
+                            <option value="incarnation,normal,body" ${CONFIG.guardian.priority==='incarnation,normal,body'?'selected':''}>化身 > 普通 > 本体</option>
+                            <option value="normal,incarnation,body" ${CONFIG.guardian.priority==='normal,incarnation,body'?'selected':''}>普通 > 化身 > 本体</option>
+                            <option value="body,normal,incarnation" ${CONFIG.guardian.priority==='body,normal,incarnation'?'selected':''}>本体 > 普通 > 化身</option>
+                        </select>
+                    </div>
+                    
+                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin:8px 0 4px 0;padding-top:8px;border-top:1px solid ${border};">👹 妖兽设置（0=不限）</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                        <div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">妖兽最高生命</div>
+                            <input type="number" id="am-guardian-monsterhp" value="${CONFIG.guardian.monsterHp}" placeholder="0=不限" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                        <div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">妖兽最高攻击</div>
+                            <input type="number" id="am-guardian-monsteratk" value="${CONFIG.guardian.monsterAtk}" placeholder="0=不限" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                    </div>
+                    
+                    <button id="am-save-config" style="width:100%;margin-top:10px;padding:8px;background:#4dabf7;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">💾 保存配置</button>
+                </div>
+
+                <div style="padding:10px;background:${isDark?'#1e2330':'#f0f1f2'};border-radius:6px;flex-shrink:0;">
+                    <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:8px;font-weight:bold;">📊 本次统计</div>
+                    <div style="display:flex;gap:16px;">
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">已开启</span><div id="am-stat-maps" style="color:#3dab97;font-size:18px;font-weight:bold;">0</div></div>
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">遇守卫</span><div id="am-stat-battles" style="color:#ff6b6b;font-size:18px;font-weight:bold;">0</div></div>
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">雇护道</span><div id="am-stat-guardian" style="color:#4dabf7;font-size:18px;font-weight:bold;">0</div></div>
+                    </div>
+                </div>
+                
+                <div style="padding:10px;background:${isDark?'#1e2330':'#f0f1f2'};border-radius:6px;flex-shrink:0;">
+                    <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:8px;font-weight:bold;">🏆 累计统计</div>
+                    <div style="display:flex;gap:16px;">
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">总开启</span><div id="am-total-maps" style="color:#3dab97;font-size:18px;font-weight:bold;">${TOTAL_STATS.totalMapsOpened}</div></div>
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">总遇敌</span><div id="am-total-battles" style="color:#ff6b6b;font-size:18px;font-weight:bold;">${TOTAL_STATS.totalBattles}</div></div>
+                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">总雇护道</span><div id="am-total-guardian" style="color:#4dabf7;font-size:18px;font-weight:bold;">${TOTAL_STATS.totalGuardianHired}</div></div>
+                    </div>
+                </div>
+                </div>
+                
+                <div id="am-log-wrapper" style="flex:1;min-height:100px;max-height:180px;display:flex;flex-direction:column;gap:6px;overflow:hidden;">
+                    <div style="flex:1;overflow-y:auto;padding:10px;background:${isDark?'#1e2330':'#f0f1f2'};border-radius:6px;font-size:12px;" id="am-log-content">
+                        <div style="color:${isDark?'#64748b':'#94a3b8'};">等待启动...</div>
+                    </div>
+                    <button id="am-clear-log" style="padding:6px 12px;background:none;border:1px solid ${border};color:${isDark?'#94a3b8':'#64748b'};border-radius:4px;cursor:pointer;font-size:12px;flex-shrink:0;">清空日志</button>
+                </div>
+            `;
+
+            document.body.appendChild(panel);
+
+            this.makeDraggable(panel, $('#am-header'));
+
+            $('#am-close')?.addEventListener('click', () => panel.style.display = 'none');
+            $('#am-minimize')?.addEventListener('click', () => this.toggleMinimize());
+            $('#am-start')?.addEventListener('click', () => MapOpener.start());
+            $('#am-stop')?.addEventListener('click', () => MapOpener.stop());
+            $('#am-clear-log')?.addEventListener('click', () => {
+                $('#am-log-content').innerHTML = '<div style="color:#64748b;">日志已清空</div>';
+            });
+
+            $('#am-calc-rate')?.addEventListener('click', () => {
+                const rate = StatsManager.calculateAndSaveRate();
+                if (rate !== null) {
+                    UI.updateLuckDisplay(MapOpener.currentLuck);
+                    Logger.success(`📊 手动计算 - 累计${TOTAL_STATS.luckStats.totalSamples}次，遇敌率: ${rate}%`);
+                } else {
+                    Logger.warn('暂无数据，请先开启藏宝图');
+                }
+            });
+
+            $('#am-save-config')?.addEventListener('click', async () => {
+                CONFIG.maxMapsPerBatch = parseInt($('#am-max-per-batch')?.value || '50') || 50;
+                CONFIG.batchSize = parseInt($('#am-batch-size')?.value || '10') || 10;
+                if (CONFIG.batchSize < 1) CONFIG.batchSize = 1;
+                if (CONFIG.batchSize > 10) CONFIG.batchSize = 10;
+                CONFIG.openInterval = parseInt($('#am-open-interval')?.value || '3000') || 3000;
+                
+                CONFIG.guardian.enabled = $('#am-guardian-enabled')?.checked ?? true;
+                CONFIG.guardian.maxFee = parseInt($('#am-guardian-maxfee')?.value || '0') || 0;
+                CONFIG.guardian.minAtk = parseInt($('#am-guardian-minatk')?.value || '0') || 0;
+                CONFIG.guardian.mode = $('#am-guardian-mode')?.value || 'together';
+                CONFIG.guardian.priority = $('#am-guardian-priority')?.value || 'incarnation,normal,body';
+                CONFIG.guardian.monsterHp = parseInt($('#am-guardian-monsterhp')?.value || '0') || 0;
+                CONFIG.guardian.monsterAtk = parseInt($('#am-guardian-monsteratk')?.value || '0') || 0;
+                
+                localStorage.setItem('lingverse_auto_map_config', JSON.stringify(CONFIG));
+                
+                try {
+                    const apiObj = typeof api !== 'undefined' ? api : (window.api || _win.api);
+                    if (apiObj?.post) {
+                        const priorityArr = CONFIG.guardian.priority.split(',');
+                        const hireRes = await apiObj.post('/api/player/settings/auto-hire', {
+                            enabled: CONFIG.guardian.enabled,
+                            maxFee: CONFIG.guardian.maxFee,
+                            minAtk: CONFIG.guardian.minAtk,
+                            mode: CONFIG.guardian.mode,
+                            priority: priorityArr
+                        });
+                        
+                        const combatRes = await apiObj.post('/api/player/auto-combat-settings', {
+                            hp: CONFIG.guardian.monsterHp,
+                            atk: CONFIG.guardian.monsterAtk
+                        });
+                        
+                        if (_win.persistAutoHireToLocal) {
+                            _win.persistAutoHireToLocal({
+                                enabled: CONFIG.guardian.enabled,
+                                maxFee: CONFIG.guardian.maxFee,
+                                minAtk: CONFIG.guardian.minAtk,
+                                mode: CONFIG.guardian.mode,
+                                priorityKey: CONFIG.guardian.priority
+                            });
+                        }
+                        
+                        if (hireRes?.code === 200 && combatRes?.code === 200) {
+                            Logger.success('配置已保存（同步到游戏）');
+                        } else {
+                            const hireMsg = hireRes?.code !== 200 ? `护道:${hireRes?.message} ` : '';
+                            const combatMsg = combatRes?.code !== 200 ? `妖兽:${combatRes?.message}` : '';
+                            Logger.warn(`部分同步失败 ${hireMsg}${combatMsg}`);
+                        }
+                        
+                        if (_win.loadPlayerInfo) {
+                            _win.loadPlayerInfo(true);
+                        }
+                    } else {
+                        Logger.success('配置已保存（本地）');
+                    }
+                } catch (e) {
+                    Logger.warn(`同步失败: ${e.message}`);
+                }
+            });
+
+            this.loadLuckOnInit();
+            this.syncConfigFromGame();
+        },
+
+        /**
+         * 初始化时加载气运信息
+         */
+        async loadLuckOnInit() {
+            try {
+                const playerRes = await API.getPlayerInfo();
+                if (playerRes.code === 200 && playerRes.data) {
+                    const luck = playerRes.data.luck;
+                    MapOpener.currentLuck = luck;
+                    UI.updateLuckDisplay(luck);
+                    console.log('[自动开图] 面板加载时获取气运:', luck);
+                } else {
+                    UI.updateLuckDisplay(null);
+                }
+            } catch (e) {
+                console.warn('[自动开图] 面板加载时获取气运失败:', e.message);
+                UI.updateLuckDisplay(null);
+            }
+        },
+
+        /**
+         * 从游戏中同步配置
+         */
+        async syncConfigFromGame() {
+            try {
+                const apiObj = typeof api !== 'undefined' ? api : (window.api || _win.api);
+                if (!apiObj?.get) return;
+
+                const res = await apiObj.get('/api/player/settings');
+                if (res.code === 200 && res.data) {
+                    const s = res.data;
+
+                    if (typeof s['auto_hire_enabled'] !== 'undefined') {
+                        CONFIG.guardian.enabled = s['auto_hire_enabled'] === '1' || s['auto_hire_enabled'] === true;
+                    }
+                    if (typeof s['auto_hire_mode'] !== 'undefined') {
+                        CONFIG.guardian.mode = s['auto_hire_mode'] === 'alone' ? 'alone' : 'together';
+                    }
+                    if (typeof s['auto_hire_max_fee'] !== 'undefined') {
+                        CONFIG.guardian.maxFee = parseInt(s['auto_hire_max_fee'], 10) || 0;
+                    }
+                    if (typeof s['auto_hire_min_atk'] !== 'undefined') {
+                        CONFIG.guardian.minAtk = parseInt(s['auto_hire_min_atk'], 10) || 0;
+                    }
+                    if (typeof s['auto_hire_priority'] !== 'undefined') {
+                        const priorityArr = s['auto_hire_priority'].split(',').filter(p => p);
+                        if (priorityArr.length > 0) {
+                            CONFIG.guardian.priority = priorityArr.join(',');
+                        }
+                    }
+
+                    if (typeof s['auto_combat_min_hp'] !== 'undefined') {
+                        CONFIG.guardian.monsterHp = parseInt(s['auto_combat_min_hp'], 10) || 0;
+                    }
+                    if (typeof s['auto_combat_min_atk'] !== 'undefined') {
+                        CONFIG.guardian.monsterAtk = parseInt(s['auto_combat_min_atk'], 10) || 0;
+                    }
+
+                    this.updatePanelFromConfig();
+                    console.log('[自动开图] 已从游戏同步配置:', CONFIG.guardian);
+                }
+            } catch (e) {
+                console.warn('[自动开图] 从游戏同步配置失败:', e.message);
+            }
+        },
+
+        /**
+         * 从配置更新面板
+         */
+        updatePanelFromConfig() {
+            const enabledEl = $('#am-guardian-enabled');
+            const maxFeeEl = $('#am-guardian-maxfee');
+            const minAtkEl = $('#am-guardian-minatk');
+            const modeEl = $('#am-guardian-mode');
+            const priorityEl = $('#am-guardian-priority');
+            const monsterHpEl = $('#am-guardian-monsterhp');
+            const monsterAtkEl = $('#am-guardian-monsteratk');
+
+            if (enabledEl) enabledEl.checked = CONFIG.guardian.enabled;
+            if (maxFeeEl) maxFeeEl.value = CONFIG.guardian.maxFee;
+            if (minAtkEl) minAtkEl.value = CONFIG.guardian.minAtk;
+            if (modeEl) modeEl.value = CONFIG.guardian.mode;
+            if (priorityEl) priorityEl.value = CONFIG.guardian.priority;
+            if (monsterHpEl) monsterHpEl.value = CONFIG.guardian.monsterHp;
+            if (monsterAtkEl) monsterAtkEl.value = CONFIG.guardian.monsterAtk;
+        },
+
+        /**
+         * 创建侧边栏按钮
+         */
+        createSidebarButton() {
+            if ($('#am-sidebar-btn')) return;
+
+            const section = document.createElement('div');
+            section.className = 'panel-section';
+            section.id = 'am-sidebar-section';
+            section.style.cssText = 'margin-bottom:20px;padding-bottom:16px;border-bottom:1px solid var(--border-color);';
+
+            const title = document.createElement('div');
+            title.className = 'panel-section-title';
+            title.textContent = '自动开图';
+            title.style.cssText = 'font-size:14px;font-weight:bold;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px;';
+            section.appendChild(title);
+
+            const btn = document.createElement('button');
+            btn.id = 'am-sidebar-btn';
+            btn.textContent = '打开面板';
+            btn.style.cssText = `
+                width:100%;padding:10px 12px;
+                background:rgba(61,171,151,0.2);border:1px solid rgba(61,171,151,0.4);
+                border-radius:6px;color:#3dab97;font-size:13px;font-weight:bold;cursor:pointer;
+            `;
+            btn.addEventListener('click', () => {
+                const panel = $('#am-panel');
+                if (panel) panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+            });
+
+            section.appendChild(btn);
+            this.insertToSidebar(section);
+        },
+
+        /**
+         * 将按钮插入侧边栏
+         * @param {Element} section - 按钮容器元素
+         */
+        insertToSidebar(section) {
+            try {
+                if (section.parentNode) {
+                    return;
+                }
+
+                const playerPanel = $('.player-panel') || $('#playerPanel');
+                if (playerPanel && document.contains(playerPanel)) {
+                    const firstSection = playerPanel.querySelector('.panel-section');
+                    if (firstSection && document.contains(firstSection)) {
+                        playerPanel.insertBefore(section, firstSection);
+                        return;
+                    }
+                }
+
+                const sidebar = $('.player-panel') || $('#playerPanel') || $('.sidebar') || $('#sidebar') || $('.sidebar-nav');
+                if (sidebar && document.contains(sidebar)) {
+                    if (!sidebar.querySelector('#am-sidebar-section')) {
+                        sidebar.appendChild(section);
+                    }
+                    return;
+                }
+
+                setTimeout(() => this.insertToSidebar(section), 1000);
+            } catch (e) {
+                console.warn('[自动开图] 插入侧边栏失败: ' + e.message);
+            }
+        },
+
+        /**
+         * 使面板可拖拽
+         * @param {Element} panel - 面板元素
+         * @param {Element} header - 拖拽头部元素
+         */
+        makeDraggable(panel, header) {
+            if (!panel || !header) return;
+
+            let isDragging = false;
+            let startX, startY, startLeft, startTop;
+            let currentX = 0, currentY = 0;
+            let rafId = null;
+
+            const updatePosition = () => {
+                if (!isDragging) return;
+                panel.style.transform = `translate3d(${currentX}px, ${currentY}px, 0)`;
+                rafId = null;
+            };
+
+            header.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                startX = e.clientX;
+                startY = e.clientY;
+                const rect = panel.getBoundingClientRect();
+                startLeft = rect.left;
+                startTop = rect.top;
+                currentX = 0;
+                currentY = 0;
+                panel.style.left = startLeft + 'px';
+                panel.style.top = startTop + 'px';
+                panel.style.transform = 'translate3d(0, 0, 0)';
+                panel.style.transition = 'none';
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                currentX = e.clientX - startX;
+                currentY = e.clientY - startY;
+                if (!rafId) {
+                    rafId = requestAnimationFrame(updatePosition);
+                }
+            });
+
+            document.addEventListener('mouseup', () => {
+                if (!isDragging) return;
+                isDragging = false;
+                if (rafId) {
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                }
+                const rect = panel.getBoundingClientRect();
+                panel.style.left = rect.left + 'px';
+                panel.style.top = rect.top + 'px';
+                panel.style.transform = 'none';
+                panel.style.transition = 'opacity 2s ease';
+            });
+
+            header.addEventListener('touchstart', (e) => {
+                isDragging = true;
+                const touch = e.touches[0];
+                startX = touch.clientX;
+                startY = touch.clientY;
+                const rect = panel.getBoundingClientRect();
+                startLeft = rect.left;
+                startTop = rect.top;
+                currentX = 0;
+                currentY = 0;
+                panel.style.left = startLeft + 'px';
+                panel.style.top = startTop + 'px';
+                panel.style.transform = 'translate3d(0, 0, 0)';
+                panel.style.transition = 'none';
+            }, { passive: false });
+
+            document.addEventListener('touchmove', (e) => {
+                if (!isDragging) return;
+                e.preventDefault();
+                const touch = e.touches[0];
+                currentX = touch.clientX - startX;
+                currentY = touch.clientY - startY;
+                if (!rafId) {
+                    rafId = requestAnimationFrame(updatePosition);
+                }
+            }, { passive: false });
+
+            document.addEventListener('touchend', () => {
+                if (!isDragging) return;
+                isDragging = false;
+                if (rafId) {
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                }
+                const rect = panel.getBoundingClientRect();
+                panel.style.left = rect.left + 'px';
+                panel.style.top = rect.top + 'px';
+                panel.style.transform = 'none';
+                panel.style.transition = 'opacity 0.2s ease';
+            });
+        },
+
+        /**
+         * 切换最小化状态
+         */
+        toggleMinimize() {
+            const content = $('#am-content');
+            const logWrapper = $('#am-log-wrapper');
+            const panel = $('#am-panel');
+            const btn = $('#am-minimize');
+            if (!content || !panel || !btn) return;
+
+            const isHidden = content.style.display === 'none';
+            content.style.display = isHidden ? 'flex' : 'none';
+            btn.textContent = isHidden ? '−' : '+'; 
+            
+            if (!isHidden) {
+                panel.style.height = 'auto';
+                panel.style.maxHeight = '280px';
+                if (logWrapper) {
+                    logWrapper.style.flex = '1';
+                    logWrapper.style.maxHeight = '200px';
+                }
+            } else {
+                panel.style.height = '600px';
+                panel.style.maxHeight = '85vh';
+                if (logWrapper) {
+                    logWrapper.style.flex = '1';
+                    logWrapper.style.maxHeight = '180px';
+                }
+            }
+        },
+
+        /**
+         * 应用CSS样式
+         */
+        applyStyles() {
+            if (typeof GM_addStyle !== 'undefined') {
+                GM_addStyle(`
+                    #am-panel button:hover { opacity:0.9; transform:translateY(-1px); }
+                    #am-log-content::-webkit-scrollbar { width:6px; }
+                    #am-log-content::-webkit-scrollbar-thumb { background:rgba(148,163,184,0.3); border-radius:3px; }
+                    @keyframes pulse {
+                        0%, 100% { opacity: 1; }
+                        50% { opacity: 0.5; }
+                    }
+                `);
+            }
+        },
+
+        /**
+         * 更新状态指示器
+         */
+        updateStatusIndicator() {
+            const indicator = $('#am-status-indicator');
+            if (indicator) {
+                indicator.style.display = STATE.running ? 'inline-block' : 'none';
+            }
+        },
+
+        /**
+         * 更新统计数据
+         */
+        updateStats() {
+            $('#am-stat-maps').textContent = STATE.stats.mapsOpened;
+            $('#am-stat-battles').textContent = STATE.stats.battlesEncountered;
+            $('#am-stat-guardian').textContent = STATE.stats.guardianHired;
+        },
+
+        /**
+         * 更新总体统计数据
+         */
+        updateTotalStats() {
+            $('#am-total-maps').textContent = TOTAL_STATS.totalMapsOpened;
+            $('#am-total-battles').textContent = TOTAL_STATS.totalBattles;
+            $('#am-total-guardian').textContent = TOTAL_STATS.totalGuardianHired;
+            this.updateLuckDisplay(MapOpener.currentLuck);
+        },
+
+        /**
+         * 更新气运显示
+         * @param {number} luck - 气运值
+         */
+        updateLuckDisplay(luck) {
+            const luckEl = $('#am-luck-value');
+            const warningEl = $('#am-luck-warning');
+            const totalMapsEl = $('#am-luck-total-maps');
+            const totalBattlesEl = $('#am-luck-total-battles');
+            const rateEl = $('#am-luck-rate');
+            const guardianRateEl = $('#am-luck-guardian-rate');
+
+            const luckValue = parseInt(luck);
+            const hasLuck = !isNaN(luckValue);
+
+            if (luckEl && hasLuck) {
+                luckEl.textContent = luckValue;
+            }
+
+            if (warningEl) {
+                warningEl.style.display = (hasLuck && luckValue < 8) ? 'block' : 'none';
+            }
+
+            if (totalMapsEl) totalMapsEl.textContent = TOTAL_STATS.totalMapsOpened;
+            if (totalBattlesEl) totalBattlesEl.textContent = TOTAL_STATS.totalBattles;
+
+            if (rateEl) {
+                const rate = TOTAL_STATS.totalMapsOpened > 0
+                    ? (TOTAL_STATS.totalBattles / TOTAL_STATS.totalMapsOpened * 100).toFixed(1) + '%'
+                    : '--';
+                rateEl.textContent = rate;
+            }
+
+            if (guardianRateEl) {
+                const guardianRate = TOTAL_STATS.totalBattles > 0
+                    ? (TOTAL_STATS.totalGuardianHired / TOTAL_STATS.totalBattles * 100).toFixed(1) + '%'
+                    : '--';
+                guardianRateEl.textContent = guardianRate;
+            }
+        },
+
+        /**
+         * 更新按钮状态
+         */
+        updateButtons() {
+            $('#am-start').style.display = STATE.running ? 'none' : 'block';
+            $('#am-stop').style.display = STATE.running ? 'block' : 'none';
+            this.updateStatusIndicator();
+        }
+    };
+
+    // 地图开启器
+    const MapOpener = {
+        currentLuck: undefined,
+
+        /**
+         * 启动自动开图
+         */
+        async start() {
+            if (STATE.running) return;
+
+            this.readConfigFromUI();
+
+            STATE.running = true;
+            STATE.stats = { mapsOpened: 0, battlesEncountered: 0, guardianHired: 0, rewards: [] };
+            UI.updateStats();
+            UI.updateButtons();
+            Logger.success('自动开藏宝图已启动');
+
+            this.runLoop();
+        },
+
+        /**
+         * 从UI读取配置
+         */
+        readConfigFromUI() {
+            const maxPerBatch = parseInt($('#am-max-per-batch')?.value);
+            if (maxPerBatch && maxPerBatch > 0) {
+                CONFIG.maxMapsPerBatch = maxPerBatch;
+            }
+            const batchSize = parseInt($('#am-batch-size')?.value);
+            if (batchSize && batchSize >= 1 && batchSize <= 10) {
+                CONFIG.batchSize = batchSize;
+            }
+            const openInterval = parseInt($('#am-open-interval')?.value);
+            if (openInterval && openInterval >= 1000) {
+                CONFIG.openInterval = openInterval;
+            }
+            
+            CONFIG.guardian.enabled = $('#am-guardian-enabled')?.checked ?? true;
+            const maxFee = parseInt($('#am-guardian-maxfee')?.value);
+            CONFIG.guardian.maxFee = isNaN(maxFee) ? 0 : maxFee;
+            const minAtk = parseInt($('#am-guardian-minatk')?.value);
+            CONFIG.guardian.minAtk = isNaN(minAtk) ? 0 : minAtk;
+            CONFIG.guardian.mode = $('#am-guardian-mode')?.value || 'together';
+            CONFIG.guardian.priority = $('#am-guardian-priority')?.value || 'incarnation,normal,body';
+            const monsterHp = parseInt($('#am-guardian-monsterhp')?.value);
+            CONFIG.guardian.monsterHp = isNaN(monsterHp) ? 0 : monsterHp;
+            const monsterAtk = parseInt($('#am-guardian-monsteratk')?.value);
+            CONFIG.guardian.monsterAtk = isNaN(monsterAtk) ? 0 : monsterAtk;
+        },
+
+        /**
+         * 运行主循环
+         */
+        async runLoop() {
+            while (STATE.running) {
+                const hasMore = await this.openAllMaps();
+                if (!hasMore) {
+                    Logger.info('本轮完成，等待继续...');
+                    await wait(5000);
+                }
+            }
+            this.stop();
+        },
+
+        /**
+         * 停止自动开图
+         */
+        stop() {
+            if (!STATE.running) return;
+            STATE.running = false;
+            STATE.isOpeningMap = false;
+            UI.updateButtons();
+            
+            if (STATE.stats.mapsOpened > 0) {
+                TOTAL_STATS.totalMapsOpened += STATE.stats.mapsOpened;
+                TOTAL_STATS.totalBattles += STATE.stats.battlesEncountered;
+                TOTAL_STATS.totalGuardianHired += STATE.stats.guardianHired;
+                StatsManager.recordSession(STATE.stats);
+                StatsManager.save();
+                UI.updateTotalStats();
+                Logger.info(`本次统计: 开启${STATE.stats.mapsOpened}个, 遇敌${STATE.stats.battlesEncountered}次, 雇护道${STATE.stats.guardianHired}次`);
+            }
+            
+            Logger.info('自动开藏宝图已停止');
+        },
+
+        /**
+         * 开启所有藏宝图
+         */
+        async openAllMaps() {
+            try {
+                if (STATE.stats.mapsOpened >= CONFIG.maxMapsPerBatch) {
+                    Logger.info(`已达到开启上限 ${CONFIG.maxMapsPerBatch}，停止`);
+                    this.stop();
+                    return false;
+                }
+
+                const res = await API.getInventory();
+                if (res.code !== 200 || !res.data) {
+                    Logger.error(`获取背包失败: ${res.message || '未知错误'}`);
+                    this.stop();
+                    return false;
+                }
+
+                const items = res.data.items || res.data || [];
+                const maps = this.findTreasureMaps(items);
+
+                if (maps.length === 0) {
+                    Logger.info('背包中没有藏宝图');
+                    return false;
+                }
+
+                const totalCount = maps.reduce((sum, m) => sum + (m.quantity || m.count || 0), 0);
+                Logger.info(`发现 ${maps.length} 种藏宝图，共 ${totalCount} 个`);
+
+                await this.processMaps(maps);
+                Logger.success('藏宝图开启完成');
+                return true;
+            } catch (e) {
+                Logger.error(`开启失败: ${e.message}`);
+                this.stop();
+                return false;
+            }
+        },
+
+        /**
+         * 查找藏宝图
+         * @param {Array} items - 物品列表
+         */
+        findTreasureMaps(items) {
+            if (!Array.isArray(items)) {
+                Logger.warn(`items不是数组: ${typeof items}`);
+                return [];
+            }
+            const maps = items.filter(item => {
+                const name = item.name || '';
+                const hasKeyword = name.includes('藏宝图');
+                const count = item.quantity || item.count || 0;
+                const isTreasureMap = item.templateId === 'treasure_map' || hasKeyword;
+                return isTreasureMap && count > 0;
+            });
+            return maps.sort((a, b) => (a.quantity || a.count || 0) - (b.quantity || b.count || 0));
+        },
+
+        /**
+         * 处理藏宝图
+         * @param {Array} maps - 藏宝图列表
+         */
+        async processMaps(maps) {
+            STATE.isOpeningMap = true;
+            let openedCount = 0;
+            const maxToOpen = CONFIG.maxMapsPerBatch;
+            const BATCH_SIZE = Math.min(CONFIG.batchSize || 10, 10);
+
+            for (let i = 0; i < maps.length && STATE.running; i++) {
+                const map = maps[i];
+                let mapQuantity = map.quantity || map.count || 1;
+                
+                if (openedCount + mapQuantity > maxToOpen) {
+                    mapQuantity = maxToOpen - openedCount;
+                }
+                
+                while (mapQuantity > 0 && STATE.running) {
+                    if (openedCount >= maxToOpen) {
+                        Logger.info(`已达到开启上限 ${maxToOpen}，停止`);
+                        STATE.isOpeningMap = false;
+                        return;
+                    }
+                    
+                    const batchSize = Math.min(mapQuantity, BATCH_SIZE);
+                    
+                    try {
+                        Logger.info(`正在开启: ${map.name} x${batchSize}...`);
+                        const res = await API.useTreasureMap(map.id, batchSize);
+
+                        if (res.code === 200) {
+                            const result = res.data;
+                            
+                            if (result && typeof result === 'object' && result.type === 'encounter') {
+                                const monsterName = result.monsterName || result.treasureLevelName || '守卫';
+                                const monsterHp = result.monsterHp || '?';
+                                const monsterAtk = result.monsterAtk || '?';
+                                Logger.warn(`遇到守卫: ${monsterName} (生命:${monsterHp} 攻击:${monsterAtk})`);
+                                STATE.stats.mapsOpened += batchSize;
+                                openedCount += batchSize;
+                                STATE.stats.battlesEncountered++;
+                                UI.updateStats();
+
+                                if (!CONFIG.guardian.enabled) {
+                                    Logger.warn('自动雇护道已禁用');
+                                    if (CONFIG.stopOnBattle) {
+                                        Logger.info('已暂停，请手动处理');
+                                        STATE.isOpeningMap = false;
+                                        return;
+                                    }
+                                } else {
+                                    const hired = await this.tryHireGuardian();
+                                    if (hired) {
+                                        Logger.success('雇护道成功，等待战斗...');
+                                        STATE.stats.guardianHired++;
+                                        UI.updateStats();
+                                        await this.waitForBattle();
+                                        Logger.info('战斗结束，继续开图');
+                                    } else {
+                                        Logger.warn('雇护道失败');
+                                        if (CONFIG.stopOnBattle) {
+                                            Logger.info('已暂停，请手动处理');
+                                            STATE.isOpeningMap = false;
+                                            return;
+                                        }
+                                    }
+                                }
+                            } else if (typeof result === 'string') {
+                                Logger.success(result);
+                                STATE.stats.mapsOpened += batchSize;
+                                openedCount += batchSize;
+                                UI.updateStats();
+                                
+                                if (result.includes('获得')) {
+                                    STATE.stats.rewards.push(result);
+                                    StatsManager.addReward(result);
+                                }
+                            } else if (Array.isArray(result)) {
+                                Logger.success(`批量开启完成，共 ${result.length} 条结果`);
+                                STATE.stats.mapsOpened += batchSize;
+                                openedCount += batchSize;
+                                UI.updateStats();
+                                result.forEach(r => {
+                                    if (typeof r === 'string' && r.includes('获得')) {
+                                        STATE.stats.rewards.push(r);
+                                        StatsManager.addReward(r);
+                                    }
+                                });
+                            } else if (result && typeof result === 'object') {
+                                const msg = result.message || result.msg || result.summary || JSON.stringify(result);
+                                Logger.info(msg);
+                                STATE.stats.mapsOpened += batchSize;
+                                openedCount += batchSize;
+                                UI.updateStats();
+                            } else {
+                                Logger.info('开启成功');
+                                STATE.stats.mapsOpened += batchSize;
+                                openedCount += batchSize;
+                                UI.updateStats();
+                            }
+                        } else {
+                            Logger.error(`开启失败: ${res.message || '未知错误'}`);
+                            STATE.isOpeningMap = false;
+                            this.stop();
+                            return;
+                        }
+
+                        mapQuantity -= batchSize;
+                        
+                        if (mapQuantity > 0 && STATE.running) {
+                            await wait(CONFIG.openInterval);
+                        }
+                    } catch (e) {
+                        Logger.error(`开启失败: ${e.message}`);
+                        STATE.isOpeningMap = false;
+                        return;
+                    }
+                }
+                
+                if (i < maps.length - 1 && openedCount < maxToOpen && STATE.running) {
+                    await wait(CONFIG.openInterval);
+                }
+            }
+
+            STATE.isOpeningMap = false;
+        },
+
+        /**
+         * 尝试雇用护道者
+         */
+        async tryHireGuardian() {
+            try {
+                const cfg = CONFIG.guardian;
+                const priorityArr = cfg.priority.split(',');
+
+                Logger.info(`尝试自动雇护道: 最高雇佣费=${cfg.maxFee}, 最低攻击力=${cfg.minAtk}`);
+
+                const attempts = [
+                    { maxFee: cfg.maxFee, minAtk: cfg.minAtk, desc: '完整条件' },
+                    { maxFee: cfg.maxFee, minAtk: cfg.minAtk, desc: '完整条件（重试1）' },
+                    { maxFee: cfg.maxFee, minAtk: cfg.minAtk, desc: '完整条件（重试2）' },
+                    { maxFee: cfg.maxFee * 2, minAtk: cfg.minAtk, desc: '加价100%' }
+                ];
+
+                for (let i = 0; i < attempts.length; i++) {
+                    const attempt = attempts[i];
+                    if (i > 0) {
+                        Logger.info(`第${i + 1}次尝试: ${attempt.desc}`);
+                        await wait(1000);
+                    }
+
+                    const res = await API.autoHireGuardian({
+                        mode: cfg.mode,
+                        maxFee: attempt.maxFee,
+                        minAtk: attempt.minAtk,
+                        priority: priorityArr
+                    });
+
+                    if (res.code === 429) {
+                        await wait(600);
+                        const retryRes = await API.autoHireGuardian({
+                            mode: cfg.mode,
+                            maxFee: attempt.maxFee,
+                            minAtk: attempt.minAtk,
+                            priority: priorityArr
+                        });
+                        if (retryRes.code === 200 && retryRes.data?.combat) {
+                            Logger.success(`雇护道成功（${attempt.desc}）`);
+                            return true;
+                        }
+                    }
+
+                    if (res.code === 200 && res.data?.combat) {
+                        Logger.success(`雇护道成功（${attempt.desc}）`);
+                        return true;
+                    }
+
+                    if (res.message) {
+                        Logger.warn(`尝试${i + 1}失败: ${res.message}`);
+                    }
+                }
+
+                Logger.error('雇护道失败: 所有重试方案均未能找到合适护道，停止开图');
+                this.stop();
+                return false;
+            } catch (e) {
+                Logger.error(`雇护道出错: ${e.message}`);
+                return false;
+            }
+        },
+
+        /**
+         * 等待战斗结束
+         */
+        async waitForBattle() {
+            let attempts = 0;
+            while (attempts < 60 && this.hasActiveBattle()) {
+                await wait(1000);
+                attempts++;
+            }
+        },
+
+        /**
+         * 检查是否有活动战斗
+         */
+        hasActiveBattle() {
+            if (_win._encounterActive) return true;
+            const encounterPanel = $('#encounterOverlay');
+            const combatPanel = $('#combatPanel');
+            if (encounterPanel && !encounterPanel.classList.contains('hidden')) return true;
+            if (combatPanel && combatPanel.classList.contains('active')) return true;
+            return false;
+        },
+
+        /**
+         * 格式化奖励信息
+         * @param {Array} rewards - 奖励列表
+         */
+        formatRewards(rewards) {
+            if (!Array.isArray(rewards)) return '';
+            return rewards.map(r => `${r.name||'未知'}x${r.count||1}`).join(', ');
+        }
+    };
+
+    /**
+     * 初始化函数
+     */
+    const init = () => {
+        if (_win._autoMapInited) return;
+        _win._autoMapInited = true;
+        
+        UI.init();
+        Logger.info('自动开藏宝图已加载，点击侧边栏"打开面板"使用');
+    };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.3.0
+// @version      2.3.6
 // @description  自动开启背包中的藏宝图
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -58,26 +58,41 @@
         }
     };
 
-    // 总体统计数据
+    // 总体统计数据（精简版，不保存详细历史）
     const TOTAL_STATS = {
         totalMapsOpened: 0,        // 总开启地图数
         totalBattles: 0,           // 总遇敌数
         totalGuardianHired: 0,     // 总雇护道数
-        totalRewards: {},          // 总获得奖励
-        history: [],               // 历史记录
-        luckStats: {               // 气运统计
-            totalSamples: 0,       // 总样本数
-            totalBattles: 0,       // 总战斗数
-            records: []            // 统计记录
-        }
+        totalRewards: {}           // 总获得奖励
     };
 
     // 从localStorage加载保存的统计数据
-    const savedStats = localStorage.getItem('lingverse_auto_map_total_stats');
+    const savedStats = localStorage.getItem('lingverse_auto_map_total_stats_v2');
     if (savedStats) {
         try {
-            Object.assign(TOTAL_STATS, JSON.parse(savedStats));
+            const parsed = JSON.parse(savedStats);
+            // 只加载需要的字段
+            TOTAL_STATS.totalMapsOpened = parsed.totalMapsOpened || 0;
+            TOTAL_STATS.totalBattles = parsed.totalBattles || 0;
+            TOTAL_STATS.totalGuardianHired = parsed.totalGuardianHired || 0;
+            TOTAL_STATS.totalRewards = parsed.totalRewards || {};
         } catch (e) {}
+    } else {
+        // 尝试从旧版本迁移数据
+        const oldStats = localStorage.getItem('lingverse_auto_map_total_stats');
+        if (oldStats) {
+            try {
+                const parsed = JSON.parse(oldStats);
+                TOTAL_STATS.totalMapsOpened = parsed.totalMapsOpened || 0;
+                TOTAL_STATS.totalBattles = parsed.totalBattles || 0;
+                TOTAL_STATS.totalGuardianHired = parsed.totalGuardianHired || 0;
+                TOTAL_STATS.totalRewards = parsed.totalRewards || {};
+                // 删除旧数据
+                localStorage.removeItem('lingverse_auto_map_total_stats');
+                // 保存为新格式
+                localStorage.setItem('lingverse_auto_map_total_stats_v2', JSON.stringify(TOTAL_STATS));
+            } catch (e) {}
+        }
     }
 
     // API接口封装
@@ -187,7 +202,7 @@
          * 保存统计数据到localStorage
          */
         save() {
-            localStorage.setItem('lingverse_auto_map_total_stats', JSON.stringify(TOTAL_STATS));
+            localStorage.setItem('lingverse_auto_map_total_stats_v2', JSON.stringify(TOTAL_STATS));
         },
         
         /**
@@ -209,19 +224,13 @@
         },
         
         /**
-         * 记录会话统计
+         * 记录会话统计（仅累计，不保存详细历史）
          * @param {Object} sessionStats - 会话统计数据
          */
         recordSession(sessionStats) {
-            TOTAL_STATS.history.unshift({
-                date: new Date().toISOString(),
-                mapsOpened: sessionStats.mapsOpened,
-                battles: sessionStats.battlesEncountered,
-                guardianHired: sessionStats.guardianHired,
-                rewards: sessionStats.rewards
-            });
-            if (TOTAL_STATS.history.length > 50) {
-                TOTAL_STATS.history = TOTAL_STATS.history.slice(0, 50);
+            // 只累计奖励，不保存详细历史记录
+            if (sessionStats.rewards && sessionStats.rewards.length > 0) {
+                sessionStats.rewards.forEach(r => this.addReward(r));
             }
             this.save();
         },
@@ -236,55 +245,6 @@
                 .slice(0, limit);
         },
 
-        /**
-         * 记录气运数据
-         * @param {number} luck - 气运值
-         * @param {boolean} isBattle - 是否为战斗
-         */
-        recordLuckData(luck, isBattle) {
-            const ls = TOTAL_STATS.luckStats;
-            ls.totalSamples++;
-            if (isBattle) ls.totalBattles++;
-
-            if (ls.totalSamples % 100 === 0) {
-                this.calculateAndSaveRate();
-            }
-        },
-
-        /**
-         * 计算并保存比率
-         */
-        calculateAndSaveRate() {
-            const ls = TOTAL_STATS.luckStats;
-            if (ls.totalSamples === 0) return null;
-
-            const rate = (ls.totalBattles / ls.totalSamples * 100).toFixed(1);
-
-            const existingIndex = ls.records.findIndex(r => r.totalSamples === ls.totalSamples);
-            if (existingIndex >= 0) {
-                ls.records[existingIndex] = {
-                    totalSamples: ls.totalSamples,
-                    battleCount: ls.totalBattles,
-                    rate: rate + '%',
-                    date: new Date().toISOString()
-                };
-            } else {
-                ls.records.unshift({
-                    totalSamples: ls.totalSamples,
-                    battleCount: ls.totalBattles,
-                    rate: rate + '%',
-                    date: new Date().toISOString()
-                });
-            }
-
-            if (ls.records.length > 20) {
-                ls.records = ls.records.slice(0, 20);
-            }
-
-            this.save();
-            Logger.info(`📊 累计${ls.totalSamples}次统计 - 总遇敌率: ${rate}%`);
-            return rate;
-        }
     };
 
     // 主题相关工具
@@ -437,15 +397,6 @@
                 </div>
 
                 <div style="padding:10px;background:${isDark?'#1e2330':'#f0f1f2'};border-radius:6px;flex-shrink:0;">
-                    <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:8px;font-weight:bold;">📊 本次统计</div>
-                    <div style="display:flex;gap:16px;">
-                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">已开启</span><div id="am-stat-maps" style="color:#3dab97;font-size:18px;font-weight:bold;">0</div></div>
-                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">遇守卫</span><div id="am-stat-battles" style="color:#ff6b6b;font-size:18px;font-weight:bold;">0</div></div>
-                        <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">雇护道</span><div id="am-stat-guardian" style="color:#4dabf7;font-size:18px;font-weight:bold;">0</div></div>
-                    </div>
-                </div>
-                
-                <div style="padding:10px;background:${isDark?'#1e2330':'#f0f1f2'};border-radius:6px;flex-shrink:0;">
                     <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:8px;font-weight:bold;">🏆 累计统计</div>
                     <div style="display:flex;gap:16px;">
                         <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">总开启</span><div id="am-total-maps" style="color:#3dab97;font-size:18px;font-weight:bold;">${TOTAL_STATS.totalMapsOpened}</div></div>
@@ -470,20 +421,12 @@
             $('#am-close')?.addEventListener('click', () => panel.style.display = 'none');
             $('#am-minimize')?.addEventListener('click', () => this.toggleMinimize());
             $('#am-start')?.addEventListener('click', () => MapOpener.start());
-            $('#am-stop')?.addEventListener('click', () => MapOpener.stop());
+            $('#am-stop')?.addEventListener('click', async () => await MapOpener.stop());
             $('#am-clear-log')?.addEventListener('click', () => {
                 $('#am-log-content').innerHTML = '<div style="color:#64748b;">日志已清空</div>';
             });
 
-            $('#am-calc-rate')?.addEventListener('click', () => {
-                const rate = StatsManager.calculateAndSaveRate();
-                if (rate !== null) {
-                    UI.updateLuckDisplay(MapOpener.currentLuck);
-                    Logger.success(`📊 手动计算 - 累计${TOTAL_STATS.luckStats.totalSamples}次，遇敌率: ${rate}%`);
-                } else {
-                    Logger.warn('暂无数据，请先开启藏宝图');
-                }
-            });
+
 
             $('#am-save-config')?.addEventListener('click', async () => {
                 CONFIG.maxMapsPerBatch = parseInt($('#am-max-per-batch')?.value || '50') || 50;
@@ -864,15 +807,6 @@
         },
 
         /**
-         * 更新统计数据
-         */
-        updateStats() {
-            $('#am-stat-maps').textContent = STATE.stats.mapsOpened;
-            $('#am-stat-battles').textContent = STATE.stats.battlesEncountered;
-            $('#am-stat-guardian').textContent = STATE.stats.guardianHired;
-        },
-
-        /**
          * 更新总体统计数据
          */
         updateTotalStats() {
@@ -945,9 +879,12 @@
 
             this.readConfigFromUI();
 
+            // 重置统计保存标记
+            this._statsSaved = false;
+            this._isStopping = false;
+
             STATE.running = true;
             STATE.stats = { mapsOpened: 0, battlesEncountered: 0, guardianHired: 0, rewards: [] };
-            UI.updateStats();
             UI.updateButtons();
             Logger.success('自动开藏宝图已启动');
 
@@ -995,19 +932,33 @@
                     await wait(5000);
                 }
             }
-            this.stop();
+            await this.stop();
         },
 
         /**
          * 停止自动开图
          */
-        stop() {
-            if (!STATE.running) return;
+        async stop() {
+            // 防止重复停止
+            if (this._isStopping) return;
+            this._isStopping = true;
+            
+            if (!STATE.running && !STATE.isOpeningMap) {
+                this._isStopping = false;
+                return;
+            }
+            
             STATE.running = false;
             STATE.isOpeningMap = false;
             UI.updateButtons();
             
-            if (STATE.stats.mapsOpened > 0) {
+            if (STATE.stats.mapsOpened > 0 && !this._statsSaved) {
+                // 标记已保存，防止重复保存
+                this._statsSaved = true;
+                
+                // 注意：STATE.stats.mapsOpened 已经在 openAllMaps() 中被校正为实际消耗
+                // 这里不需要再次校正，直接保存即可
+                
                 TOTAL_STATS.totalMapsOpened += STATE.stats.mapsOpened;
                 TOTAL_STATS.totalBattles += STATE.stats.battlesEncountered;
                 TOTAL_STATS.totalGuardianHired += STATE.stats.guardianHired;
@@ -1017,6 +968,9 @@
                 Logger.info(`本次统计: 开启${STATE.stats.mapsOpened}个, 遇敌${STATE.stats.battlesEncountered}次, 雇护道${STATE.stats.guardianHired}次`);
             }
             
+            // 清除标记
+            this._isStopping = false;
+            this._statsSaved = false;
             Logger.info('自动开藏宝图已停止');
         },
 
@@ -1025,16 +979,11 @@
          */
         async openAllMaps() {
             try {
-                if (STATE.stats.mapsOpened >= CONFIG.maxMapsPerBatch) {
-                    Logger.info(`已达到开启上限 ${CONFIG.maxMapsPerBatch}，停止`);
-                    this.stop();
-                    return false;
-                }
-
+                // 获取背包信息
                 const res = await API.getInventory();
                 if (res.code !== 200 || !res.data) {
                     Logger.error(`获取背包失败: ${res.message || '未知错误'}`);
-                    this.stop();
+                    await this.stop();
                     return false;
                 }
 
@@ -1049,12 +998,51 @@
                 const totalCount = maps.reduce((sum, m) => sum + (m.quantity || m.count || 0), 0);
                 Logger.info(`发现 ${maps.length} 种藏宝图，共 ${totalCount} 个`);
 
-                await this.processMaps(maps);
+                // 检查是否已达到上限
+                if (STATE.stats.mapsOpened >= CONFIG.maxMapsPerBatch) {
+                    Logger.info(`已达到开启上限 ${CONFIG.maxMapsPerBatch}，停止`);
+                    await this.stop();
+                    return false;
+                }
+
+                // 计算还能开启多少张
+                const remainingToOpen = CONFIG.maxMapsPerBatch - STATE.stats.mapsOpened;
+                Logger.info(`本次计划开启: ${remainingToOpen} 张 (已开${STATE.stats.mapsOpened}/${CONFIG.maxMapsPerBatch})`);
+
+                // 记录开始时的藏宝图总数
+                const countBefore = totalCount;
+
+                // 处理藏宝图，传入剩余可开启数量
+                await this.processMaps(maps, remainingToOpen);
+
+                // 结束后获取实际消耗数量
+                const countAfterRes = await API.getInventory();
+                let countAfter = 0;
+                if (countAfterRes.code === 200 && countAfterRes.data) {
+                    const afterItems = countAfterRes.data.items || countAfterRes.data || [];
+                    const afterMaps = this.findTreasureMaps(afterItems);
+                    countAfter = afterMaps.reduce((sum, m) => sum + (m.quantity || m.count || 0), 0);
+                }
+                const actualConsumed = Math.max(0, countBefore - countAfter);
+
+                // 累加本轮实际消耗到总统计
+                if (actualConsumed > 0) {
+                    STATE.stats.mapsOpened += actualConsumed;
+                    Logger.info(`📊 本轮实际消耗: ${actualConsumed} 张 (累计: ${STATE.stats.mapsOpened})`);
+                }
+
+                // 检查是否已达到上限
+                if (STATE.stats.mapsOpened >= CONFIG.maxMapsPerBatch) {
+                    Logger.info(`已达到开启上限 ${CONFIG.maxMapsPerBatch}，停止`);
+                    await this.stop();
+                    return false;
+                }
+
                 Logger.success('藏宝图开启完成');
                 return true;
             } catch (e) {
                 Logger.error(`开启失败: ${e.message}`);
-                this.stop();
+                await this.stop();
                 return false;
             }
         },
@@ -1081,46 +1069,48 @@
         /**
          * 处理藏宝图
          * @param {Array} maps - 藏宝图列表
+         * @param {number} remainingToOpen - 剩余可开启数量
          */
-        async processMaps(maps) {
+        async processMaps(maps, remainingToOpen) {
             STATE.isOpeningMap = true;
             let openedCount = 0;
-            const maxToOpen = CONFIG.maxMapsPerBatch;
             const BATCH_SIZE = Math.min(CONFIG.batchSize || 10, 10);
 
             for (let i = 0; i < maps.length && STATE.running; i++) {
                 const map = maps[i];
                 let mapQuantity = map.quantity || map.count || 1;
-                
-                if (openedCount + mapQuantity > maxToOpen) {
-                    mapQuantity = maxToOpen - openedCount;
+
+                // 限制本次最多开启 remainingToOpen 张
+                if (openedCount + mapQuantity > remainingToOpen) {
+                    mapQuantity = remainingToOpen - openedCount;
                 }
-                
+
                 while (mapQuantity > 0 && STATE.running) {
-                    if (openedCount >= maxToOpen) {
-                        Logger.info(`已达到开启上限 ${maxToOpen}，停止`);
+                    if (openedCount >= remainingToOpen) {
+                        Logger.info(`已达到本次计划上限 ${remainingToOpen} 张，停止`);
                         STATE.isOpeningMap = false;
                         return;
                     }
-                    
+
                     const batchSize = Math.min(mapQuantity, BATCH_SIZE);
-                    
+
                     try {
                         Logger.info(`正在开启: ${map.name} x${batchSize}...`);
                         const res = await API.useTreasureMap(map.id, batchSize);
 
                         if (res.code === 200) {
                             const result = res.data;
-                            
+
+                            // 简单计数（用于循环控制），实际数量在 openAllMaps 结束时校正
+                            // 注意：这里不直接累加到 STATE.stats.mapsOpened，避免遇敌时统计不准
+                            openedCount += batchSize;
+
                             if (result && typeof result === 'object' && result.type === 'encounter') {
                                 const monsterName = result.monsterName || result.treasureLevelName || '守卫';
                                 const monsterHp = parseInt(result.monsterHp) || 0;
                                 const monsterAtk = parseInt(result.monsterAtk) || 0;
                                 Logger.warn(`遇到守卫: ${monsterName} (生命:${monsterHp} 攻击:${monsterAtk})`);
-                                STATE.stats.mapsOpened += batchSize;
-                                openedCount += batchSize;
                                 STATE.stats.battlesEncountered++;
-                                UI.updateStats();
 
                                 // 判断是否需要雇护道：如果设置了妖兽条件且实际妖兽低于条件，则不雇护道
                                 const cfg = CONFIG.guardian;
@@ -1153,7 +1143,6 @@
                                     if (hired) {
                                         Logger.success('雇护道成功，等待战斗...');
                                         STATE.stats.guardianHired++;
-                                        UI.updateStats();
                                         await this.waitForBattle();
                                         Logger.info('战斗结束，继续开图');
                                     } else {
@@ -1165,19 +1154,12 @@
                                 }
                             } else if (typeof result === 'string') {
                                 Logger.success(result);
-                                STATE.stats.mapsOpened += batchSize;
-                                openedCount += batchSize;
-                                UI.updateStats();
-                                
                                 if (result.includes('获得')) {
                                     STATE.stats.rewards.push(result);
                                     StatsManager.addReward(result);
                                 }
                             } else if (Array.isArray(result)) {
                                 Logger.success(`批量开启完成，共 ${result.length} 条结果`);
-                                STATE.stats.mapsOpened += batchSize;
-                                openedCount += batchSize;
-                                UI.updateStats();
                                 result.forEach(r => {
                                     if (typeof r === 'string' && r.includes('获得')) {
                                         STATE.stats.rewards.push(r);
@@ -1187,14 +1169,8 @@
                             } else if (result && typeof result === 'object') {
                                 const msg = result.message || result.msg || result.summary || JSON.stringify(result);
                                 Logger.info(msg);
-                                STATE.stats.mapsOpened += batchSize;
-                                openedCount += batchSize;
-                                UI.updateStats();
                             } else {
                                 Logger.info('开启成功');
-                                STATE.stats.mapsOpened += batchSize;
-                                openedCount += batchSize;
-                                UI.updateStats();
                             }
                         } else {
                             Logger.error(`开启失败: ${res.message || '未知错误'}`);

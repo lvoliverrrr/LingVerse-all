@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.3.6
+// @version      2.3.7
 // @description  自动开启背包中的藏宝图
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -879,6 +879,18 @@
 
             this.readConfigFromUI();
 
+            // 记录开始时的藏宝图数量，用于停止时校正
+            try {
+                const res = await API.getInventory();
+                if (res.code === 200 && res.data) {
+                    const items = res.data.items || res.data || [];
+                    const maps = this.findTreasureMaps(items);
+                    this._startMapCount = maps.reduce((sum, m) => sum + (m.quantity || m.count || 0), 0);
+                }
+            } catch (e) {
+                this._startMapCount = undefined;
+            }
+
             // 重置统计保存标记
             this._statsSaved = false;
             this._isStopping = false;
@@ -952,13 +964,32 @@
             STATE.isOpeningMap = false;
             UI.updateButtons();
             
-            if (STATE.stats.mapsOpened > 0 && !this._statsSaved) {
+            if (!this._statsSaved) {
                 // 标记已保存，防止重复保存
                 this._statsSaved = true;
                 
-                // 注意：STATE.stats.mapsOpened 已经在 openAllMaps() 中被校正为实际消耗
-                // 这里不需要再次校正，直接保存即可
+                // 如果中途停止，需要获取实际消耗并校正统计
+                try {
+                    const res = await API.getInventory();
+                    if (res.code === 200 && res.data) {
+                        const items = res.data.items || res.data || [];
+                        const maps = this.findTreasureMaps(items);
+                        const currentCount = maps.reduce((sum, m) => sum + (m.quantity || m.count || 0), 0);
+                        
+                        // 如果知道开始时的数量，计算实际消耗
+                        if (this._startMapCount !== undefined && this._startMapCount > currentCount) {
+                            const actualConsumed = this._startMapCount - currentCount;
+                            if (actualConsumed > STATE.stats.mapsOpened) {
+                                Logger.info(`📊 停止时校正: 实际消耗 ${actualConsumed} 张 (原统计: ${STATE.stats.mapsOpened})`);
+                                STATE.stats.mapsOpened = actualConsumed;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // 校正失败不影响保存
+                }
                 
+                // 保存统计（即使为0也要保存遇敌和雇护道数据）
                 TOTAL_STATS.totalMapsOpened += STATE.stats.mapsOpened;
                 TOTAL_STATS.totalBattles += STATE.stats.battlesEncountered;
                 TOTAL_STATS.totalGuardianHired += STATE.stats.guardianHired;
@@ -1124,6 +1155,7 @@
                                     Logger.warn('自动雇护道已禁用');
                                     Logger.info('已暂停，请手动处理');
                                     STATE.isOpeningMap = false;
+                                    await this.stop();
                                     return;
                                 } else if (!needGuardian) {
                                     Logger.info(`妖兽属性低于设定条件(生命${cfg.monsterHp}/攻击${cfg.monsterAtk})，不雇护道，自动迎战`);
@@ -1136,6 +1168,7 @@
                                     } else {
                                         Logger.error('迎战失败: ' + (fightRes.message || '未知错误'));
                                         STATE.isOpeningMap = false;
+                                        await this.stop();
                                         return;
                                     }
                                 } else {
@@ -1149,6 +1182,7 @@
                                         Logger.warn('雇护道失败');
                                         Logger.info('已暂停，请手动处理');
                                         STATE.isOpeningMap = false;
+                                        await this.stop();
                                         return;
                                     }
                                 }
@@ -1175,7 +1209,7 @@
                         } else {
                             Logger.error(`开启失败: ${res.message || '未知错误'}`);
                             STATE.isOpeningMap = false;
-                            this.stop();
+                            await this.stop();
                             return;
                         }
 
@@ -1255,7 +1289,7 @@
                 }
 
                 Logger.error('雇护道失败: 所有重试方案均未能找到合适护道，停止开图');
-                this.stop();
+                await this.stop();
                 return false;
             } catch (e) {
                 Logger.error(`雇护道出错: ${e.message}`);

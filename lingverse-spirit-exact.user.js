@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 神识精确数值显示
 // @namespace    lingverse-spirit-exact
-// @version      1.0.0
+// @version      1.0.1
 // @description  将主页状态栏的神识百分比改回准确数值，使用神识时实时更新
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -28,13 +28,6 @@
             const maxSpirit = p.maxSpirit || 1;
 
             let spiritText = spirit + '/' + maxSpirit;
-
-            // 如果存在神识恢复倒计时，则显示恢复时间
-            if (p.spiritRegenSecondsLeft >= 0 && spirit < maxSpirit) {
-                const mins = Math.floor(p.spiritRegenSecondsLeft / 60);
-                const secs = p.spiritRegenSecondsLeft % 60;
-                spiritText += ' <span id="spiritRegenText" style="font-size:10px;opacity:0.75" title="每小时静息自动恢复' + (p.spiritRegenPerHour || 1) + '点神识">(恢复神识 ' + mins + ':' + (secs < 10 ? '0' : '') + secs + ')</span>';
-            }
 
             // 保持原有的图标元素
             const existingIcon = statSpirit.querySelector('i');

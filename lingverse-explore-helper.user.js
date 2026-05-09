@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.2.8
+// @version      2.3.0
 // @description  自动开启背包中的藏宝图
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -145,6 +145,14 @@
         async autoHireGuardian(config) {
             const apiObj = this.getApiObj();
             return await apiObj.post('/api/game/encounter-auto-hire', config);
+        },
+
+        /**
+         * 选择战斗（迎战）
+         */
+        async combatChoice(choice) {
+            const apiObj = this.getApiObj();
+            return await apiObj.post('/api/game/combat-choice', { choice });
         }
     };
 
@@ -1106,18 +1114,37 @@
                             
                             if (result && typeof result === 'object' && result.type === 'encounter') {
                                 const monsterName = result.monsterName || result.treasureLevelName || '守卫';
-                                const monsterHp = result.monsterHp || '?';
-                                const monsterAtk = result.monsterAtk || '?';
+                                const monsterHp = parseInt(result.monsterHp) || 0;
+                                const monsterAtk = parseInt(result.monsterAtk) || 0;
                                 Logger.warn(`遇到守卫: ${monsterName} (生命:${monsterHp} 攻击:${monsterAtk})`);
                                 STATE.stats.mapsOpened += batchSize;
                                 openedCount += batchSize;
                                 STATE.stats.battlesEncountered++;
                                 UI.updateStats();
 
-                                if (!CONFIG.guardian.enabled) {
+                                // 判断是否需要雇护道：如果设置了妖兽条件且实际妖兽低于条件，则不雇护道
+                                const cfg = CONFIG.guardian;
+                                const needGuardian = cfg.enabled && (
+                                    (cfg.monsterHp > 0 && monsterHp > cfg.monsterHp) ||
+                                    (cfg.monsterAtk > 0 && monsterAtk > cfg.monsterAtk) ||
+                                    (cfg.monsterHp === 0 && cfg.monsterAtk === 0)
+                                );
+
+                                if (!cfg.enabled) {
                                     Logger.warn('自动雇护道已禁用');
-                                    if (CONFIG.stopOnBattle) {
-                                        Logger.info('已暂停，请手动处理');
+                                    Logger.info('已暂停，请手动处理');
+                                    STATE.isOpeningMap = false;
+                                    return;
+                                } else if (!needGuardian) {
+                                    Logger.info(`妖兽属性低于设定条件(生命${cfg.monsterHp}/攻击${cfg.monsterAtk})，不雇护道，自动迎战`);
+                                    // 自动选择战斗
+                                    const fightRes = await API.combatChoice('fight');
+                                    if (fightRes.code === 200 && fightRes.data) {
+                                        Logger.success('已选择迎战，等待战斗结束...');
+                                        await this.waitForBattle();
+                                        Logger.info('战斗结束，继续开图');
+                                    } else {
+                                        Logger.error('迎战失败: ' + (fightRes.message || '未知错误'));
                                         STATE.isOpeningMap = false;
                                         return;
                                     }
@@ -1131,11 +1158,9 @@
                                         Logger.info('战斗结束，继续开图');
                                     } else {
                                         Logger.warn('雇护道失败');
-                                        if (CONFIG.stopOnBattle) {
-                                            Logger.info('已暂停，请手动处理');
-                                            STATE.isOpeningMap = false;
-                                            return;
-                                        }
+                                        Logger.info('已暂停，请手动处理');
+                                        STATE.isOpeningMap = false;
+                                        return;
                                     }
                                 }
                             } else if (typeof result === 'string') {

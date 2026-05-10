@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 玩家ID显示
 // @namespace    lingverse-player-id
-// @version      1.2.0
+// @version      1.2.1
 // @description  在主页状态栏和侧边栏显示当前玩家的数字ID，方便添加道友
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -63,28 +63,7 @@
         }
     }
 
-    /**
-     * 更新ID显示 - 手机版状态栏
-     */
-    function updateMobileId() {
-        const playerId = getPlayerId();
-        if (!playerId) return;
 
-        // 在手机版状态栏添加ID
-        const mobileStatusBar = document.getElementById('mobileStatusBar');
-        if (mobileStatusBar && !mobileStatusBar.querySelector('.mobile-player-id')) {
-            const idItem = document.createElement('span');
-            idItem.className = 'msb-item mobile-player-id';
-            idItem.innerHTML = `<span class="msb-label">ID</span><span class="msb-value" style="color:var(--text-gold);">${playerId}</span>`;
-            idItem.style.cursor = 'pointer';
-            idItem.title = '点击复制ID';
-            idItem.onclick = (e) => {
-                e.stopPropagation();
-                copyToClipboard(playerId);
-            };
-            mobileStatusBar.appendChild(idItem);
-        }
-    }
 
     /**
      * 获取玩家ID
@@ -148,7 +127,6 @@
     function updateAllIdDisplays() {
         updateHeaderId();
         updateSidebarId();
-        updateMobileId();
     }
 
     /**

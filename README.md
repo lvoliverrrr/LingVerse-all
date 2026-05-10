@@ -1,10 +1,29 @@
 # 灵界 (LingVerse) 游戏辅助脚本
 
-这是一个针对灵界(ling.muge.info)网页游戏的用户脚本集合，旨在提升游戏体验和自动化一些重复性操作。
+这是一个针对灵界(LingVerse)网页游戏的用户脚本集合，旨在提升游戏体验和自动化一些重复性操作。
 
 ## 包含的脚本
 
-### 1. 灵界 LingVerse 神识精确数值显示 (lingverse-spirit-exact.user.js)
+### 1. 灵界 LingVerse 玩家ID显示 (lingverse-player-id.user.js)
+
+这个脚本在主页状态栏、侧边栏和玩家资料面板显示当前玩家和其他玩家的数字ID，方便添加道友和拜访洞府。
+
+#### 功能特点：
+- 在顶部状态栏玩家名称后显示ID
+- 在侧边栏角色信息区显示ID（境界下方）
+- 在手机版状态栏显示ID
+- 在查看其他玩家资料时，在名称旁显示其ID
+- 点击ID可复制到剪贴板
+- 复制成功显示提示
+
+#### 安装方法：
+1. 安装用户脚本管理器（如Tampermonkey、Greasemonkey或Violentmonkey）
+2. 点击安装此脚本
+3. 访问游戏网站即可生效
+
+---
+
+### 2. 灵界 LingVerse 神识精确数值显示 (lingverse-spirit-exact.user.js)
 
 这个脚本将主页状态栏的神识百分比改回准确数值，并在使用神识时实时更新显示。
 
@@ -21,7 +40,7 @@
 
 ---
 
-### 2. 灵界 LingVerse 自动开藏宝图 (lingverse-explore-helper.user.js)
+### 3. 灵界 LingVerse 自动开藏宝图 (lingverse-explore-helper.user.js)
 
 这个脚本可以自动开启背包中的藏宝图，并处理遇到的战斗。
 
@@ -61,7 +80,6 @@
 2. 脚本仅为辅助工具，不保证完全无风险
 3. 在更新脚本前建议备份个人配置
 4. 如遇到问题，请检查脚本版本是否为最新
-5. 此仓库所有代码为ai所写
 
 ## 许可证
 

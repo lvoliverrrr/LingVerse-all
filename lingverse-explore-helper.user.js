@@ -400,7 +400,7 @@
                     </div>
                     
                     <div style="margin-top:8px;">
-                        <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">⚠️ 威胁等级阈值（达到才雇护道）</div>
+                        <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">⚠️ 威胁等级阈值（建议势均力敌）</div>
                         <select id="am-guardian-threat" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;cursor:pointer;">
                             <option value="none" ${CONFIG.guardian.threatLevel==='none'?'selected':''}>不判断威胁等级（总是雇）</option>
                             <option value="danger" ${CONFIG.guardian.threatLevel==='danger'?'selected':''}>危险（强敌/越阶）</option>

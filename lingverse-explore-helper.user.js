@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.3.7
+// @version      2.6.1
 // @description  自动开启背包中的藏宝图
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -22,7 +22,8 @@
 
     // 配置对象
     const CONFIG = {
-        openInterval: 3000,        // 开启藏宝图间隔
+        openInterval: 3000,        // 开启藏宝图基础间隔
+        openIntervalRandom: 500,   // 间隔随机范围（±ms）
         maxMapsPerBatch: 50,       // 每批最大开启数量
         batchSize: 10,             // 批量处理大小
         stopOnBattle: true,        // 遇到战斗时是否停止
@@ -32,10 +33,21 @@
             minAtk: 0,             // 最低攻击力要求
             mode: 'together',      // 战斗模式（together或alone）
             priority: 'incarnation,normal,body', // 雇佣优先级
-            monsterHp: 0,          // 妖兽最高生命值（0表示不限）
-            monsterAtk: 0          // 妖兽最高攻击力（0表示不限）
+            threatLevel: 'danger'  // 威胁等级阈值：danger(危险/强敌/越阶)、warn(警告/略强/高层压制)、neutral(势均力敌)、safe(可稳战)、none(不判断)
         }
     };
+
+    /**
+     * 获取随机间隔时间
+     * @param {number} baseInterval - 基础间隔
+     * @param {number} randomRange - 随机范围
+     * @returns {number} 随机后的间隔时间
+     */
+    function getRandomInterval(baseInterval, randomRange) {
+        const min = baseInterval - randomRange;
+        const max = baseInterval + randomRange;
+        return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
 
     // 从localStorage加载保存的配置
     const saved = localStorage.getItem('lingverse_auto_map_config');
@@ -329,7 +341,7 @@
                 <div style="padding:12px;background:${isDark?'#1e2330':'#f0f1f2'};border-radius:6px;margin-top:12px;flex-shrink:0;">
                     <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:10px;font-weight:bold;">⚙️ 基础配置</div>
                     
-                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                         <div>
                             <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">每次最多开启</div>
                             <input type="number" id="am-max-per-batch" value="${CONFIG.maxMapsPerBatch}" min="1" max="1000" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
@@ -338,9 +350,15 @@
                             <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">批量数量(1-10)</div>
                             <input type="number" id="am-batch-size" value="${CONFIG.batchSize}" min="1" max="10" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
                         </div>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
                         <div>
-                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">开启间隔 (ms)</div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">基础间隔 (ms)</div>
                             <input type="number" id="am-open-interval" value="${CONFIG.openInterval}" min="1000" step="500" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                        <div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">随机范围 ±(ms)</div>
+                            <input type="number" id="am-open-interval-random" value="${CONFIG.openIntervalRandom}" min="0" max="2000" step="100" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
                         </div>
                     </div>
                 </div>
@@ -381,16 +399,15 @@
                         </select>
                     </div>
                     
-                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin:8px 0 4px 0;padding-top:8px;border-top:1px solid ${border};">👹 妖兽设置（0=不限）</div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                        <div>
-                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">妖兽最高生命</div>
-                            <input type="number" id="am-guardian-monsterhp" value="${CONFIG.guardian.monsterHp}" placeholder="0=不限" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
-                        </div>
-                        <div>
-                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">妖兽最高攻击</div>
-                            <input type="number" id="am-guardian-monsteratk" value="${CONFIG.guardian.monsterAtk}" placeholder="0=不限" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
-                        </div>
+                    <div style="margin-top:8px;">
+                        <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">⚠️ 威胁等级阈值（达到才雇护道）</div>
+                        <select id="am-guardian-threat" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;cursor:pointer;">
+                            <option value="none" ${CONFIG.guardian.threatLevel==='none'?'selected':''}>不判断威胁等级（总是雇）</option>
+                            <option value="danger" ${CONFIG.guardian.threatLevel==='danger'?'selected':''}>危险（强敌/越阶）</option>
+                            <option value="warn" ${CONFIG.guardian.threatLevel==='warn'?'selected':''}>警告（略强/高层压制）</option>
+                            <option value="neutral" ${CONFIG.guardian.threatLevel==='neutral'?'selected':''}>势均力敌</option>
+                            <option value="safe" ${CONFIG.guardian.threatLevel==='safe'?'selected':''}>可稳战（总是不雇）</option>
+                        </select>
                     </div>
                     
                     <button id="am-save-config" style="width:100%;margin-top:10px;padding:8px;background:#4dabf7;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">💾 保存配置</button>
@@ -434,14 +451,14 @@
                 if (CONFIG.batchSize < 1) CONFIG.batchSize = 1;
                 if (CONFIG.batchSize > 10) CONFIG.batchSize = 10;
                 CONFIG.openInterval = parseInt($('#am-open-interval')?.value || '3000') || 3000;
+                CONFIG.openIntervalRandom = parseInt($('#am-open-interval-random')?.value || '500') || 500;
                 
                 CONFIG.guardian.enabled = $('#am-guardian-enabled')?.checked ?? true;
                 CONFIG.guardian.maxFee = parseInt($('#am-guardian-maxfee')?.value || '0') || 0;
                 CONFIG.guardian.minAtk = parseInt($('#am-guardian-minatk')?.value || '0') || 0;
                 CONFIG.guardian.mode = $('#am-guardian-mode')?.value || 'together';
                 CONFIG.guardian.priority = $('#am-guardian-priority')?.value || 'incarnation,normal,body';
-                CONFIG.guardian.monsterHp = parseInt($('#am-guardian-monsterhp')?.value || '0') || 0;
-                CONFIG.guardian.monsterAtk = parseInt($('#am-guardian-monsteratk')?.value || '0') || 0;
+                CONFIG.guardian.threatLevel = $('#am-guardian-threat')?.value || 'danger';
                 
                 localStorage.setItem('lingverse_auto_map_config', JSON.stringify(CONFIG));
                 
@@ -457,11 +474,6 @@
                             priority: priorityArr
                         });
                         
-                        const combatRes = await apiObj.post('/api/player/auto-combat-settings', {
-                            hp: CONFIG.guardian.monsterHp,
-                            atk: CONFIG.guardian.monsterAtk
-                        });
-                        
                         if (_win.persistAutoHireToLocal) {
                             _win.persistAutoHireToLocal({
                                 enabled: CONFIG.guardian.enabled,
@@ -472,12 +484,11 @@
                             });
                         }
                         
-                        if (hireRes?.code === 200 && combatRes?.code === 200) {
+                        if (hireRes?.code === 200) {
                             Logger.success('配置已保存（同步到游戏）');
                         } else {
                             const hireMsg = hireRes?.code !== 200 ? `护道:${hireRes?.message} ` : '';
-                            const combatMsg = combatRes?.code !== 200 ? `妖兽:${combatRes?.message}` : '';
-                            Logger.warn(`部分同步失败 ${hireMsg}${combatMsg}`);
+                            Logger.warn(`同步失败 ${hireMsg}`);
                         }
                         
                         if (_win.loadPlayerInfo) {
@@ -546,13 +557,6 @@
                         }
                     }
 
-                    if (typeof s['auto_combat_min_hp'] !== 'undefined') {
-                        CONFIG.guardian.monsterHp = parseInt(s['auto_combat_min_hp'], 10) || 0;
-                    }
-                    if (typeof s['auto_combat_min_atk'] !== 'undefined') {
-                        CONFIG.guardian.monsterAtk = parseInt(s['auto_combat_min_atk'], 10) || 0;
-                    }
-
                     this.updatePanelFromConfig();
                     console.log('[自动开图] 已从游戏同步配置:', CONFIG.guardian);
                 }
@@ -570,16 +574,15 @@
             const minAtkEl = $('#am-guardian-minatk');
             const modeEl = $('#am-guardian-mode');
             const priorityEl = $('#am-guardian-priority');
-            const monsterHpEl = $('#am-guardian-monsterhp');
-            const monsterAtkEl = $('#am-guardian-monsteratk');
 
             if (enabledEl) enabledEl.checked = CONFIG.guardian.enabled;
             if (maxFeeEl) maxFeeEl.value = CONFIG.guardian.maxFee;
             if (minAtkEl) minAtkEl.value = CONFIG.guardian.minAtk;
             if (modeEl) modeEl.value = CONFIG.guardian.mode;
             if (priorityEl) priorityEl.value = CONFIG.guardian.priority;
-            if (monsterHpEl) monsterHpEl.value = CONFIG.guardian.monsterHp;
-            if (monsterAtkEl) monsterAtkEl.value = CONFIG.guardian.monsterAtk;
+            
+            const threatEl = $('#am-guardian-threat');
+            if (threatEl) threatEl.value = CONFIG.guardian.threatLevel || 'danger';
         },
 
         /**
@@ -1070,12 +1073,144 @@
                 }
 
                 Logger.success('藏宝图开启完成');
+                // 开启完成后刷新游戏数据
+                this.refreshGameData();
                 return true;
             } catch (e) {
                 Logger.error(`开启失败: ${e.message}`);
                 await this.stop();
                 return false;
             }
+        },
+
+        /**
+         * 境界名称列表（与游戏源码一致）
+         */
+        STAGE_NAMES: ["锻体期", "练气期", "筑基期", "金丹期", "元婴期", "化神期", "炼虚期", "合道期", "大乘期", "渡劫期", "真仙境", "玄仙境", "金仙境", "太乙真仙", "大罗金仙", "仙王境", "仙尊境", "仙帝境", "道祖境", "天道境"],
+
+        /**
+         * 从境界名称解析境界数字
+         * 根据游戏源码 parseRealmStageName 函数逻辑
+         * @param {string} realmName - 境界名称（如"元婴期后期"）
+         * @returns {number} 境界数字（0-19）
+         */
+        parseRealmStageName(realmName) {
+            if (!realmName) return 0;
+            const stages = this.STAGE_NAMES;
+            for (let i = 0; i < stages.length; i++) {
+                if (realmName.indexOf(stages[i]) >= 0) return i;
+            }
+            // 尝试短名称匹配
+            for (let j = 0; j <= 9; j++) {
+                const shortName = stages[j].replace("期", "");
+                if (shortName && realmName.indexOf(shortName) >= 0) return j;
+            }
+            return 0;
+        },
+
+        /**
+         * 从属性估算战力
+         * 根据游戏源码 estimateEncounterPowerFromStats 函数逻辑
+         * @param {number} hp - 生命值
+         * @param {number} atk - 攻击力
+         * @param {number} def - 防御力
+         * @returns {number} 估算战力
+         */
+        estimatePowerFromStats(hp, atk, def) {
+            const mHp = parseInt(hp) || 0;
+            const mAtk = parseInt(atk) || 0;
+            const mDef = parseInt(def) || 0;
+            return Math.max(1, Math.round(mAtk * 8 + mDef * 6 + mHp / 3));
+        },
+
+        /**
+         * 估算玩家战力
+         * @param {Object} p - 玩家数据
+         * @returns {number} 估算战力
+         */
+        estimatePlayerPower(p) {
+            if (!p) return 0;
+            const cached = Number(p.combatPower) || 0;
+            if (cached > 0) return cached;
+            return Math.max(1, Math.round((Number(p.attack) || 0) * 8 + (Number(p.defense) || 0) * 6 + (Number(p.maxHp) || 0) / 3));
+        },
+
+        /**
+         * 计算威胁等级
+         * 根据游戏源码 classifyEncounterThreat 函数逻辑
+         * @param {Object} monsterData - 妖兽数据（API返回的res.data）
+         * @returns {Object} { label: '威胁标签', className: 'danger/warn/neutral/safe', level: 数值等级 }
+         */
+        classifyThreat(monsterData) {
+            const p = _win._lastPlayerData || {};
+            const playerStage = Number(p.realmStage) || 0;
+            const playerLevel = Number(p.realmLevel) || 1;
+            
+            // 从 API 返回数据解析境界
+            const monsterRealmName = monsterData.monsterRealmName || '';
+            const monsterStage = this.parseRealmStageName(monsterRealmName);
+            const monsterLevel = parseInt(monsterData.monsterRealmLevel) || 1;
+            
+            // ========== 优先使用战力对比（更准确的判断）==========
+            const monsterHp = parseInt(monsterData.monsterHp) || 0;
+            const monsterAtk = parseInt(monsterData.monsterAtk) || 0;
+            const monsterDef = parseInt(monsterData.monsterDef) || 0;
+            
+            const monsterPower = this.estimatePowerFromStats(monsterHp, monsterAtk, monsterDef);
+            const playerPower = this.estimatePlayerPower(p);
+            
+            if (monsterPower && playerPower) {
+                const ratio = monsterPower / Math.max(1, playerPower);
+                
+                // 战力比 >= 1.35：强敌（需要护道）
+                if (ratio >= 1.35) {
+                    return { label: '强敌', className: 'danger', level: 4, ratio: ratio.toFixed(2) };
+                }
+                // 战力比 >= 1.12：略强（需要护道）
+                if (ratio >= 1.12) {
+                    return { label: '略强', className: 'warn', level: 3, ratio: ratio.toFixed(2) };
+                }
+                // 战力比 >= 0.85：势均力敌
+                if (ratio >= 0.85) {
+                    return { label: '势均力敌', className: 'neutral', level: 2, ratio: ratio.toFixed(2) };
+                }
+                // 战力比 < 0.85：可稳战（不需要护道）
+                return { label: '可稳战', className: 'safe', level: 1, ratio: ratio.toFixed(2) };
+            }
+            
+            // ========== 战力数据缺失时，回退到境界判断 ==========
+            // 越阶（大境界差距）
+            if (monsterStage > playerStage) {
+                return { label: '越阶强敌', className: 'danger', level: 4 };
+            }
+            // 同境界但层级更高
+            if (monsterStage === playerStage && monsterLevel > playerLevel) {
+                return { label: '高层压制', className: 'warn', level: 3 };
+            }
+            
+            return { label: '仅供参考', className: 'neutral', level: 2 };
+        },
+
+        /**
+         * 根据威胁等级判断是否需要雇护道
+         * @param {Object} threat - 威胁等级对象
+         * @returns {boolean}
+         */
+        needGuardianByThreat(threat) {
+            const cfg = CONFIG.guardian;
+            if (!cfg.threatLevel || cfg.threatLevel === 'none') {
+                return true; // 不判断威胁等级，总是雇护道
+            }
+            
+            const thresholdMap = {
+                'safe': 1,      // 只有可稳战才不雇
+                'neutral': 2,   // 势均力敌及以下不雇
+                'warn': 3,      // 警告及以下不雇
+                'danger': 4     // 只有危险才雇
+            };
+            
+            const threshold = thresholdMap[cfg.threatLevel] || 4;
+            return threat.level >= threshold;
         },
 
         /**
@@ -1143,13 +1278,19 @@
                                 Logger.warn(`遇到守卫: ${monsterName} (生命:${monsterHp} 攻击:${monsterAtk})`);
                                 STATE.stats.battlesEncountered++;
 
-                                // 判断是否需要雇护道：如果设置了妖兽条件且实际妖兽低于条件，则不雇护道
+                                // 计算威胁等级 - 传入完整的 API 返回数据
+                                const threat = this.classifyThreat(result);
+                                const classNameLabel = {
+                                    'danger': '危险',
+                                    'warn': '警告', 
+                                    'neutral': '一般',
+                                    'safe': '安全'
+                                }[threat.className] || threat.className;
+                                Logger.info(`威胁评估: ${threat.label} (${classNameLabel})`);
+
+                                // 判断是否需要雇护道（仅根据威胁等级）
                                 const cfg = CONFIG.guardian;
-                                const needGuardian = cfg.enabled && (
-                                    (cfg.monsterHp > 0 && monsterHp > cfg.monsterHp) ||
-                                    (cfg.monsterAtk > 0 && monsterAtk > cfg.monsterAtk) ||
-                                    (cfg.monsterHp === 0 && cfg.monsterAtk === 0)
-                                );
+                                const needGuardian = cfg.enabled && this.needGuardianByThreat(threat);
 
                                 if (!cfg.enabled) {
                                     Logger.warn('自动雇护道已禁用');
@@ -1158,7 +1299,14 @@
                                     await this.stop();
                                     return;
                                 } else if (!needGuardian) {
-                                    Logger.info(`妖兽属性低于设定条件(生命${cfg.monsterHp}/攻击${cfg.monsterAtk})，不雇护道，自动迎战`);
+                                    const thresholdLabel = {
+                                        'none': '不判断',
+                                        'safe': '可稳战',
+                                        'neutral': '势均力敌',
+                                        'warn': '警告',
+                                        'danger': '危险'
+                                    }[cfg.threatLevel] || cfg.threatLevel;
+                                    Logger.info(`威胁等级"${threat.label}"低于"${thresholdLabel}"，不雇护道，自动迎战`);
                                     // 自动选择战斗
                                     const fightRes = await API.combatChoice('fight');
                                     if (fightRes.code === 200 && fightRes.data) {
@@ -1216,7 +1364,8 @@
                         mapQuantity -= batchSize;
                         
                         if (mapQuantity > 0 && STATE.running) {
-                            await wait(CONFIG.openInterval);
+                            const randomInterval = getRandomInterval(CONFIG.openInterval, CONFIG.openIntervalRandom);
+                            await wait(randomInterval);
                         }
                     } catch (e) {
                         Logger.error(`开启失败: ${e.message}`);
@@ -1226,7 +1375,8 @@
                 }
                 
                 if (i < maps.length - 1 && openedCount < maxToOpen && STATE.running) {
-                    await wait(CONFIG.openInterval);
+                    const randomInterval = getRandomInterval(CONFIG.openInterval, CONFIG.openIntervalRandom);
+                    await wait(randomInterval);
                 }
             }
 
@@ -1305,6 +1455,27 @@
             while (attempts < 60 && this.hasActiveBattle()) {
                 await wait(1000);
                 attempts++;
+            }
+            // 战斗结束后刷新游戏数据
+            this.refreshGameData();
+        },
+
+        /**
+         * 刷新游戏数据（玩家信息、背包、日志）
+         */
+        refreshGameData() {
+            try {
+                if (_win.loadPlayerInfo) {
+                    _win.loadPlayerInfo(true);
+                }
+                if (_win.loadInventory) {
+                    _win.loadInventory();
+                }
+                if (_win.loadGameLogs) {
+                    _win.loadGameLogs();
+                }
+            } catch (e) {
+                // 刷新失败不影响主流程
             }
         },
 

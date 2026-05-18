@@ -323,7 +323,7 @@
                     <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:8px;font-weight:bold;">🎲 气运状态</div>
                     <div style="display:flex;gap:16px;align-items:center;">
                         <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">当前气运</span><div id="am-luck-value" style="color:#f59e0b;font-size:18px;font-weight:bold;">--</div></div>
-                        <div id="am-luck-warning" style="flex:1;font-size:11px;color:#ff6b6b;display:none;">⚠️ 当前气运可能会导致遇敌概率（宝藏守卫）下降</div>
+                        <div id="am-luck-warning" style="flex:1;font-size:11px;color:#ff6b6b;display:none;">⚠️ 当前气运可能会导致遇敌概率（宝藏守卫）下降，此为猜测没有实质依据，建议8以上</div>
                     </div>
                     <div style="margin-top:10px;padding-top:10px;border-top:1px solid ${isDark?'rgba(148,163,184,0.2)':'rgba(148,163,184,0.3)'};display:flex;gap:16px;">
                         <div><span style="color:${isDark?'#94a3b8':'#64748b'};font-size:11px;">累计开启</span><div id="am-luck-total-maps" style="color:${isDark?'#cbd5e1':'#475569'};font-size:14px;font-weight:bold;margin-top:2px;">0</div></div>

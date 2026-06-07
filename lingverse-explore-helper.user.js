@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.41.0
+// @version      2.42.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,8 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.41.0';
+    const SCRIPT_VERSION = '2.42.0';
+    _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -455,6 +456,94 @@
         const hours = Math.floor(minutes / 60);
         const restMinutes = minutes % 60;
         return restMinutes ? `${hours}小时${restMinutes}分钟` : `${hours}小时`;
+    }
+
+    function normalizeAfkPhaseStatus(status) {
+        const source = status && typeof status === 'object' ? status : {};
+        return {
+            schema: 'lingverse-afk-phase-status/v1',
+            phase: String(source.phase || 'unknown'),
+            label: String(source.label || ''),
+            text: String(source.text || ''),
+            reason: String(source.reason || ''),
+            elapsedSeconds: optionalNumberOrNull(source.elapsedSeconds),
+            remainingSeconds: optionalNumberOrNull(source.remainingSeconds),
+            targetSeconds: optionalNumberOrNull(source.targetSeconds)
+        };
+    }
+
+    function buildAfkPhaseStatus(state, config, decision, now) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const snapshot = state || {};
+        const currentDecision = decision && typeof decision === 'object' ? decision : {};
+        const reason = String(currentDecision.reason || '');
+        const currentTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+        const make = (phase, label, text, extra) => normalizeAfkPhaseStatus(Object.assign({
+            phase,
+            label,
+            text,
+            reason,
+            elapsedSeconds: null,
+            remainingSeconds: null,
+            targetSeconds: null
+        }, extra || {}));
+
+        if (!cfg.enabled) {
+            return make('idle', '未启动', '未启动');
+        }
+
+        if (snapshot.isMeditating) {
+            const elapsedSeconds = Math.max(0, Math.round(getMeditationElapsedMs(snapshot, currentTime) / 1000));
+            const targetSeconds = Math.max(0, Math.round(cfg.meditationMinutes * 60));
+            const spirit = Math.max(0, toFiniteNumber(snapshot.spirit, 0));
+            const maxSpirit = Math.max(0, toFiniteNumber(snapshot.maxSpirit, 0));
+            const fullSpirit = maxSpirit > 0 && spirit >= maxSpirit;
+            const remainingSeconds = fullSpirit ? 0 : Math.max(0, targetSeconds - elapsedSeconds);
+            const text = fullSpirit
+                ? `冥想中 · 已冥想${formatAfkElapsedDuration(elapsedSeconds)} · 神识已满，准备结束`
+                : `冥想中 · 已冥想${formatAfkElapsedDuration(elapsedSeconds)} · 计划剩余${formatAfkElapsedDuration(remainingSeconds)} · 满神识提前结束`;
+            return make('meditating', '冥想中', text, {
+                elapsedSeconds,
+                remainingSeconds,
+                targetSeconds
+            });
+        }
+
+        if (snapshot.gameUpdateNoticeActive ||
+            snapshot.immortalPrisonActive ||
+            snapshot.isDead ||
+            snapshot.merchantActive ||
+            snapshot.encounterActive ||
+            snapshot.combatActive ||
+            snapshot.playerEncounterActive ||
+            snapshot.adventureActive) {
+            return make('blocked', '阻塞', `阻塞 · ${formatAfkReason(reason)}`);
+        }
+
+        if (snapshot.postReviveResume || snapshot.postInteractionResume) {
+            const label = snapshot.postReviveResume ? '复活恢复窗口' : '事件恢复窗口';
+            return make('resuming', label, `${label} · 神识足够则继续探索，不足则回冥想`);
+        }
+
+        if (snapshot.autoExploreRunning || snapshot.autoExplorePending) {
+            const label = snapshot.autoExplorePending ? '探索恢复挂起' : '探索中';
+            const staleText = snapshot.exploreStalled ? ' · 疑似卡住' : '';
+            return make('exploring', label, `${label}${staleText} · ${cfg.exploreMultiplier}倍 · 卡住判定${cfg.stallTimeoutSeconds}秒`, {
+                targetSeconds: cfg.stallTimeoutSeconds
+            });
+        }
+
+        if (reason === 'spirit-below-threshold' || reason === 'explore-disabled-no-spirit') {
+            return make('needs-meditation', '待冥想', `待冥想 · ${formatAfkReason(reason)}`);
+        }
+        if (currentDecision.action === 'startAutoExplore') {
+            return make('ready-to-explore', '待探索', `待探索 · ${cfg.exploreMultiplier}倍`);
+        }
+        if (currentDecision.action === 'startMeditation') {
+            return make('ready-to-meditate', '待冥想', `待冥想 · 计划${cfg.meditationMinutes}分钟`);
+        }
+
+        return make('waiting', '等待', `等待 · ${formatAfkReason(reason)}`);
     }
 
     function buildEmptyAfkWaitingDiagnosis(action, reason, repeatCount, elapsedSeconds, firstAt, lastAt) {
@@ -1628,6 +1717,20 @@
         };
     }
 
+    function summarizeAfkPhaseStatus(status) {
+        const normalized = normalizeAfkPhaseStatus(status);
+        return {
+            schema: 'lingverse-afk-phase-status/v1',
+            phase: sanitizeDebugText(normalized.phase, 40),
+            label: sanitizeDebugText(normalized.label, 80),
+            text: sanitizeDebugText(normalized.text, DEBUG_SUMMARY_TEXT_LIMIT),
+            reason: sanitizeDebugText(normalized.reason, 80),
+            elapsedSeconds: optionalNumberOrNull(normalized.elapsedSeconds),
+            remainingSeconds: optionalNumberOrNull(normalized.remainingSeconds),
+            targetSeconds: optionalNumberOrNull(normalized.targetSeconds)
+        };
+    }
+
     function summarizeGuardianAttempt(attempt) {
         const normalized = normalizeGuardianAttempt(attempt);
         const guardian = normalized.guardian || normalizeGuardianConfig({});
@@ -1672,6 +1775,15 @@
         const adventure = full.adventure && typeof full.adventure === 'object' ? full.adventure : {};
         const config = full.config && typeof full.config === 'object' ? full.config : {};
         const history = full.history && typeof full.history === 'object' ? full.history : {};
+        const phaseSource = full.phase && typeof full.phase === 'object' && full.phase.schema === 'lingverse-afk-phase-status/v1'
+            ? full.phase
+            : buildAfkPhaseStatus(Object.assign({}, player, blockers, {
+                autoExploreRunning: !!automation.autoExploreRunning,
+                autoExplorePending: !!automation.autoExplorePending,
+                exploreStalled: !!automation.exploreStalled,
+                postReviveResume: !!automation.postReviveResume,
+                postInteractionResume: !!automation.postInteractionResume
+            }), Object.assign({ enabled: true }, config), decision);
 
         return {
             schema: 'lingverse-afk-debug-summary/v1',
@@ -1686,6 +1798,7 @@
                 action: String(decision.action || ''),
                 reason: String(decision.reason || '')
             },
+            phase: summarizeAfkPhaseStatus(phaseSource),
             player: {
                 spirit: numberOrNull(player.spirit),
                 maxSpirit: numberOrNull(player.maxSpirit),
@@ -1972,6 +2085,26 @@
         return '停止';
     }
 
+    function buildAfkPhaseStatusFromSummary(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        if (source.phase && typeof source.phase === 'object' && source.phase.schema === 'lingverse-afk-phase-status/v1' && (source.phase.text || source.phase.phase !== 'unknown')) {
+            return summarizeAfkPhaseStatus(source.phase);
+        }
+        const player = source.player && typeof source.player === 'object' ? source.player : {};
+        const blockers = source.blockers && typeof source.blockers === 'object' ? source.blockers : {};
+        const automation = source.automation && typeof source.automation === 'object' ? source.automation : {};
+        const config = source.config && typeof source.config === 'object' ? source.config : {};
+        const decision = source.decision && typeof source.decision === 'object' ? source.decision : {};
+        const enabled = !(decision.action === 'idle' || decision.reason === 'disabled');
+        return summarizeAfkPhaseStatus(buildAfkPhaseStatus(Object.assign({}, player, blockers, {
+            autoExploreRunning: !!automation.autoExploreRunning,
+            autoExplorePending: !!automation.autoExplorePending,
+            exploreStalled: !!automation.exploreStalled,
+            postReviveResume: !!automation.postReviveResume,
+            postInteractionResume: !!automation.postInteractionResume
+        }), Object.assign({ enabled }, config), decision));
+    }
+
     function buildAfkStatusReport(source) {
         const parsed = source && typeof source === 'object' ? source : parseAfkIssueReplaySource(source);
         const summary = parsed && parsed.schema === 'lingverse-afk-debug-summary/v1'
@@ -1993,12 +2126,14 @@
         const blockerText = buildReplayBlockerLabels(summary).join('/');
         const riskText = sanitizeDebugText(riskStatus.summaryText || buildReplayRiskText(summary), 160);
         const strategyImportText = buildReplayStrategyImportText(summary);
+        const phase = buildAfkPhaseStatusFromSummary(summary);
         const lines = [
             headline,
             `版本: ${sanitizeDebugText(summary.scriptVersion || SCRIPT_VERSION, 40)}`,
             `页面: ${pageText}`,
             `神识: ${spirit}/${maxSpirit}${spiritCost === null ? '' : ` · 单次消耗${spiritCost}`}`,
             `阻塞: ${blockerText}`,
+            `阶段: ${sanitizeDebugText(phase.text || phase.label || '未知', DEBUG_SUMMARY_TEXT_LIMIT)}`,
             `探索: ${formatAfkReportExploreState(automation)}`,
             `配置: 冥想${formatAfkReportNumber(config.meditationMinutes)}分钟 · 神识<${formatAfkReportNumber(config.minSpirit)} · ${formatAfkReportNumber(config.exploreMultiplier)}倍`,
             `资源: ${[
@@ -2035,6 +2170,7 @@
         const cfg = normalizeAfkLoopConfig(config || {});
         const snapshot = state || {};
         const currentDecision = decision || decideAfkNextAction(snapshot, cfg, context && context.now);
+        const phase = buildAfkPhaseStatus(snapshot, cfg, currentDecision, context && context.now);
         const adventureId = snapshot.adventureId || null;
         const debugContext = context || {};
         const guardianCfg = debugContext.guardianConfig
@@ -2050,6 +2186,7 @@
                 action: currentDecision.action || '',
                 reason: currentDecision.reason || ''
             },
+            phase,
             player: {
                 spirit: numberOrNull(snapshot.spirit),
                 maxSpirit: numberOrNull(snapshot.maxSpirit),
@@ -2141,6 +2278,7 @@
     }
 
     _win.LingVerseAutoMapTestHooks = Object.assign({}, _win.LingVerseAutoMapTestHooks, {
+        SCRIPT_VERSION,
         parseMerchantPrice,
         selectMerchantItem,
         detectGameUpdateNotice,
@@ -2149,6 +2287,7 @@
         normalizeAfkResourceUsage,
         resolveAfkResourceBudget,
         getResumeWindowMs,
+        buildAfkPhaseStatus,
         isExploreStalledState,
         decideAfkNextAction,
         formatAfkReason,

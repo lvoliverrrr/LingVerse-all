@@ -1667,6 +1667,87 @@ test('buildAfkPanelStatus summarizes current decision and next check timing', ()
     });
 });
 
+test('buildAfkPhaseStatus reports meditation and exploration timing', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkPhaseStatus, 'function');
+
+    assert.deepEqual(toPlain(hooks.buildAfkPhaseStatus({
+        isMeditating: true,
+        meditationDurationSeconds: 3600,
+        spirit: 1200,
+        maxSpirit: 2758,
+        spiritCost: 4
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        stallTimeoutSeconds: 90
+    }, {
+        action: 'wait',
+        reason: 'meditating'
+    }, 1_000_000)), {
+        schema: 'lingverse-afk-phase-status/v1',
+        phase: 'meditating',
+        label: '冥想中',
+        text: '冥想中 · 已冥想1小时 · 计划剩余1小时20分钟 · 满神识提前结束',
+        reason: 'meditating',
+        elapsedSeconds: 3600,
+        remainingSeconds: 4800,
+        targetSeconds: 8400
+    });
+
+    assert.deepEqual(toPlain(hooks.buildAfkPhaseStatus({
+        isMeditating: true,
+        meditationDurationSeconds: 120,
+        spirit: 2758,
+        maxSpirit: 2758,
+        spiritCost: 4
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        stallTimeoutSeconds: 90
+    }, {
+        action: 'stopMeditation',
+        reason: 'spirit-full'
+    }, 1_000_000)), {
+        schema: 'lingverse-afk-phase-status/v1',
+        phase: 'meditating',
+        label: '冥想中',
+        text: '冥想中 · 已冥想2分钟 · 神识已满，准备结束',
+        reason: 'spirit-full',
+        elapsedSeconds: 120,
+        remainingSeconds: 0,
+        targetSeconds: 8400
+    });
+
+    assert.deepEqual(toPlain(hooks.buildAfkPhaseStatus({
+        autoExploreRunning: true,
+        autoExplorePending: false,
+        exploreStalled: false,
+        spirit: 888,
+        maxSpirit: 2758,
+        spiritCost: 4
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        stallTimeoutSeconds: 90,
+        exploreMultiplier: 50
+    }, {
+        action: 'wait',
+        reason: 'auto-explore-running'
+    }, 1_000_000)), {
+        schema: 'lingverse-afk-phase-status/v1',
+        phase: 'exploring',
+        label: '探索中',
+        text: '探索中 · 50倍 · 卡住判定90秒',
+        reason: 'auto-explore-running',
+        elapsedSeconds: null,
+        remainingSeconds: null,
+        targetSeconds: 90
+    });
+});
+
 test('buildAfkIssueReplay turns copied summaries into a replay view', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -1747,7 +1828,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.41.0',
+        scriptVersion: '2.42.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         page: {
             title: '灵界 LingVerse - 修仙世界',
@@ -1814,15 +1895,16 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
     assert.deepEqual(toPlain(report), {
         schema: 'lingverse-afk-status-report/v1',
         sourceSchema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.41.0',
+        scriptVersion: '2.42.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         headline: '挂机状态 · 等待 · 复活次数已到本轮上限',
         text: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.41.0',
+            '版本: 2.42.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
+            '阶段: 阻塞 · 复活次数已到本轮上限',
             '探索: 停止',
             '配置: 冥想140分钟 · 神识<20 · 50倍',
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
@@ -1833,10 +1915,11 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
         ].join('\n'),
         lines: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.41.0',
+            '版本: 2.42.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
+            '阶段: 阻塞 · 复活次数已到本轮上限',
             '探索: 停止',
             '配置: 冥想140分钟 · 神识<20 · 50倍',
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
@@ -2127,7 +2210,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.41.0',
+        scriptVersion: '2.42.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

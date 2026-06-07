@@ -40,6 +40,7 @@
 - v2.22.0 只读函数确认：`handleCombatChoice('fight')` 会直接调用 `/api/game/combat-choice` 迎战；`tryAutoHireProtectorForEncounter()` 会读取 `getAutoHireConfig()` 并调用 `/api/game/encounter-auto-hire`，遇 429 会等待 600ms 重试一次。
 - v2.23.0 只读死亡状态：页面同时暴露 `playerDead` 和 `_lastPlayerData.isDead`；`handleRevive()` 会调用 `/api/game/revive`、隐藏死亡遮罩、刷新玩家信息和地图。
 - v2.24.0 只读恢复挂起逻辑：`_tryResumeAutoExploreAfterMerchant()` 会在 `_autoResumeExplorePending` 时清标记并延迟 1500ms 调 `startAutoExplore()`；若 pending 残留，辅助脚本需要按卡住超时兜底。
+- v2.42.0 只读状态：真实页仍显示“灵界已更新新版本，请点此刷新 获取最新内容”；helper 已注入（`window._autoMapInited=true`），但真实页需要刷新/重载扩展后才会加载本地最新版；页面神识 `3/2758`、位置沧澜港、可见“冥想修炼/探索(-4神识)/自动/万物图鉴”等入口。本次只读观察未点击探索、商人、战斗、护道、复活、用符或用丹。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -419,6 +420,16 @@
 - `buildAfkStatusReport` 的“自动化”行新增“迎战 reason”，测试者复制状态即可反馈迎战是否触发或失败。
 - 该字段是报告层补充；不开 `autoFight` 时只记录 `disabled`，不会触发战斗。
 
+`lingverse-explore-helper.user.js` v2.42.0 新增：
+
+- `buildAfkPhaseStatus(state, config, decision, now)` 生成 `lingverse-afk-phase-status/v1`，只读描述当前挂机阶段。
+- 冥想阶段记录 `elapsedSeconds`、`remainingSeconds`、`targetSeconds`，并明确“满神识提前结束”，帮助验证自定义 140 分钟循环。
+- 探索阶段记录探索倍率和卡住判定秒数；阻塞阶段记录当前决策原因；恢复窗口阶段说明神识足够继续探索、不足回冥想。
+- `buildAfkDebugSnapshot` / `buildAfkDebugSummary` 新增 `phase`；旧摘要没有 `phase` 时，`buildAfkStatusReport` 会从 player/blocker/automation/config/decision 补算。
+- `buildAfkStatusReport` 新增“阶段:”行，测试者复制状态时能直接看到冥想/探索/阻塞/恢复进度。
+- `window.LingVerseAutoMapVersion` 和测试 hook 暴露当前版本，便于用 Agent Browser CLI 只读核对真实页面是否加载最新版。
+- 阶段报告不参与决策，不调用任何游戏 API，不触发资源动作。
+
 默认配置：
 
 - `enabled: false`
@@ -480,7 +491,7 @@
   - 恢复窗口内神识足够 -> `startAutoExplore`；神识不足 -> `startMeditation`。
 - 调试摘要：
   - `buildAfkDebugSummary` 去掉页面 URL 的 query/hash，脱敏常见 token/session/key 参数。
-  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞、高风险开关、用丹尝试、用符尝试、迎战尝试和护道尝试。
+  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞、阶段/剩余时间、高风险开关、用丹尝试、用符尝试、迎战尝试和护道尝试。
 
 ## 待继续研究
 

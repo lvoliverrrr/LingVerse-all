@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.36.0
+// @version      2.37.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.36.0';
+    const SCRIPT_VERSION = '2.37.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -55,14 +55,17 @@
             stallTimeoutSeconds: 90, // 自动探索超过该时间无进展则回冥想
             resumeWindowSeconds: 60, // 事件/复活后允许恢复探索的时间窗口，0 为关闭
             autoRevive: false,       // 复活会花资源，默认关闭
+            reviveMaxPerRun: 0,      // 单次挂机启动最多复活次数，0 为不限
             autoFight: false,        // 自动迎战会触发战斗，默认关闭
             autoHireGuardian: false, // 遭遇前按游戏护道设置自动雇护道，默认关闭
             useTalismans: false,     // 战斗符箓消耗品，默认关闭
             talismanMaxKinds: 5,      // 最多使用几种符
             talismanQuantity: 1,      // 每种符默认使用数量
             talismanFamilyOrder: '',  // 可选：按 family 白名单/顺序使用战斗符
+            talismanMaxEncountersPerRun: 0, // 单次挂机启动最多用符遭遇数，0 为不限
             useNirvanaPill: false,   // 涅槃重生丹消耗品，默认关闭
             nirvanaMinRarity: 4,      // 默认只吃史诗及以上五行通灵丹
+            nirvanaMaxPerRun: 0,      // 单次挂机启动最多用丹次数，0 为不限
             queueNirvanaPill: false,  // 已有五行通灵时是否继续排队
             autoDeclinePlayerEncounter: false, // 陌生道友邂逅默认暂停，开启后自动婉拒/离开
             adventureMode: 'pause',    // 奇遇链默认暂停，避免自动选择剧情分支
@@ -113,14 +116,17 @@
         stallTimeoutSeconds: 90,
         resumeWindowSeconds: 60,
         autoRevive: false,
+        reviveMaxPerRun: 0,
         autoFight: false,
         autoHireGuardian: false,
         useTalismans: false,
         talismanMaxKinds: 5,
         talismanQuantity: 1,
         talismanFamilyOrder: '',
+        talismanMaxEncountersPerRun: 0,
         useNirvanaPill: false,
         nirvanaMinRarity: 4,
+        nirvanaMaxPerRun: 0,
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: false,
         adventureMode: 'pause',
@@ -254,20 +260,63 @@
         cfg.stallTimeoutSeconds = clampNumber(cfg.stallTimeoutSeconds, 0, 3600, 90);
         cfg.resumeWindowSeconds = clampNumber(cfg.resumeWindowSeconds, 0, 3600, 60);
         cfg.autoRevive = !!cfg.autoRevive;
+        cfg.reviveMaxPerRun = clampNumber(cfg.reviveMaxPerRun, 0, 999, 0);
         cfg.autoFight = !!cfg.autoFight;
         cfg.autoHireGuardian = !!cfg.autoHireGuardian;
         cfg.useTalismans = !!cfg.useTalismans;
         cfg.talismanMaxKinds = clampNumber(cfg.talismanMaxKinds, 1, 5, 5);
         cfg.talismanQuantity = clampNumber(cfg.talismanQuantity, 1, 20, 1);
         cfg.talismanFamilyOrder = parseTalismanFamilyOrder(cfg.talismanFamilyOrder).join(',');
+        cfg.talismanMaxEncountersPerRun = clampNumber(cfg.talismanMaxEncountersPerRun, 0, 999, 0);
         cfg.useNirvanaPill = !!cfg.useNirvanaPill;
         cfg.nirvanaMinRarity = clampNumber(cfg.nirvanaMinRarity, 1, 5, 4);
+        cfg.nirvanaMaxPerRun = clampNumber(cfg.nirvanaMaxPerRun, 0, 999, 0);
         cfg.queueNirvanaPill = !!cfg.queueNirvanaPill;
         cfg.autoDeclinePlayerEncounter = !!cfg.autoDeclinePlayerEncounter;
         cfg.adventureMode = cfg.adventureMode === 'fixed' || cfg.adventureMode === 'strategy' ? cfg.adventureMode : 'pause';
         cfg.adventureChoiceIndex = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
         cfg.adventureChoiceMap = normalizeAdventureChoiceMap(cfg.adventureChoiceMap);
         return cfg;
+    }
+
+    function normalizeAfkResourceUsage(usage) {
+        const raw = usage && typeof usage === 'object' ? usage : {};
+        return {
+            revive: clampNumber(raw.revive, 0, 999, 0),
+            talismanEncounters: clampNumber(raw.talismanEncounters, 0, 999, 0),
+            nirvanaPills: clampNumber(raw.nirvanaPills, 0, 999, 0)
+        };
+    }
+
+    function getAfkResourceBudgetSpec(kind) {
+        const specs = {
+            revive: { usageKey: 'revive', maxKey: 'reviveMaxPerRun' },
+            talismanEncounters: { usageKey: 'talismanEncounters', maxKey: 'talismanMaxEncountersPerRun' },
+            nirvanaPills: { usageKey: 'nirvanaPills', maxKey: 'nirvanaMaxPerRun' }
+        };
+        return specs[kind] || specs.revive;
+    }
+
+    function resolveAfkResourceBudget(kind, config, usage) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const normalizedUsage = normalizeAfkResourceUsage(usage);
+        const budgetKind = String(kind || 'revive');
+        const spec = getAfkResourceBudgetSpec(budgetKind);
+        const used = normalizedUsage[spec.usageKey] || 0;
+        const maxPerRun = cfg[spec.maxKey] || 0;
+        const limited = maxPerRun > 0;
+        const remaining = limited ? Math.max(0, maxPerRun - used) : null;
+        const allowed = !limited || used < maxPerRun;
+        return {
+            schema: 'lingverse-afk-resource-budget/v1',
+            kind: budgetKind,
+            used,
+            maxPerRun,
+            limited,
+            remaining,
+            allowed,
+            reason: allowed ? 'available' : 'budget-exhausted'
+        };
     }
 
     function formatAfkReason(reason) {
@@ -297,8 +346,11 @@
             'post-interaction-ready': '事件/战斗后神识可探索',
             'post-interaction-low-spirit': '事件/战斗后神识不足',
             'dead-auto-revive-enabled': '已开启自动复活',
+            'revive-budget-exhausted': '复活次数已到本轮上限',
             'encounter-auto-guardian-enabled': '已开启遭遇前自动护道',
-            'encounter-auto-fight-enabled': '已开启自动迎战'
+            'encounter-auto-fight-enabled': '已开启自动迎战',
+            'talisman-budget-exhausted': '战斗符箓次数已到本轮上限',
+            'nirvana-budget-exhausted': '涅槃重生丹次数已到本轮上限'
         };
         return labels[reason] || reason || '状态变化';
     }
@@ -386,9 +438,17 @@
         return labels[rarity] || `${rarity}+`;
     }
 
-    function buildAfkRiskStatus(config, guardianConfig) {
+    function formatAfkRunLimit(value) {
+        const limit = clampNumber(value, 0, 999, 0);
+        return limit > 0 ? `本轮上限${limit}` : '不限';
+    }
+
+    function buildAfkRiskStatus(config, guardianConfig, resourceUsage) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const guardian = normalizeGuardianConfig(guardianConfig || {});
+        const reviveBudget = resolveAfkResourceBudget('revive', cfg, resourceUsage);
+        const talismanBudget = resolveAfkResourceBudget('talismanEncounters', cfg, resourceUsage);
+        const nirvanaBudget = resolveAfkResourceBudget('nirvanaPills', cfg, resourceUsage);
         const adventureAuto = cfg.adventureMode === 'fixed' || cfg.adventureMode === 'strategy';
         const riskFlags = [
             cfg.autoFight,
@@ -419,6 +479,15 @@
         if (cfg.adventureMode === 'strategy' && Object.keys(cfg.adventureChoiceMap || {}).length === 0) {
             warnings.push('奇遇策略模式已开启，但策略表为空');
         }
+        if (cfg.autoRevive && !reviveBudget.allowed) {
+            warnings.push('自动复活已到本轮上限');
+        }
+        if (cfg.useTalismans && !talismanBudget.allowed) {
+            warnings.push('战斗符箓已到本轮上限');
+        }
+        if (cfg.useNirvanaPill && !nirvanaBudget.allowed) {
+            warnings.push('涅槃重生丹已到本轮上限');
+        }
 
         const guardianDetails = [];
         if (cfg.autoHireGuardian) {
@@ -433,9 +502,9 @@
         const itemTexts = [
             `自动迎战: ${cfg.autoFight ? `开启 · ${cfg.exploreMultiplier}倍探索` : '关闭'}`,
             `自动护道: ${cfg.autoHireGuardian ? `开启 · ${guardianDetails.join(' · ')}` : '关闭'}`,
-            `自动复活: ${cfg.autoRevive ? '开启' : '关闭'}`,
-            `战斗用符: ${cfg.useTalismans ? `开启 · ${cfg.talismanMaxKinds}种×${cfg.talismanQuantity} · ${talismanOrder.length ? talismanOrder.join('>') : '按品质'}` : '关闭'}`,
-            `涅槃重生丹: ${cfg.useNirvanaPill ? `开启 · ${formatRarityThreshold(cfg.nirvanaMinRarity)} · ${cfg.queueNirvanaPill ? '允许排队' : '不排队'}` : '关闭'}`,
+            `自动复活: ${cfg.autoRevive ? `开启 · ${formatAfkRunLimit(cfg.reviveMaxPerRun)}` : '关闭'}`,
+            `战斗用符: ${cfg.useTalismans ? `开启 · ${cfg.talismanMaxKinds}种×${cfg.talismanQuantity} · ${talismanOrder.length ? talismanOrder.join('>') : '按品质'} · ${formatAfkRunLimit(cfg.talismanMaxEncountersPerRun)}` : '关闭'}`,
+            `涅槃重生丹: ${cfg.useNirvanaPill ? `开启 · ${formatRarityThreshold(cfg.nirvanaMinRarity)} · ${cfg.queueNirvanaPill ? '允许排队' : '不排队'} · ${formatAfkRunLimit(cfg.nirvanaMaxPerRun)}` : '关闭'}`,
             `陌生道友婉拒: ${cfg.autoDeclinePlayerEncounter ? '开启' : '关闭'}`,
             `奇遇自动选择: ${adventureAuto ? `开启 · ${cfg.adventureMode}` : '关闭'}`
         ];
@@ -572,10 +641,13 @@
             tickInterval: 30000,
             stallTimeoutSeconds: 90,
             resumeWindowSeconds: current.resumeWindowSeconds,
+            reviveMaxPerRun: 0,
             talismanMaxKinds: 5,
             talismanQuantity: 1,
             talismanFamilyOrder: current.talismanFamilyOrder,
+            talismanMaxEncountersPerRun: 0,
             nirvanaMinRarity: 4,
+            nirvanaMaxPerRun: 0,
             queueNirvanaPill: false
         };
 
@@ -599,6 +671,9 @@
                 autoHireGuardian: false,
                 useTalismans: true,
                 useNirvanaPill: true,
+                reviveMaxPerRun: 1,
+                talismanMaxEncountersPerRun: 3,
+                nirvanaMaxPerRun: 1,
                 autoDeclinePlayerEncounter: true
             }, preserved));
         }
@@ -975,7 +1050,7 @@
         });
     }
 
-    function resolveNirvanaRebirthPillAttempt(player, items, config, now) {
+    function resolveNirvanaRebirthPillAttempt(player, items, config, now, usage) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const activeBuff = getActiveFiveRootBuff(player || {}, now);
         const base = {
@@ -998,6 +1073,16 @@
                 reason: 'active-five-root-buff',
                 pill: null,
                 ...base
+            };
+        }
+        const budget = resolveAfkResourceBudget('nirvanaPills', cfg, usage);
+        if (!budget.allowed) {
+            return {
+                shouldUse: false,
+                reason: 'budget-exhausted',
+                pill: null,
+                ...base,
+                budget
             };
         }
 
@@ -1082,9 +1167,11 @@
             return { action: 'wait', reason: 'immortal-prison' };
         }
         if (snapshot.isDead) {
-            return cfg.autoRevive
+            if (!cfg.autoRevive) return { action: 'wait', reason: 'dead' };
+            const reviveBudget = resolveAfkResourceBudget('revive', cfg, snapshot.resourceUsage);
+            return reviveBudget.allowed
                 ? { action: 'revive', reason: 'dead-auto-revive-enabled' }
-                : { action: 'wait', reason: 'dead' };
+                : { action: 'wait', reason: 'revive-budget-exhausted' };
         }
         if (snapshot.adventureActive) {
             const choiceIndex = resolveAdventureChoiceIndex(snapshot.adventureId, cfg);
@@ -1374,7 +1461,8 @@
                 postInteractionResume: !!automation.postInteractionResume,
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
                 talismans: summarizeCombatTalismanAttempt(automation.talismans),
-                guardian: summarizeGuardianAttempt(automation.guardian)
+                guardian: summarizeGuardianAttempt(automation.guardian),
+                resourceUsage: normalizeAfkResourceUsage(automation.resourceUsage)
             },
             adventure: {
                 id: adventure.id || null,
@@ -1393,6 +1481,9 @@
                 exploreMultiplier: numberOrNull(config.exploreMultiplier),
                 stallTimeoutSeconds: numberOrNull(config.stallTimeoutSeconds),
                 resumeWindowSeconds: numberOrNull(config.resumeWindowSeconds),
+                reviveMaxPerRun: numberOrNull(config.reviveMaxPerRun),
+                talismanMaxEncountersPerRun: numberOrNull(config.talismanMaxEncountersPerRun),
+                nirvanaMaxPerRun: numberOrNull(config.nirvanaMaxPerRun),
                 adventureMode: String(config.adventureMode || ''),
                 risks: {
                     autoFight: !!config.autoFight,
@@ -1403,7 +1494,7 @@
                     queueNirvanaPill: !!config.queueNirvanaPill,
                     autoDeclinePlayerEncounter: !!config.autoDeclinePlayerEncounter
                 },
-                riskStatus: buildAfkRiskStatus(config, config.guardian)
+                riskStatus: buildAfkRiskStatus(config, config.guardian, automation.resourceUsage)
             },
             history: {
                 decisionTail: tailRecords(history.decisionTail, DEBUG_SUMMARY_HISTORY_LIMIT).map(record => ({
@@ -1650,7 +1741,8 @@
                 postInteractionResume: !!snapshot.postInteractionResume,
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
                 talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
-                guardian: buildGuardianDebugAttempt(debugContext.guardianAttempt, snapshot, cfg, guardianCfg)
+                guardian: buildGuardianDebugAttempt(debugContext.guardianAttempt, snapshot, cfg, guardianCfg),
+                resourceUsage: normalizeAfkResourceUsage(snapshot.resourceUsage)
             },
             adventure: {
                 id: adventureId,
@@ -1673,12 +1765,15 @@
                 autoFight: cfg.autoFight,
                 autoHireGuardian: cfg.autoHireGuardian,
                 autoRevive: cfg.autoRevive,
+                reviveMaxPerRun: cfg.reviveMaxPerRun,
                 useTalismans: cfg.useTalismans,
                 talismanMaxKinds: cfg.talismanMaxKinds,
                 talismanQuantity: cfg.talismanQuantity,
                 talismanFamilyOrder: cfg.talismanFamilyOrder,
+                talismanMaxEncountersPerRun: cfg.talismanMaxEncountersPerRun,
                 useNirvanaPill: cfg.useNirvanaPill,
                 nirvanaMinRarity: cfg.nirvanaMinRarity,
+                nirvanaMaxPerRun: cfg.nirvanaMaxPerRun,
                 queueNirvanaPill: cfg.queueNirvanaPill,
                 autoDeclinePlayerEncounter: cfg.autoDeclinePlayerEncounter,
                 adventureMode: cfg.adventureMode,
@@ -1705,6 +1800,8 @@
         selectMerchantItem,
         resolveApiObject,
         normalizeAfkLoopConfig,
+        normalizeAfkResourceUsage,
+        resolveAfkResourceBudget,
         getResumeWindowMs,
         isExploreStalledState,
         decideAfkNextAction,
@@ -1967,14 +2064,17 @@
         cfg.stallTimeoutSeconds = clampNumber($('#am-afk-stall-timeout')?.value, 0, 3600, cfg.stallTimeoutSeconds || 90);
         cfg.resumeWindowSeconds = clampNumber($('#am-afk-resume-window')?.value, 0, 3600, cfg.resumeWindowSeconds ?? 60);
         cfg.autoRevive = $('#am-afk-auto-revive')?.checked ?? cfg.autoRevive;
+        cfg.reviveMaxPerRun = clampNumber($('#am-afk-revive-max-per-run')?.value, 0, 999, cfg.reviveMaxPerRun || 0);
         cfg.autoFight = $('#am-afk-auto-fight')?.checked ?? cfg.autoFight;
         cfg.autoHireGuardian = $('#am-afk-auto-hire-guardian')?.checked ?? cfg.autoHireGuardian;
         cfg.useTalismans = $('#am-afk-use-talismans')?.checked ?? cfg.useTalismans;
         cfg.talismanMaxKinds = clampNumber($('#am-afk-talisman-max-kinds')?.value, 1, 5, cfg.talismanMaxKinds || 5);
         cfg.talismanQuantity = clampNumber($('#am-afk-talisman-qty')?.value, 1, 20, cfg.talismanQuantity || 1);
         cfg.talismanFamilyOrder = $('#am-afk-talisman-family-order')?.value ?? cfg.talismanFamilyOrder ?? '';
+        cfg.talismanMaxEncountersPerRun = clampNumber($('#am-afk-talisman-max-encounters')?.value, 0, 999, cfg.talismanMaxEncountersPerRun || 0);
         cfg.useNirvanaPill = $('#am-afk-use-nirvana')?.checked ?? cfg.useNirvanaPill;
         cfg.nirvanaMinRarity = clampNumber($('#am-afk-nirvana-min-rarity')?.value, 1, 5, cfg.nirvanaMinRarity || 4);
+        cfg.nirvanaMaxPerRun = clampNumber($('#am-afk-nirvana-max-per-run')?.value, 0, 999, cfg.nirvanaMaxPerRun || 0);
         cfg.queueNirvanaPill = $('#am-afk-queue-nirvana')?.checked ?? cfg.queueNirvanaPill;
         cfg.autoDeclinePlayerEncounter = $('#am-afk-auto-decline-player')?.checked ?? cfg.autoDeclinePlayerEncounter;
         cfg.adventureMode = $('#am-afk-adventure-mode')?.value || cfg.adventureMode || 'pause';
@@ -2299,6 +2399,20 @@
                                 <input type="checkbox" id="am-afk-auto-revive" ${CONFIG.afkLoop.autoRevive?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">死亡后自动灵石复活</span>
                             </label>
+                            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+                                <div>
+                                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">复活上限/轮</div>
+                                    <input type="number" id="am-afk-revive-max-per-run" value="${CONFIG.afkLoop.reviveMaxPerRun}" min="0" max="999" step="1" title="0 表示不限" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                                </div>
+                                <div>
+                                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">用符遭遇/轮</div>
+                                    <input type="number" id="am-afk-talisman-max-encounters" value="${CONFIG.afkLoop.talismanMaxEncountersPerRun}" min="0" max="999" step="1" title="0 表示不限" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                                </div>
+                                <div>
+                                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">用丹上限/轮</div>
+                                    <input type="number" id="am-afk-nirvana-max-per-run" value="${CONFIG.afkLoop.nirvanaMaxPerRun}" min="0" max="999" step="1" title="0 表示不限" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                                </div>
+                            </div>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-use-talismans" ${CONFIG.afkLoop.useTalismans?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">战斗前自动使用战斗符箓</span>
@@ -2565,6 +2679,7 @@
             const afkStallTimeoutEl = $('#am-afk-stall-timeout');
             const afkResumeWindowEl = $('#am-afk-resume-window');
             const afkAutoReviveEl = $('#am-afk-auto-revive');
+            const afkReviveMaxPerRunEl = $('#am-afk-revive-max-per-run');
             const afkAutoFightEl = $('#am-afk-auto-fight');
             const afkAutoHireGuardianEl = $('#am-afk-auto-hire-guardian');
             const afkAutoDeclinePlayerEl = $('#am-afk-auto-decline-player');
@@ -2575,8 +2690,10 @@
             const afkTalismanMaxKindsEl = $('#am-afk-talisman-max-kinds');
             const afkTalismanQtyEl = $('#am-afk-talisman-qty');
             const afkTalismanFamilyOrderEl = $('#am-afk-talisman-family-order');
+            const afkTalismanMaxEncountersEl = $('#am-afk-talisman-max-encounters');
             const afkUseNirvanaEl = $('#am-afk-use-nirvana');
             const afkNirvanaMinRarityEl = $('#am-afk-nirvana-min-rarity');
+            const afkNirvanaMaxPerRunEl = $('#am-afk-nirvana-max-per-run');
             const afkQueueNirvanaEl = $('#am-afk-queue-nirvana');
 
             if (enabledEl) enabledEl.checked = CONFIG.guardian.enabled;
@@ -2598,6 +2715,7 @@
             if (afkStallTimeoutEl) afkStallTimeoutEl.value = CONFIG.afkLoop.stallTimeoutSeconds;
             if (afkResumeWindowEl) afkResumeWindowEl.value = CONFIG.afkLoop.resumeWindowSeconds;
             if (afkAutoReviveEl) afkAutoReviveEl.checked = CONFIG.afkLoop.autoRevive;
+            if (afkReviveMaxPerRunEl) afkReviveMaxPerRunEl.value = CONFIG.afkLoop.reviveMaxPerRun;
             if (afkAutoFightEl) afkAutoFightEl.checked = CONFIG.afkLoop.autoFight;
             if (afkAutoHireGuardianEl) afkAutoHireGuardianEl.checked = CONFIG.afkLoop.autoHireGuardian;
             if (afkAutoDeclinePlayerEl) afkAutoDeclinePlayerEl.checked = CONFIG.afkLoop.autoDeclinePlayerEncounter;
@@ -2608,8 +2726,10 @@
             if (afkTalismanMaxKindsEl) afkTalismanMaxKindsEl.value = CONFIG.afkLoop.talismanMaxKinds;
             if (afkTalismanQtyEl) afkTalismanQtyEl.value = CONFIG.afkLoop.talismanQuantity;
             if (afkTalismanFamilyOrderEl) afkTalismanFamilyOrderEl.value = CONFIG.afkLoop.talismanFamilyOrder;
+            if (afkTalismanMaxEncountersEl) afkTalismanMaxEncountersEl.value = CONFIG.afkLoop.talismanMaxEncountersPerRun;
             if (afkUseNirvanaEl) afkUseNirvanaEl.checked = CONFIG.afkLoop.useNirvanaPill;
             if (afkNirvanaMinRarityEl) afkNirvanaMinRarityEl.value = CONFIG.afkLoop.nirvanaMinRarity;
+            if (afkNirvanaMaxPerRunEl) afkNirvanaMaxPerRunEl.value = CONFIG.afkLoop.nirvanaMaxPerRun;
             if (afkQueueNirvanaEl) afkQueueNirvanaEl.checked = CONFIG.afkLoop.queueNirvanaPill;
             this.updateAfkState();
         },
@@ -2639,7 +2759,10 @@
             const summaryEl = $('#am-afk-risk-summary');
             const linesEl = $('#am-afk-risk-lines');
             if (!summaryEl && !linesEl) return;
-            const status = buildAfkRiskStatus(CONFIG.afkLoop, getCurrentGuardianConfig());
+            const usage = AfkLoopManager && typeof AfkLoopManager.getResourceUsage === 'function'
+                ? AfkLoopManager.getResourceUsage()
+                : {};
+            const status = buildAfkRiskStatus(CONFIG.afkLoop, getCurrentGuardianConfig(), usage);
             if (summaryEl) {
                 summaryEl.textContent = status.summaryText;
                 summaryEl.style.color = status.warningCount ? '#f59e0b' : '';
@@ -3169,6 +3292,7 @@
         lastNirvanaPillAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
+        resourceUsage: normalizeAfkResourceUsage({}),
         decisionHistory: [],
 
         init() {
@@ -3186,6 +3310,7 @@
         start() {
             readAfkLoopConfigFromUI();
             CONFIG.afkLoop.enabled = true;
+            this.resetResourceUsage();
             saveConfig();
             UI.updateAfkState();
             this.refreshPanelStatus();
@@ -3201,6 +3326,23 @@
             this.lastDecisionKey = '';
             this.refreshPanelStatus();
             Logger.warn('自动挂机循环已停止');
+        },
+
+        resetResourceUsage() {
+            this.resourceUsage = normalizeAfkResourceUsage({});
+        },
+
+        getResourceUsage() {
+            this.resourceUsage = normalizeAfkResourceUsage(this.resourceUsage);
+            return Object.assign({}, this.resourceUsage);
+        },
+
+        incrementResourceUsage(kind) {
+            const usage = this.getResourceUsage();
+            const spec = getAfkResourceBudgetSpec(kind);
+            usage[spec.usageKey] = clampNumber((usage[spec.usageKey] || 0) + 1, 0, 999, 0);
+            this.resourceUsage = usage;
+            return this.getResourceUsage();
         },
 
         applyPreset(name) {
@@ -3430,6 +3572,7 @@
                 merchantActive: MerchantAutoBuyer.isMerchantActive(),
                 encounterActive,
                 combatActive,
+                resourceUsage: this.getResourceUsage(),
                 encounterKey,
                 encounterMonsterId: _win._currentEncounterMonsterId,
                 encounterMonsterStage: _win._currentEncounterMonsterStage,
@@ -3552,11 +3695,15 @@
         async maybeUseNirvanaRebirthPill(cfg) {
             const normalizedCfg = normalizeAfkLoopConfig(cfg || {});
             const now = Date.now();
-            let attempt = resolveNirvanaRebirthPillAttempt(_win._lastPlayerData || {}, [], normalizedCfg, now);
+            let attempt = resolveNirvanaRebirthPillAttempt(_win._lastPlayerData || {}, [], normalizedCfg, now, this.getResourceUsage());
             this.lastNirvanaPillAttempt = attempt;
             if (attempt.reason === 'disabled') return;
             if (attempt.reason === 'active-five-root-buff') {
                 Logger.info('已有五行通灵效果，跳过涅槃重生丹');
+                return;
+            }
+            if (attempt.reason === 'budget-exhausted') {
+                Logger.warn('涅槃重生丹次数已到本轮上限，跳过用丹');
                 return;
             }
 
@@ -3569,8 +3716,12 @@
                 return;
             }
 
-            attempt = resolveNirvanaRebirthPillAttempt(_win._lastPlayerData || {}, items, normalizedCfg, now);
+            attempt = resolveNirvanaRebirthPillAttempt(_win._lastPlayerData || {}, items, normalizedCfg, now, this.getResourceUsage());
             this.lastNirvanaPillAttempt = attempt;
+            if (attempt.reason === 'budget-exhausted') {
+                Logger.warn('涅槃重生丹次数已到本轮上限，跳过用丹');
+                return;
+            }
             if (!attempt.shouldUse || !attempt.pill) {
                 Logger.info(`未找到品质满足要求的涅槃重生丹（最低${attempt.minRarity}阶），跳过`);
                 return;
@@ -3584,6 +3735,7 @@
                     Logger.warn(`涅槃重生丹使用失败: ${res.message || '未知错误'}`);
                     return;
                 }
+                this.incrementResourceUsage('nirvanaPills');
                 this.refreshGameData();
                 await wait(700);
             } catch (e) {
@@ -3616,6 +3768,11 @@
         },
 
         async revive(cfg) {
+            const reviveBudget = resolveAfkResourceBudget('revive', cfg || CONFIG.afkLoop, this.getResourceUsage());
+            if (!reviveBudget.allowed) {
+                Logger.warn('自动复活次数已到本轮上限，暂停等待手动处理');
+                return;
+            }
             try {
                 if (typeof _win.handleRevive === 'function') {
                     await _win.handleRevive();
@@ -3623,6 +3780,7 @@
                     const res = await API.revive();
                     if (res.code !== 200) throw new Error(res.message || '复活失败');
                 }
+                this.incrementResourceUsage('revive');
                 const windowMs = getResumeWindowMs(cfg || CONFIG.afkLoop);
                 this.postReviveResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
                 this.lastDecisionKey = '';
@@ -3739,6 +3897,17 @@
                 if (talismanUse.encounterKey) Logger.info('本次遭遇已处理过战斗符箓，跳过重复用符');
                 return;
             }
+            const talismanBudget = resolveAfkResourceBudget('talismanEncounters', cfg || CONFIG.afkLoop, this.getResourceUsage());
+            if (!talismanBudget.allowed) {
+                this.lastTalismanAttempt = normalizeCombatTalismanAttempt({
+                    shouldAttempt: false,
+                    reason: 'budget-exhausted',
+                    encounterKey: talismanUse.encounterKey,
+                    failureMessage: '战斗符箓次数已到本轮上限'
+                });
+                Logger.warn('战斗符箓次数已到本轮上限，跳过用符');
+                return;
+            }
 
             let items = [];
             try {
@@ -3845,7 +4014,10 @@
                 failedKinds: Math.max(0, selected.length - usedKinds),
                 failureMessage: failures.join(' | ')
             });
-            if (usedKinds > 0) this.refreshGameData();
+            if (usedKinds > 0) {
+                this.incrementResourceUsage('talismanEncounters');
+                this.refreshGameData();
+            }
         },
 
         async fightEncounter(cfg) {

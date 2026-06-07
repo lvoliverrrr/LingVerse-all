@@ -383,6 +383,13 @@
 - 面板“摘要回放”区新增“导入策略”，测试者粘贴反馈后可以把未知奇遇的 `strategyHints.mapLine` 直接沉淀为策略表。
 - 导入策略时会关闭 `enabled`，仅保存本地配置，不调用游戏 API，不触发购买、探索、战斗、护道、复活、用符或用丹。
 
+`lingverse-explore-helper.user.js` v2.37.0 新增：
+
+- `resolveAfkResourceBudget(kind, config, usage)` 统一计算单次挂机启动后的资源上限状态。
+- 新增 `reviveMaxPerRun`、`talismanMaxEncountersPerRun`、`nirvanaMaxPerRun`；面板可配置，`0` 表示不限。
+- 富裕 50 倍预设默认复活 1 次、用符 3 场、用丹 1 次。达到上限后对应动作只记录 `budget-exhausted` 并跳过，不调用资源消耗 API。
+- 风险预检会显示资源上限；运行中达到上限时显示警告，方便测试者截图或复制摘要反馈。
+
 默认配置：
 
 - `enabled: false`
@@ -393,9 +400,12 @@
 - `stallTimeoutSeconds: 90`
 - `resumeWindowSeconds: 60`
 - `autoRevive: false`
+- `reviveMaxPerRun: 0`
 - `autoHireGuardian: false`
 - `useTalismans: false`
+- `talismanMaxEncountersPerRun: 0`
 - `useNirvanaPill: false`
+- `nirvanaMaxPerRun: 0`
 - `autoFight: false`
 - `talismanMaxKinds: 5`
 - `talismanQuantity: 1`

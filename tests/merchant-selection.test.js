@@ -1440,9 +1440,9 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
         itemTexts: [
             '自动迎战: 开启 · 50倍探索',
             '自动护道: 开启 · 游戏护道开 · 独立作战 · 最高5000 · 攻≥888 · normal>incarnation>body',
-            '自动复活: 开启',
-            '战斗用符: 开启 · 5种×1 · 按品质',
-            '涅槃重生丹: 开启 · 史诗+ · 允许排队',
+            '自动复活: 开启 · 不限',
+            '战斗用符: 开启 · 5种×1 · 按品质 · 不限',
+            '涅槃重生丹: 开启 · 史诗+ · 允许排队 · 不限',
             '陌生道友婉拒: 开启',
             '奇遇自动选择: 开启 · strategy'
         ],
@@ -1453,6 +1453,38 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
     assert.equal(summary.history.logTail.length, 8);
     assert.equal(summary.history.logTail[7].message.endsWith('...'), true);
     assert.ok(summary.history.logTail[7].message.length <= 160);
+});
+
+test('buildAfkDebugSummary reports exhausted AFK resource budgets', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const config = {
+        enabled: true,
+        autoRevive: true,
+        reviveMaxPerRun: 1
+    };
+    const state = {
+        isDead: true,
+        resourceUsage: { revive: 1 }
+    };
+    const decision = hooks.decideAfkNextAction(state, config, 1_000_000);
+    const summary = hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot(state, config, decision, {
+        capturedAt: '2026-06-08T05:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    }));
+
+    assert.deepEqual(toPlain(summary.decision), {
+        action: 'wait',
+        reason: 'revive-budget-exhausted'
+    });
+    assert.deepEqual(toPlain(summary.automation.resourceUsage), {
+        revive: 1,
+        talismanEncounters: 0,
+        nirvanaPills: 0
+    });
+    assert.equal(summary.config.riskStatus.warningCount, 1);
+    assert.deepEqual(toPlain(summary.config.riskStatus.warnings), ['自动复活已到本轮上限']);
 });
 
 test('applyAfkPreset configures steady and rich AFK modes without enabling the loop', () => {
@@ -1489,14 +1521,17 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         stallTimeoutSeconds: 90,
         resumeWindowSeconds: 180,
         autoRevive: false,
+        reviveMaxPerRun: 0,
         autoFight: false,
         autoHireGuardian: false,
         useTalismans: false,
         talismanMaxKinds: 5,
         talismanQuantity: 1,
         talismanFamilyOrder: 'ghost,fire',
+        talismanMaxEncountersPerRun: 0,
         useNirvanaPill: false,
         nirvanaMinRarity: 4,
+        nirvanaMaxPerRun: 0,
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: false,
         adventureMode: 'strategy',
@@ -1513,14 +1548,17 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         stallTimeoutSeconds: 90,
         resumeWindowSeconds: 180,
         autoRevive: true,
+        reviveMaxPerRun: 1,
         autoFight: true,
         autoHireGuardian: false,
         useTalismans: true,
         talismanMaxKinds: 5,
         talismanQuantity: 1,
         talismanFamilyOrder: 'ghost,fire',
+        talismanMaxEncountersPerRun: 3,
         useNirvanaPill: true,
         nirvanaMinRarity: 4,
+        nirvanaMaxPerRun: 1,
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: true,
         adventureMode: 'strategy',
@@ -1736,9 +1774,9 @@ test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
         itemTexts: [
             '自动迎战: 开启 · 50倍探索',
             '自动护道: 关闭',
-            '自动复活: 开启',
-            '战斗用符: 开启 · 5种×1 · ghost>fire',
-            '涅槃重生丹: 开启 · 史诗+ · 不排队',
+            '自动复活: 开启 · 不限',
+            '战斗用符: 开启 · 5种×1 · ghost>fire · 不限',
+            '涅槃重生丹: 开启 · 史诗+ · 不排队 · 不限',
             '陌生道友婉拒: 开启',
             '奇遇自动选择: 开启 · strategy'
         ],
@@ -1790,7 +1828,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.36.0',
+        scriptVersion: '2.37.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {
@@ -1802,14 +1840,17 @@ test('AFK config packs export normalized settings and import safely', () => {
             stallTimeoutSeconds: 120,
             resumeWindowSeconds: 90,
             autoRevive: true,
+            reviveMaxPerRun: 0,
             autoFight: true,
             autoHireGuardian: true,
             useTalismans: true,
             talismanMaxKinds: 3,
             talismanQuantity: 2,
             talismanFamilyOrder: 'ghost,fire',
+            talismanMaxEncountersPerRun: 0,
             useNirvanaPill: true,
             nirvanaMinRarity: 4,
+            nirvanaMaxPerRun: 0,
             queueNirvanaPill: false,
             autoDeclinePlayerEncounter: true,
             adventureMode: 'strategy',
@@ -1835,9 +1876,9 @@ test('AFK config packs export normalized settings and import safely', () => {
             itemTexts: [
                 '自动迎战: 开启 · 50倍探索',
                 '自动护道: 开启 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
-                '自动复活: 开启',
-                '战斗用符: 开启 · 3种×2 · ghost>fire',
-                '涅槃重生丹: 开启 · 史诗+ · 不排队',
+                '自动复活: 开启 · 不限',
+                '战斗用符: 开启 · 3种×2 · ghost>fire · 不限',
+                '涅槃重生丹: 开启 · 史诗+ · 不排队 · 不限',
                 '陌生道友婉拒: 开启',
                 '奇遇自动选择: 开启 · strategy'
             ],
@@ -1880,14 +1921,17 @@ test('mergeAdventureStrategyImport adds replay hints without enabling AFK', () =
             stallTimeoutSeconds: 90,
             resumeWindowSeconds: 60,
             autoRevive: false,
+            reviveMaxPerRun: 0,
             autoFight: false,
             autoHireGuardian: false,
             useTalismans: false,
             talismanMaxKinds: 5,
             talismanQuantity: 1,
             talismanFamilyOrder: '',
+            talismanMaxEncountersPerRun: 0,
             useNirvanaPill: false,
             nirvanaMinRarity: 4,
+            nirvanaMaxPerRun: 0,
             queueNirvanaPill: false,
             autoDeclinePlayerEncounter: false,
             adventureMode: 'strategy',
@@ -1909,4 +1953,81 @@ test('mergeAdventureStrategyImport adds replay hints without enabling AFK', () =
         }
     });
     assert.deepEqual(toPlain(fromSummary.afkLoop.adventureChoiceMap), { 999: 3 });
+});
+
+test('AFK resource budgets cap rich-mode consumables per run', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.resolveAfkResourceBudget, 'function');
+
+    const normalized = hooks.normalizeAfkLoopConfig({
+        reviveMaxPerRun: '2',
+        talismanMaxEncountersPerRun: '3',
+        nirvanaMaxPerRun: '1'
+    });
+    assert.equal(normalized.reviveMaxPerRun, 2);
+    assert.equal(normalized.talismanMaxEncountersPerRun, 3);
+    assert.equal(normalized.nirvanaMaxPerRun, 1);
+
+    const reviveBudget = hooks.resolveAfkResourceBudget('revive', normalized, {
+        revive: 2,
+        talismanEncounters: 1,
+        nirvanaPills: 0
+    });
+    assert.deepEqual(toPlain(reviveBudget), {
+        schema: 'lingverse-afk-resource-budget/v1',
+        kind: 'revive',
+        used: 2,
+        maxPerRun: 2,
+        limited: true,
+        remaining: 0,
+        allowed: false,
+        reason: 'budget-exhausted'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isDead: true,
+        resourceUsage: { revive: 1 }
+    }, {
+        enabled: true,
+        autoRevive: true,
+        reviveMaxPerRun: 1
+    }, 1_000_000)), {
+        action: 'wait',
+        reason: 'revive-budget-exhausted'
+    });
+
+    const rich = hooks.applyAfkPreset({}, 'rich');
+    assert.equal(rich.reviveMaxPerRun, 1);
+    assert.equal(rich.talismanMaxEncountersPerRun, 3);
+    assert.equal(rich.nirvanaMaxPerRun, 1);
+
+    const items = [
+        { id: 1, templateId: 'pill_nirvana_4', name: '史诗九转还魂丹', type: 'pill', rarity: 4, quantity: 1 }
+    ];
+    assert.deepEqual(toPlain(hooks.resolveNirvanaRebirthPillAttempt({}, items, {
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4,
+        nirvanaMaxPerRun: 1
+    }, 1_000_000, {
+        nirvanaPills: 1
+    })), {
+        shouldUse: false,
+        reason: 'budget-exhausted',
+        pill: null,
+        minRarity: 4,
+        activeBuffGrade: null,
+        activeBuffExpire: null,
+        budget: {
+            schema: 'lingverse-afk-resource-budget/v1',
+            kind: 'nirvanaPills',
+            used: 1,
+            maxPerRun: 1,
+            limited: true,
+            remaining: 0,
+            allowed: false,
+            reason: 'budget-exhausted'
+        }
+    });
 });

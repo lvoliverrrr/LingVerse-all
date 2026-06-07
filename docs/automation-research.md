@@ -347,6 +347,13 @@
 - UI 文案从“迎战前按游戏护道设置自动雇护道”调整为“遭遇时按游戏护道设置自动雇护道”。
 - 只读 Edge 证据（2026-06-08）：灵界标签 `292345702` 有护道函数，当前无遭遇/战斗/死亡/自动探索，神识 `3/2758`，未执行资源动作。
 
+`lingverse-explore-helper.user.js` v2.32.0 新增：
+
+- 自动挂机面板新增三行短状态：当前决策、上次动作、下次检查。
+- `buildAfkPanelStatus(config, decisionHistory, runtime, now)` 只根据本地配置、决策历史和循环运行时生成显示文本，不调用游戏 API，不会触发资源消耗动作。
+- `formatAfkReason` / `formatAfkAction` 统一面板、日志和测试里的 AFK 文案，最近一次 `handleEncounter + encounter-auto-guardian-enabled` 会显示为“处理遭遇 · 已开启遭遇前自动护道”。
+- 自动测试覆盖未启动、运行中倒计时和检查中状态，方便后续改面板时避免显示回退。
+
 默认配置：
 
 - `enabled: false`

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.31.0
+// @version      2.32.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.31.0';
+    const SCRIPT_VERSION = '2.32.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -268,6 +268,107 @@
         cfg.adventureChoiceIndex = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
         cfg.adventureChoiceMap = normalizeAdventureChoiceMap(cfg.adventureChoiceMap);
         return cfg;
+    }
+
+    function formatAfkReason(reason) {
+        const labels = {
+            disabled: '未启用',
+            'merchant-active': '云游商人处理中',
+            'encounter-active': '遭遇或战斗处理中',
+            'adventure-active': '奇遇链等待处理',
+            'adventure-auto-choice': '奇遇链固定选择',
+            'adventure-strategy-choice': '奇遇链按ID策略选择',
+            'player-encounter-active': '陌生道友邂逅等待处理',
+            'player-encounter-auto-decline': '自动婉拒陌生道友',
+            'immortal-prison': '混天典狱状态，挂机暂停',
+            dead: '角色已陨落',
+            meditating: '冥想未到结束条件',
+            'spirit-full': '神识已满',
+            'meditation-duration-reached': '冥想时长已到',
+            'auto-explore-running': '自动探索运行中',
+            'auto-explore-low-spirit': '自动探索中神识低于阈值',
+            'explore-stalled': '探索疑似卡住',
+            'explore-disabled-no-spirit': '不可探索且疑似神识不足',
+            'explore-disabled': '当前区域不可探索',
+            'spirit-below-threshold': '神识低于阈值',
+            'spirit-ready': '神识可探索',
+            'post-revive-ready': '复活后神识可探索',
+            'post-revive-low-spirit': '复活后神识不足',
+            'post-interaction-ready': '事件/战斗后神识可探索',
+            'post-interaction-low-spirit': '事件/战斗后神识不足',
+            'dead-auto-revive-enabled': '已开启自动复活',
+            'encounter-auto-guardian-enabled': '已开启遭遇前自动护道',
+            'encounter-auto-fight-enabled': '已开启自动迎战'
+        };
+        return labels[reason] || reason || '状态变化';
+    }
+
+    function formatAfkAction(action) {
+        const labels = {
+            idle: '空闲',
+            wait: '等待',
+            revive: '复活',
+            startMeditation: '进入冥想',
+            stopMeditation: '结束冥想',
+            startAutoExplore: '启动探索',
+            handleEncounter: '处理遭遇',
+            handlePlayerEncounter: '处理陌生道友',
+            handleAdventure: '处理奇遇'
+        };
+        return labels[action] || action || '等待';
+    }
+
+    function buildAfkPanelStatus(config, decisionHistory, runtime, now) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const currentTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+        const stateText = cfg.enabled ? '运行中' : '未启动';
+        if (!cfg.enabled) {
+            return {
+                stateText,
+                currentDecisionText: '未启动',
+                lastActionText: '暂无',
+                nextCheckText: '未启动',
+                nextCheckInSeconds: null
+            };
+        }
+
+        const history = Array.isArray(decisionHistory) ? decisionHistory : [];
+        const last = history.length ? history[history.length - 1] : null;
+        const currentDecisionText = last ? formatAfkReason(last.reason) : '等待首次检查';
+        const lastActionText = last
+            ? `${formatAfkAction(last.action)} · ${formatAfkReason(last.reason)}`
+            : '暂无';
+        const busy = !!(runtime && runtime.busy);
+        const lastEvaluationAt = Math.max(0, toFiniteNumber(runtime && runtime.lastEvaluationAt, 0));
+
+        if (busy) {
+            return {
+                stateText,
+                currentDecisionText,
+                lastActionText,
+                nextCheckText: '检查中',
+                nextCheckInSeconds: 0
+            };
+        }
+        if (!lastEvaluationAt) {
+            return {
+                stateText,
+                currentDecisionText,
+                lastActionText,
+                nextCheckText: '等待首次检查',
+                nextCheckInSeconds: 0
+            };
+        }
+
+        const remainingMs = Math.max(0, lastEvaluationAt + cfg.tickInterval - currentTime);
+        const seconds = Math.ceil(remainingMs / 1000);
+        return {
+            stateText,
+            currentDecisionText,
+            lastActionText,
+            nextCheckText: seconds <= 0 ? '即将检查' : `${seconds}秒后`,
+            nextCheckInSeconds: seconds
+        };
     }
 
     function normalizeGuardianPriority(value) {
@@ -1301,6 +1402,9 @@
         getResumeWindowMs,
         isExploreStalledState,
         decideAfkNextAction,
+        formatAfkReason,
+        formatAfkAction,
+        buildAfkPanelStatus,
         selectCombatTalismans,
         buildEncounterKey,
         shouldUseCombatTalismansForEncounter,
@@ -1792,6 +1896,14 @@
                             <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};font-weight:bold;">🌙 自动挂机循环</div>
                             <span id="am-afk-state" style="font-size:11px;color:${CONFIG.afkLoop.enabled?'#3dab97':'#94a3b8'};">${CONFIG.afkLoop.enabled?'运行中':'未启动'}</span>
                         </div>
+                        <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 8px;margin-bottom:8px;padding:7px;background:${isDark?'rgba(15,23,42,0.35)':'rgba(241,245,249,0.9)'};border:1px solid ${border};border-radius:6px;">
+                            <span style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};">当前</span>
+                            <span id="am-afk-current-decision" style="font-size:11px;color:${text};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${CONFIG.afkLoop.enabled?'等待首次检查':'未启动'}</span>
+                            <span style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};">上次</span>
+                            <span id="am-afk-last-action" style="font-size:11px;color:${text};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">暂无</span>
+                            <span style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};">下次</span>
+                            <span id="am-afk-next-check" style="font-size:11px;color:${text};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${CONFIG.afkLoop.enabled?'等待首次检查':'未启动'}</span>
+                        </div>
                         <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
                             <input type="checkbox" id="am-afk-enabled" ${CONFIG.afkLoop.enabled?'checked':''} style="cursor:pointer;">
                             <span style="font-size:13px;color:${text};">启用冥想-探索循环</span>
@@ -1982,7 +2094,8 @@
                 saveConfig();
                 AfkLoopManager.ensureTimer();
                 UI.updateAfkState();
-                
+                AfkLoopManager.refreshPanelStatus();
+
                 try {
                     const apiObj = typeof api !== 'undefined' ? api : (window.api || _win.api);
                     if (apiObj?.post) {
@@ -2156,11 +2269,21 @@
         },
 
         updateAfkState() {
+            const status = buildAfkPanelStatus(CONFIG.afkLoop, [], {
+                lastEvaluationAt: 0,
+                busy: false
+            }, Date.now());
             const stateEl = $('#am-afk-state');
             if (stateEl) {
-                stateEl.textContent = CONFIG.afkLoop.enabled ? '运行中' : '未启动';
+                stateEl.textContent = status.stateText;
                 stateEl.style.color = CONFIG.afkLoop.enabled ? '#3dab97' : '#94a3b8';
             }
+            const currentDecisionEl = $('#am-afk-current-decision');
+            if (currentDecisionEl) currentDecisionEl.textContent = status.currentDecisionText;
+            const lastActionEl = $('#am-afk-last-action');
+            if (lastActionEl) lastActionEl.textContent = status.lastActionText;
+            const nextCheckEl = $('#am-afk-next-check');
+            if (nextCheckEl) nextCheckEl.textContent = status.nextCheckText;
             const enabledEl = $('#am-afk-enabled');
             if (enabledEl) enabledEl.checked = CONFIG.afkLoop.enabled;
         },
@@ -2603,6 +2726,7 @@
             CONFIG.afkLoop.enabled = true;
             saveConfig();
             UI.updateAfkState();
+            this.refreshPanelStatus();
             this.ensureTimer();
             Logger.success(`自动挂机循环已启动：冥想${CONFIG.afkLoop.meditationMinutes}分钟，神识低于${CONFIG.afkLoop.minSpirit}回冥想`);
             this.tick(true);
@@ -2613,6 +2737,7 @@
             saveConfig();
             UI.updateAfkState();
             this.lastDecisionKey = '';
+            this.refreshPanelStatus();
             Logger.warn('自动挂机循环已停止');
         },
 
@@ -2621,6 +2746,7 @@
             CONFIG.afkLoop = applyAfkPreset(CONFIG.afkLoop, name);
             saveConfig();
             UI.updatePanelFromConfig();
+            this.refreshPanelStatus();
             const label = name === 'rich' ? '富裕50倍挂机预设' : '稳妥1倍挂机预设';
             Logger.success(`已套用${label}，未自动启动挂机`);
         },
@@ -2671,14 +2797,24 @@
         async tick(force) {
             const cfg = normalizeAfkLoopConfig(CONFIG.afkLoop);
             CONFIG.afkLoop = cfg;
-            if (!cfg.enabled) return;
+            if (!cfg.enabled) {
+                this.refreshPanelStatus();
+                return;
+            }
 
             const now = Date.now();
-            if (!force && now - this.lastEvaluationAt < cfg.tickInterval) return;
-            if (this.busy) return;
+            if (!force && now - this.lastEvaluationAt < cfg.tickInterval) {
+                this.refreshPanelStatus(now);
+                return;
+            }
+            if (this.busy) {
+                this.refreshPanelStatus(now);
+                return;
+            }
 
             this.busy = true;
             this.lastEvaluationAt = now;
+            this.refreshPanelStatus(now);
             try {
                 const snapshot = await this.buildSnapshot(now, cfg);
                 const decision = decideAfkNextAction(snapshot, cfg, now);
@@ -2688,6 +2824,7 @@
                 Logger.warn(`自动挂机循环检查失败: ${e.message || e}`);
             } finally {
                 this.busy = false;
+                this.refreshPanelStatus();
             }
         },
 
@@ -2711,10 +2848,35 @@
             if (this.decisionHistory.length > DEBUG_DECISION_HISTORY_LIMIT * 2) {
                 this.decisionHistory.splice(0, this.decisionHistory.length - DEBUG_DECISION_HISTORY_LIMIT * 2);
             }
+            this.refreshPanelStatus(now);
         },
 
         getDecisionHistory() {
             return this.decisionHistory.slice(-DEBUG_DECISION_HISTORY_LIMIT);
+        },
+
+        getPanelStatus(now) {
+            return buildAfkPanelStatus(CONFIG.afkLoop, this.getDecisionHistory(), {
+                lastEvaluationAt: this.lastEvaluationAt,
+                busy: this.busy
+            }, now || Date.now());
+        },
+
+        refreshPanelStatus(now) {
+            const status = this.getPanelStatus(now);
+            const stateEl = $('#am-afk-state');
+            if (stateEl) {
+                stateEl.textContent = status.stateText;
+                stateEl.style.color = CONFIG.afkLoop.enabled ? '#3dab97' : '#94a3b8';
+            }
+            const currentDecisionEl = $('#am-afk-current-decision');
+            if (currentDecisionEl) currentDecisionEl.textContent = status.currentDecisionText;
+            const lastActionEl = $('#am-afk-last-action');
+            if (lastActionEl) lastActionEl.textContent = status.lastActionText;
+            const nextCheckEl = $('#am-afk-next-check');
+            if (nextCheckEl) nextCheckEl.textContent = status.nextCheckText;
+            const enabledEl = $('#am-afk-enabled');
+            if (enabledEl) enabledEl.checked = CONFIG.afkLoop.enabled;
         },
 
         async buildSnapshot(now, cfg) {
@@ -3393,36 +3555,7 @@
         },
 
         formatReason(reason) {
-            const labels = {
-                disabled: '未启用',
-                'merchant-active': '云游商人处理中',
-                'encounter-active': '遭遇或战斗处理中',
-                'adventure-active': '奇遇链等待处理',
-                'adventure-auto-choice': '奇遇链固定选择',
-                'adventure-strategy-choice': '奇遇链按ID策略选择',
-                'player-encounter-active': '陌生道友邂逅等待处理',
-                'player-encounter-auto-decline': '自动婉拒陌生道友',
-                'immortal-prison': '混天典狱状态，挂机暂停',
-                dead: '角色已陨落',
-                meditating: '冥想未到结束条件',
-                'spirit-full': '神识已满',
-                'meditation-duration-reached': '冥想时长已到',
-                'auto-explore-running': '自动探索运行中',
-                'auto-explore-low-spirit': '自动探索中神识低于阈值',
-                'explore-stalled': '探索疑似卡住',
-                'explore-disabled-no-spirit': '不可探索且疑似神识不足',
-                'explore-disabled': '当前区域不可探索',
-                'spirit-below-threshold': '神识低于阈值',
-                'spirit-ready': '神识可探索',
-                'post-revive-ready': '复活后神识可探索',
-                'post-revive-low-spirit': '复活后神识不足',
-                'post-interaction-ready': '事件/战斗后神识可探索',
-                'post-interaction-low-spirit': '事件/战斗后神识不足',
-                'dead-auto-revive-enabled': '已开启自动复活',
-                'encounter-auto-guardian-enabled': '已开启遭遇前自动护道',
-                'encounter-auto-fight-enabled': '已开启自动迎战'
-            };
-            return labels[reason] || reason || '状态变化';
+            return formatAfkReason(reason);
         }
     };
 

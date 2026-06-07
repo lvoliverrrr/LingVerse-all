@@ -1512,3 +1512,55 @@ test('getResumeWindowMs converts configured resume windows to milliseconds', () 
     assert.equal(hooks.getResumeWindowMs({ resumeWindowSeconds: 0 }), 0);
     assert.equal(hooks.getResumeWindowMs({ resumeWindowSeconds: 99999 }), 3600000);
 });
+
+test('buildAfkPanelStatus summarizes current decision and next check timing', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkPanelStatus, 'function');
+
+    assert.deepEqual(toPlain(hooks.buildAfkPanelStatus({
+        enabled: false,
+        tickInterval: 30000
+    }, [], {
+        lastEvaluationAt: 1_000_000,
+        busy: false
+    }, 1_010_000)), {
+        stateText: '未启动',
+        currentDecisionText: '未启动',
+        lastActionText: '暂无',
+        nextCheckText: '未启动',
+        nextCheckInSeconds: null
+    });
+
+    assert.deepEqual(toPlain(hooks.buildAfkPanelStatus({
+        enabled: true,
+        tickInterval: 30000
+    }, [{
+        action: 'handleEncounter',
+        reason: 'encounter-auto-guardian-enabled'
+    }], {
+        lastEvaluationAt: 1_000_000,
+        busy: false
+    }, 1_010_500)), {
+        stateText: '运行中',
+        currentDecisionText: '已开启遭遇前自动护道',
+        lastActionText: '处理遭遇 · 已开启遭遇前自动护道',
+        nextCheckText: '20秒后',
+        nextCheckInSeconds: 20
+    });
+
+    assert.deepEqual(toPlain(hooks.buildAfkPanelStatus({
+        enabled: true,
+        tickInterval: 30000
+    }, [], {
+        lastEvaluationAt: 0,
+        busy: true
+    }, 1_010_500)), {
+        stateText: '运行中',
+        currentDecisionText: '等待首次检查',
+        lastActionText: '暂无',
+        nextCheckText: '检查中',
+        nextCheckInSeconds: 0
+    });
+});

@@ -324,6 +324,21 @@
   - `completed`：一轮用符尝试结束。
 - `AfkLoopManager.lastTalismanAttempt` 在复制摘要时随 `lastNirvanaPillAttempt` 一起输出，减少富裕模式测试时翻日志的成本。
 
+`lingverse-explore-helper.user.js` v2.30.0 新增：
+
+- `normalizeGuardianAttempt(attempt)`：把最近一次遭遇前自动护道尝试规整成稳定 schema。
+- `summarizeGuardianAttempt(attempt)`：为脱敏摘要输出护道尝试路径、当前护道设置、是否触发雇佣和失败消息摘要。
+- `buildAfkDebugSnapshot` / `buildAfkDebugSummary` 的 `automation.guardian` 会覆盖：
+  - `afk-guardian-disabled`：AFK 循环未开启遭遇前自动护道。
+  - `guardian-config-disabled`：游戏自动护道设置关闭。
+  - `no-encounter`：当前没有可用遭遇 key。
+  - `guardian-already-attempted`：同一次遭遇已经尝试过护道。
+  - `guardian-ready`：满足尝试条件但尚未完成。
+  - `hire-triggered`：已触发页面护道按钮/函数/API。
+  - `hire-failed`：尝试后未触发护道，摘要会带失败消息。
+- `AfkLoopManager.lastGuardianAttempt` 在复制摘要时随用丹/用符尝试一起输出，服务低境界 1 倍护道模式测试。
+- 只读 Edge 证据（2026-06-08）：灵界标签 `292345702` 存在 `tryAutoHireProtectorForEncounter` 和 `getAutoHireConfig`；当时无遭遇、无自动探索、无死亡，神识 `3/2758`，未执行资源动作。
+
 默认配置：
 
 - `enabled: false`
@@ -381,14 +396,14 @@
   - 恢复窗口内神识足够 -> `startAutoExplore`；神识不足 -> `startMeditation`。
 - 调试摘要：
   - `buildAfkDebugSummary` 去掉页面 URL 的 query/hash，脱敏常见 token/session/key 参数。
-  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞、高风险开关、用丹尝试和用符尝试。
+  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞、高风险开关、用丹尝试、用符尝试和护道尝试。
 
 ## 待继续研究
 
 - 高阶“富裕模式”需要继续真实长跑验证涅槃重生丹使用后的 buff 状态和恢复 50 倍探索稳定性。
 - 5 类战斗符箓的最佳收益顺序、每类用量和不同账号库存下的推荐 preset。
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的真实长跑稳定性。
-- 低境界 1 倍探索开启自动护道后的真实长跑稳定性，尤其是护道失败 message 和是否需要游戏内自动重试。
+- 低境界 1 倍探索开启自动护道后的真实长跑稳定性，尤其是 `automation.guardian.failureMessage` 和是否需要游戏内自动重试。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本，把 `adventureId`、每步选项、最终奖励记录成可分享策略。
 - 为摘要增加导入式问题回放视图。

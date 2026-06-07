@@ -1021,6 +1021,7 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         autoRevive: true,
         useTalismans: true,
         useNirvanaPill: true,
+        autoHireGuardian: true,
         autoDeclinePlayerEncounter: true,
         adventureMode: 'strategy',
         adventureChoiceMap: { 456: 2 }
@@ -1086,6 +1087,22 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
             usedKinds: 2,
             failedKinds: 0,
             failureMessage: ''
+        },
+        guardianAttempt: {
+            shouldAttempt: true,
+            reason: 'hire-triggered',
+            encounterKey: 'monster:port_bandit:3:7',
+            markEncounterKey: 'monster:port_bandit:3:7',
+            hireTriggered: true,
+            failureMessage: '',
+            guardian: {
+                enabled: true,
+                maxFee: 999,
+                minAtk: 120,
+                mode: 'together',
+                priority: ['incarnation', 'normal', 'body'],
+                threatLevel: 'danger'
+            }
         }
     }));
 
@@ -1147,6 +1164,22 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         usedKinds: 2,
         failedKinds: 0,
         failureMessage: ''
+    });
+    assert.deepEqual(snapshot.automation.guardian, {
+        shouldAttempt: true,
+        reason: 'hire-triggered',
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: 'monster:port_bandit:3:7',
+        hireTriggered: true,
+        failureMessage: '',
+        guardian: {
+            enabled: true,
+            maxFee: 999,
+            minAtk: 120,
+            mode: 'together',
+            priority: ['incarnation', 'normal', 'body'],
+            threatLevel: 'danger'
+        }
     });
     assert.equal(snapshot.history.decisionTail.length, 20);
     assert.equal(snapshot.history.decisionTail[0].spirit, 5);
@@ -1259,6 +1292,22 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
             usedKinds: 1,
             failedKinds: 1,
             failureMessage: 'talisman_fire_3 使用失败: token=talisman-secret'
+        },
+        guardianAttempt: {
+            shouldAttempt: true,
+            reason: 'hire-failed',
+            encounterKey: 'monster:port_bandit:3:7?token=guardian-secret',
+            markEncounterKey: 'monster:port_bandit:3:7?token=guardian-secret',
+            hireTriggered: false,
+            failureMessage: `护道失败 token=guardian-secret ${'费用不足'.repeat(80)}`,
+            guardian: {
+                enabled: true,
+                maxFee: 5000,
+                minAtk: 888,
+                mode: 'alone',
+                priority: ['normal', 'incarnation', 'body'],
+                threatLevel: 'warn'
+            }
         }
     });
 
@@ -1270,6 +1319,7 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
     assert.equal(summary.page.url, 'https://ling.muge.info/game.html');
     assert.equal(serialized.includes('abc-secret'), false);
     assert.equal(serialized.includes('choice-secret'), false);
+    assert.equal(serialized.includes('guardian-secret'), false);
     assert.equal(serialized.includes('#debug'), false);
     assert.deepEqual(summary.decision, { action: 'wait', reason: 'adventure-active' });
     assert.deepEqual(summary.player, {
@@ -1327,6 +1377,24 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
     assert.equal(summary.automation.talismans.selectedTalismans[0].name.startsWith('史诗荒古符箓'), true);
     assert.equal(summary.automation.talismans.selectedTalismans[0].name.includes('talisman-secret'), false);
     assert.equal(summary.automation.talismans.selectedTalismans[0].name.endsWith('...'), true);
+    assert.deepEqual(summary.automation.guardian, {
+        shouldAttempt: true,
+        reason: 'hire-failed',
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: 'monster:port_bandit:3:7',
+        hireTriggered: false,
+        failureMessage: summary.automation.guardian.failureMessage,
+        guardian: {
+            enabled: true,
+            maxFee: 5000,
+            minAtk: 888,
+            mode: 'alone',
+            priority: ['normal', 'incarnation', 'body'],
+            threatLevel: 'warn'
+        }
+    });
+    assert.equal(summary.automation.guardian.failureMessage.startsWith('护道失败 token=<redacted>'), true);
+    assert.equal(summary.automation.guardian.failureMessage.endsWith('...'), true);
     assert.equal(summary.automation.postInteractionResume, true);
     assert.equal(summary.config.exploreMultiplier, 50);
     assert.deepEqual(summary.config.risks, {

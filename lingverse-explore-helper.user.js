@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.29.0
+// @version      2.30.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.29.0';
+    const SCRIPT_VERSION = '2.30.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -652,6 +652,64 @@
         };
     }
 
+    function normalizeGuardianAttempt(attempt, fallbackGuardianConfig) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        const guardian = normalizeGuardianConfig(raw.guardian || fallbackGuardianConfig || {});
+        return {
+            shouldAttempt: !!raw.shouldAttempt,
+            reason: String(raw.reason || ''),
+            encounterKey: String(raw.encounterKey || ''),
+            markEncounterKey: String(raw.markEncounterKey || ''),
+            hireTriggered: !!raw.hireTriggered,
+            failureMessage: String(raw.failureMessage || ''),
+            guardian: {
+                enabled: guardian.enabled,
+                maxFee: guardian.maxFee,
+                minAtk: guardian.minAtk,
+                mode: guardian.mode,
+                priority: guardian.priority.slice(),
+                threatLevel: guardian.threatLevel
+            }
+        };
+    }
+
+    function buildGuardianDebugAttempt(attempt, snapshot, afkConfig, guardianConfig) {
+        const cfg = normalizeAfkLoopConfig(afkConfig || {});
+        const guardian = normalizeGuardianConfig(guardianConfig || {});
+        const encounterKey = buildEncounterKey(snapshot || {});
+        if (!cfg.autoHireGuardian) {
+            return normalizeGuardianAttempt({
+                shouldAttempt: false,
+                reason: 'afk-guardian-disabled',
+                encounterKey,
+                guardian
+            }, guardian);
+        }
+        if (!guardian.enabled) {
+            return normalizeGuardianAttempt({
+                shouldAttempt: false,
+                reason: 'guardian-config-disabled',
+                encounterKey,
+                guardian
+            }, guardian);
+        }
+        if (attempt && typeof attempt === 'object' && (
+            attempt.reason ||
+            attempt.encounterKey ||
+            typeof attempt.hireTriggered !== 'undefined'
+        )) {
+            return normalizeGuardianAttempt(attempt, guardian);
+        }
+        const resolved = resolveEncounterGuardianAttempt('', snapshot || {}, cfg, guardian);
+        return normalizeGuardianAttempt({
+            shouldAttempt: resolved.shouldAttempt,
+            reason: resolved.reason,
+            encounterKey: resolved.encounterKey,
+            markEncounterKey: resolved.markEncounterKey,
+            guardian
+        }, guardian);
+    }
+
     function buildCombatTalismanDebugAttempt(attempt, snapshot, config) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const encounterKey = buildEncounterKey(snapshot || {});
@@ -996,6 +1054,28 @@
         };
     }
 
+    function summarizeGuardianAttempt(attempt) {
+        const normalized = normalizeGuardianAttempt(attempt);
+        const guardian = normalized.guardian || normalizeGuardianConfig({});
+        return {
+            shouldAttempt: normalized.shouldAttempt,
+            reason: normalized.reason,
+            encounterKey: sanitizeDebugName(normalized.encounterKey, 120),
+            markEncounterKey: sanitizeDebugName(normalized.markEncounterKey, 120),
+            hireTriggered: normalized.hireTriggered,
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT),
+            guardian: {
+                enabled: !!guardian.enabled,
+                maxFee: optionalNumberOrNull(guardian.maxFee),
+                minAtk: optionalNumberOrNull(guardian.minAtk),
+                mode: sanitizeDebugText(guardian.mode, 40),
+                priority: (Array.isArray(guardian.priority) ? guardian.priority : [])
+                    .map(item => sanitizeDebugText(item, 40)),
+                threatLevel: sanitizeDebugText(guardian.threatLevel, 40)
+            }
+        };
+    }
+
     function buildAdventureStrategyHints(adventure) {
         const source = adventure && typeof adventure === 'object' ? adventure : {};
         const id = source.id || null;
@@ -1057,7 +1137,8 @@
                 postReviveResume: !!automation.postReviveResume,
                 postInteractionResume: !!automation.postInteractionResume,
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
-                talismans: summarizeCombatTalismanAttempt(automation.talismans)
+                talismans: summarizeCombatTalismanAttempt(automation.talismans),
+                guardian: summarizeGuardianAttempt(automation.guardian)
             },
             adventure: {
                 id: adventure.id || null,
@@ -1158,7 +1239,8 @@
                 postReviveResume: !!snapshot.postReviveResume,
                 postInteractionResume: !!snapshot.postInteractionResume,
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
-                talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg)
+                talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
+                guardian: buildGuardianDebugAttempt(debugContext.guardianAttempt, snapshot, cfg, guardianCfg)
             },
             adventure: {
                 id: adventureId,
@@ -2495,6 +2577,7 @@
         lastTalismanEncounterKey: '',
         lastGuardianEncounterKey: '',
         lastTalismanAttempt: null,
+        lastGuardianAttempt: null,
         lastNirvanaPillAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
@@ -2552,7 +2635,8 @@
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
-                    talismanAttempt: this.lastTalismanAttempt
+                    talismanAttempt: this.lastTalismanAttempt,
+                    guardianAttempt: this.lastGuardianAttempt
                 });
                 const debugSummary = buildAfkDebugSummary(debugSnapshot);
                 const text = JSON.stringify(debugSummary, null, 2);
@@ -2944,10 +3028,27 @@
             const guardianCfg = getCurrentGuardianConfig();
             const guardianUse = resolveEncounterGuardianAttempt(this.lastGuardianEncounterKey, snapshot, cfg, guardianCfg);
             if (!guardianUse.shouldAttempt) {
+                this.lastGuardianAttempt = normalizeGuardianAttempt({
+                    shouldAttempt: false,
+                    reason: guardianUse.reason,
+                    encounterKey: guardianUse.encounterKey,
+                    markEncounterKey: guardianUse.markEncounterKey,
+                    hireTriggered: false,
+                    guardian: guardianCfg
+                }, guardianCfg);
                 return false;
             }
 
             let hireTriggered = false;
+            let failureMessage = '';
+            this.lastGuardianAttempt = normalizeGuardianAttempt({
+                shouldAttempt: true,
+                reason: guardianUse.reason,
+                encounterKey: guardianUse.encounterKey,
+                markEncounterKey: guardianUse.markEncounterKey,
+                hireTriggered: false,
+                guardian: guardianCfg
+            }, guardianCfg);
             try {
                 Logger.info(`自动尝试雇护道：模式${guardianCfg.mode}，最高费用${guardianCfg.maxFee || '不限'}`);
                 const hireBtn = $('#encounterHireProtectorBtn');
@@ -2963,14 +3064,27 @@
                         res = await API.autoHireGuardian(buildGuardianHirePayload(guardianCfg));
                     }
                     hireTriggered = !!(res && res.code === 200 && res.data && res.data.combat);
-                    if (!hireTriggered && res && res.message) Logger.warn(`自动雇护道失败: ${res.message}`);
+                    if (!hireTriggered && res && res.message) {
+                        failureMessage = res.message;
+                        Logger.warn(`自动雇护道失败: ${res.message}`);
+                    }
                 }
             } catch (e) {
+                failureMessage = e.message || String(e);
                 Logger.warn(`自动雇护道失败: ${e.message || e}`);
             }
 
             const completedAttempt = resolveEncounterGuardianAttempt(this.lastGuardianEncounterKey, snapshot, cfg, guardianCfg, { attemptCompleted: true });
             if (completedAttempt.markEncounterKey) this.lastGuardianEncounterKey = completedAttempt.markEncounterKey;
+            this.lastGuardianAttempt = normalizeGuardianAttempt({
+                shouldAttempt: true,
+                reason: hireTriggered ? 'hire-triggered' : 'hire-failed',
+                encounterKey: completedAttempt.encounterKey,
+                markEncounterKey: completedAttempt.markEncounterKey,
+                hireTriggered,
+                failureMessage: failureMessage || (hireTriggered ? '' : '未触发自动雇护道'),
+                guardian: guardianCfg
+            }, guardianCfg);
 
             if (!hireTriggered) {
                 Logger.warn('自动雇护道未成功，本次遭遇暂停等待手动处理');

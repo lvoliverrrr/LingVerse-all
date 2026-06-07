@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.18.0
+// @version      2.19.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.18.0';
+    const SCRIPT_VERSION = '2.19.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
 
@@ -51,6 +51,7 @@
             exploreMultiplier: 1,    // 低风险默认1倍，富裕模式可手动调高
             tickInterval: 30000,     // 循环检查间隔
             stallTimeoutSeconds: 90, // 自动探索超过该时间无进展则回冥想
+            resumeWindowSeconds: 60, // 事件/复活后允许恢复探索的时间窗口，0 为关闭
             autoRevive: false,       // 复活会花资源，默认关闭
             autoFight: false,        // 自动迎战会触发战斗，默认关闭
             useTalismans: false,     // 战斗符箓消耗品，默认关闭
@@ -107,6 +108,7 @@
         exploreMultiplier: 1,
         tickInterval: 30000,
         stallTimeoutSeconds: 90,
+        resumeWindowSeconds: 60,
         autoRevive: false,
         autoFight: false,
         useTalismans: false,
@@ -246,6 +248,7 @@
         cfg.exploreMultiplier = clampNumber(cfg.exploreMultiplier, 1, 50, 1);
         cfg.tickInterval = clampNumber(cfg.tickInterval, 5000, 300000, 30000);
         cfg.stallTimeoutSeconds = clampNumber(cfg.stallTimeoutSeconds, 0, 3600, 90);
+        cfg.resumeWindowSeconds = clampNumber(cfg.resumeWindowSeconds, 0, 3600, 60);
         cfg.autoRevive = !!cfg.autoRevive;
         cfg.autoFight = !!cfg.autoFight;
         cfg.useTalismans = !!cfg.useTalismans;
@@ -275,6 +278,7 @@
             minSpirit: 20,
             tickInterval: 30000,
             stallTimeoutSeconds: 90,
+            resumeWindowSeconds: current.resumeWindowSeconds,
             talismanMaxKinds: 5,
             talismanQuantity: 1,
             talismanFamilyOrder: current.talismanFamilyOrder,
@@ -305,6 +309,10 @@
         }
 
         return current;
+    }
+
+    function getResumeWindowMs(config) {
+        return normalizeAfkLoopConfig(config || {}).resumeWindowSeconds * 1000;
     }
 
     function resolveAdventureChoiceIndex(adventureId, config) {
@@ -693,6 +701,7 @@
                 exploreMultiplier: cfg.exploreMultiplier,
                 tickInterval: cfg.tickInterval,
                 stallTimeoutSeconds: cfg.stallTimeoutSeconds,
+                resumeWindowSeconds: cfg.resumeWindowSeconds,
                 autoFight: cfg.autoFight,
                 autoRevive: cfg.autoRevive,
                 useTalismans: cfg.useTalismans,
@@ -719,6 +728,7 @@
         selectMerchantItem,
         resolveApiObject,
         normalizeAfkLoopConfig,
+        getResumeWindowMs,
         decideAfkNextAction,
         selectCombatTalismans,
         selectNirvanaRebirthPill,
@@ -960,6 +970,7 @@
         cfg.exploreMultiplier = clampNumber($('#am-afk-explore-multiplier')?.value, 1, 50, cfg.exploreMultiplier || 1);
         cfg.tickInterval = clampNumber($('#am-afk-tick-interval')?.value, 5000, 300000, cfg.tickInterval || 30000);
         cfg.stallTimeoutSeconds = clampNumber($('#am-afk-stall-timeout')?.value, 0, 3600, cfg.stallTimeoutSeconds || 90);
+        cfg.resumeWindowSeconds = clampNumber($('#am-afk-resume-window')?.value, 0, 3600, cfg.resumeWindowSeconds ?? 60);
         cfg.autoRevive = $('#am-afk-auto-revive')?.checked ?? cfg.autoRevive;
         cfg.autoFight = $('#am-afk-auto-fight')?.checked ?? cfg.autoFight;
         cfg.useTalismans = $('#am-afk-use-talismans')?.checked ?? cfg.useTalismans;
@@ -1234,9 +1245,15 @@
                                 <input type="number" id="am-afk-tick-interval" value="${CONFIG.afkLoop.tickInterval}" min="5000" max="300000" step="1000" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
                             </div>
                         </div>
-                        <div style="margin-bottom:8px;">
-                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">卡住判定(秒)</div>
-                            <input type="number" id="am-afk-stall-timeout" value="${CONFIG.afkLoop.stallTimeoutSeconds}" min="0" max="3600" step="5" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                            <div>
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">卡住判定(秒)</div>
+                                <input type="number" id="am-afk-stall-timeout" value="${CONFIG.afkLoop.stallTimeoutSeconds}" min="0" max="3600" step="5" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                            </div>
+                            <div>
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">恢复窗口(秒)</div>
+                                <input type="number" id="am-afk-resume-window" value="${CONFIG.afkLoop.resumeWindowSeconds}" min="0" max="3600" step="5" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                            </div>
                         </div>
                         <div style="display:grid;grid-template-columns:1fr;gap:6px;margin-bottom:8px;">
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -1502,6 +1519,7 @@
             const afkExploreMultiplierEl = $('#am-afk-explore-multiplier');
             const afkTickIntervalEl = $('#am-afk-tick-interval');
             const afkStallTimeoutEl = $('#am-afk-stall-timeout');
+            const afkResumeWindowEl = $('#am-afk-resume-window');
             const afkAutoReviveEl = $('#am-afk-auto-revive');
             const afkAutoFightEl = $('#am-afk-auto-fight');
             const afkAutoDeclinePlayerEl = $('#am-afk-auto-decline-player');
@@ -1533,6 +1551,7 @@
             if (afkExploreMultiplierEl) afkExploreMultiplierEl.value = CONFIG.afkLoop.exploreMultiplier;
             if (afkTickIntervalEl) afkTickIntervalEl.value = CONFIG.afkLoop.tickInterval;
             if (afkStallTimeoutEl) afkStallTimeoutEl.value = CONFIG.afkLoop.stallTimeoutSeconds;
+            if (afkResumeWindowEl) afkResumeWindowEl.value = CONFIG.afkLoop.resumeWindowSeconds;
             if (afkAutoReviveEl) afkAutoReviveEl.checked = CONFIG.afkLoop.autoRevive;
             if (afkAutoFightEl) afkAutoFightEl.checked = CONFIG.afkLoop.autoFight;
             if (afkAutoDeclinePlayerEl) afkAutoDeclinePlayerEl.checked = CONFIG.afkLoop.autoDeclinePlayerEncounter;
@@ -2225,7 +2244,7 @@
             }
             if (decision.action === 'revive') {
                 Logger.warn('自动挂机尝试灵石复活');
-                await this.revive();
+                await this.revive(cfg);
             }
         },
 
@@ -2345,7 +2364,7 @@
             }
         },
 
-        async revive() {
+        async revive(cfg) {
             try {
                 if (typeof _win.handleRevive === 'function') {
                     await _win.handleRevive();
@@ -2353,7 +2372,8 @@
                     const res = await API.revive();
                     if (res.code !== 200) throw new Error(res.message || '复活失败');
                 }
-                this.postReviveResumeUntil = Date.now() + 60000;
+                const windowMs = getResumeWindowMs(cfg || CONFIG.afkLoop);
+                this.postReviveResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
                 this.lastDecisionKey = '';
                 this.refreshGameData();
             } catch (e) {
@@ -2486,7 +2506,8 @@
                     return;
                 }
 
-                this.postInteractionResumeUntil = Date.now() + 60000;
+                const windowMs = getResumeWindowMs(cfg);
+                this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
                 this.lastDecisionKey = '';
                 this.refreshGameData();
                 setTimeout(() => this.tick(true), 1200);
@@ -2545,7 +2566,8 @@
                 }
 
                 Logger.info('已自动婉拒/离开陌生道友邂逅');
-                this.postInteractionResumeUntil = Date.now() + 60000;
+                const windowMs = getResumeWindowMs(cfg);
+                this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
                 this.lastDecisionKey = '';
                 this.refreshGameData();
                 setTimeout(() => this.tick(true), 1200);

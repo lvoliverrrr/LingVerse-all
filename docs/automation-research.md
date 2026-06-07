@@ -158,7 +158,7 @@
 - 邂逅邀请卡优先调用 `EncounterModule.respondInvite(false)`。
 - 已打开邂逅会话优先调用 `EncounterModule.leave()`。
 - 邂逅卡优先调用 `PvpModule.dismissEncounter()`。
-- 处理成功后进入 60 秒恢复窗口，让挂机循环按神识状态继续探索或回冥想。
+- 处理成功后进入恢复窗口，让挂机循环按神识状态继续探索或回冥想。
 
 `lingverse-explore-helper.user.js` v2.12.0 新增：
 
@@ -229,6 +229,13 @@
 - 保留事件阻塞优先级：商人、遭遇、奇遇、陌生道友、混天典狱和死亡仍先处理或等待。
 - 目的：避免 `_autoResumeExplorePending` 或自动探索运行态残留时，脚本一直等待而不进入下一轮 140 分钟冥想。
 
+`lingverse-explore-helper.user.js` v2.19.0 新增：
+
+- `resumeWindowSeconds`：复活、奇遇处理、陌生道友处理后的恢复窗口，默认 60 秒，可配置 0-3600 秒。
+- `getResumeWindowMs(config)`：统一把恢复窗口配置转换为毫秒，复活和事件处理共用。
+- 设置为 0 时关闭短恢复窗口；常规挂机 tick 仍会继续根据神识、阻塞事件和配置做决策。
+- 稳妥/富裕预设保留当前 `resumeWindowSeconds`，适合慢网络或战斗结算较慢的测试者调大窗口。
+
 默认配置：
 
 - `enabled: false`
@@ -237,6 +244,7 @@
 - `exploreMultiplier: 1`
 - `tickInterval: 30000`
 - `stallTimeoutSeconds: 90`
+- `resumeWindowSeconds: 60`
 - `autoRevive: false`
 - `useTalismans: false`
 - `useNirvanaPill: false`
@@ -257,6 +265,7 @@
 - 神识可用且空闲 -> `startAutoExplore`
 - 自动探索运行/恢复挂起且神识低于阈值 -> `startMeditation`
 - 自动探索恢复挂起且页面提示神识不足/体力不足 -> `startMeditation`
+- 恢复窗口：配置归一化为 0-3600 秒，快照包含 `resumeWindowSeconds`。
 - 商人/遭遇激活 -> `wait`
 - 自动迎战开启且遭遇激活 -> `handleEncounter`
 - 战斗符箓选择：跳过隐匿符/神行符/锁定物品，同类只选最高品质。

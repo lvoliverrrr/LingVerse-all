@@ -566,6 +566,16 @@ test('normalizeAfkLoopConfig parses per-adventure fixed choice maps', () => {
         talismanFamilyOrder: ' ghost，fire;ghost | shield '
     }).talismanFamilyOrder, 'ghost,fire,shield');
 
+    assert.equal(hooks.normalizeAfkLoopConfig({
+        resumeWindowSeconds: 180
+    }).resumeWindowSeconds, 180);
+    assert.equal(hooks.normalizeAfkLoopConfig({
+        resumeWindowSeconds: -1
+    }).resumeWindowSeconds, 0);
+    assert.equal(hooks.normalizeAfkLoopConfig({
+        resumeWindowSeconds: 99999
+    }).resumeWindowSeconds, 3600);
+
     assert.deepEqual(toPlain(hooks.normalizeAfkLoopConfig({
         adventureMode: 'strategy',
         adventureChoiceMap: '{"456":2,"789":"3","huge":99,"zero":0,"bad":"x"}'
@@ -735,6 +745,7 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
     });
     assert.equal(snapshot.config.exploreMultiplier, 50);
     assert.equal(snapshot.config.autoFight, true);
+    assert.equal(snapshot.config.resumeWindowSeconds, 60);
     assert.equal(snapshot.history.decisionTail.length, 20);
     assert.equal(snapshot.history.decisionTail[0].spirit, 5);
     assert.equal(snapshot.history.decisionTail[19].adventureId, 456);
@@ -753,6 +764,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         meditationMinutes: 60,
         minSpirit: 5,
         exploreMultiplier: 20,
+        resumeWindowSeconds: 180,
         autoFight: true,
         autoRevive: true,
         useTalismans: true,
@@ -774,6 +786,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         exploreMultiplier: 1,
         tickInterval: 30000,
         stallTimeoutSeconds: 90,
+        resumeWindowSeconds: 180,
         autoRevive: false,
         autoFight: false,
         useTalismans: false,
@@ -796,6 +809,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         exploreMultiplier: 50,
         tickInterval: 30000,
         stallTimeoutSeconds: 90,
+        resumeWindowSeconds: 180,
         autoRevive: true,
         autoFight: true,
         useTalismans: true,
@@ -810,4 +824,14 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         adventureChoiceIndex: 1,
         adventureChoiceMap: { 456: 2 }
     });
+});
+
+test('getResumeWindowMs converts configured resume windows to milliseconds', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.getResumeWindowMs, 'function');
+    assert.equal(hooks.getResumeWindowMs({ resumeWindowSeconds: 90 }), 90000);
+    assert.equal(hooks.getResumeWindowMs({ resumeWindowSeconds: 0 }), 0);
+    assert.equal(hooks.getResumeWindowMs({ resumeWindowSeconds: 99999 }), 3600000);
 });

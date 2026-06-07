@@ -1012,6 +1012,107 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
     assert.equal(snapshot.page.url, 'https://ling.muge.info/game.html');
 });
 
+test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkDebugSummary, 'function');
+
+    const longMessage = `未知奇遇等待处理 ${'很长'.repeat(90)} https://ling.muge.info/game.html?token=abc-secret&session=keep#panel`;
+    const debugSnapshot = hooks.buildAfkDebugSnapshot({
+        spirit: 12,
+        maxSpirit: 300,
+        spiritCost: 20,
+        canExplore: false,
+        exploreDisabledReason: '神识不足',
+        isDead: false,
+        isMeditating: false,
+        merchantActive: false,
+        encounterActive: false,
+        combatActive: false,
+        playerEncounterActive: false,
+        adventureActive: true,
+        adventureId: 999,
+        adventureStep: 2,
+        adventureTotalSteps: 4,
+        adventureChoices: ['接受试炼', '绕路离开', `${'观察'.repeat(80)}?token=choice-secret`],
+        autoExploreRunning: false,
+        autoExplorePending: true,
+        exploreStalled: true
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 50,
+        stallTimeoutSeconds: 90,
+        resumeWindowSeconds: 60,
+        autoFight: true,
+        autoHireGuardian: true,
+        autoRevive: true,
+        useTalismans: true,
+        useNirvanaPill: true,
+        queueNirvanaPill: true,
+        autoDeclinePlayerEncounter: true,
+        adventureMode: 'strategy',
+        adventureChoiceMap: { 456: 2 }
+    }, { action: 'wait', reason: 'adventure-active' }, {
+        capturedAt: '2026-06-08T02:00:00.000Z',
+        page: {
+            title: '灵界 LingVerse - 修仙世界',
+            url: 'https://ling.muge.info/game.html?token=abc-secret&session=keep#debug'
+        },
+        decisionHistory: Array.from({ length: 12 }, (_, index) => ({
+            at: `2026-06-08T02:${String(index).padStart(2, '0')}:00.000Z`,
+            action: index % 2 ? 'wait' : 'startAutoExplore',
+            reason: index === 11 ? 'adventure-active' : 'auto-explore-running',
+            spirit: index,
+            adventureId: index === 11 ? 999 : null
+        })),
+        recentLogs: Array.from({ length: 12 }, (_, index) => ({
+            at: `2026-06-08T03:${String(index).padStart(2, '0')}:00.000Z`,
+            type: index % 2 ? 'warning' : 'info',
+            message: index === 11 ? longMessage : `普通日志${index}`
+        }))
+    });
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(debugSnapshot));
+    const serialized = JSON.stringify(summary);
+
+    assert.equal(summary.schema, 'lingverse-afk-debug-summary/v1');
+    assert.equal(summary.sourceSchema, 'lingverse-afk-debug-snapshot/v1');
+    assert.equal(summary.page.url, 'https://ling.muge.info/game.html');
+    assert.equal(serialized.includes('abc-secret'), false);
+    assert.equal(serialized.includes('choice-secret'), false);
+    assert.equal(serialized.includes('#debug'), false);
+    assert.deepEqual(summary.decision, { action: 'wait', reason: 'adventure-active' });
+    assert.deepEqual(summary.player, {
+        spirit: 12,
+        maxSpirit: 300,
+        spiritCost: 20,
+        canExplore: false,
+        isDead: false,
+        isMeditating: false
+    });
+    assert.equal(summary.adventure.id, 999);
+    assert.equal(summary.adventure.choices.length, 3);
+    assert.equal(summary.adventure.choices[2].endsWith('...'), true);
+    assert.equal(summary.config.exploreMultiplier, 50);
+    assert.deepEqual(summary.config.risks, {
+        autoFight: true,
+        autoHireGuardian: true,
+        autoRevive: true,
+        useTalismans: true,
+        useNirvanaPill: true,
+        queueNirvanaPill: true,
+        autoDeclinePlayerEncounter: true
+    });
+    assert.equal(summary.history.decisionTail.length, 8);
+    assert.equal(summary.history.decisionTail[0].spirit, 4);
+    assert.equal(summary.history.logTail.length, 8);
+    assert.equal(summary.history.logTail[7].message.endsWith('...'), true);
+    assert.ok(summary.history.logTail[7].message.length <= 160);
+});
+
 test('applyAfkPreset configures steady and rich AFK modes without enabling the loop', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;

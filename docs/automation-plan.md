@@ -187,6 +187,12 @@ v2.24.0 已完成：
 - `buildSnapshot` 不再因为 `_autoResumeExplorePending=true` 且 `_autoExploreRunning=false` 就每个 tick 重置进度时间。
 - 真实页面只读确认：`_tryResumeAutoExploreAfterMerchant()` 会在 `_autoResumeExplorePending` 时延迟 1.5 秒重启探索；若 pending 残留，脚本现在能按卡住秒数回冥想。
 
+v2.25.0 已完成：
+
+- 新增 `buildAfkDebugSummary(debugSnapshot)`，从完整快照生成 `lingverse-afk-debug-summary/v1` 脱敏摘要。
+- “复制摘要”按钮现在复制摘要 JSON：URL 会去掉 query/hash，常见 token/session/key 参数会脱敏，长日志和长选项会截断。
+- 摘要保留神识、阻塞状态、下一步决策、奇遇选项、最近 8 条决策/日志和富裕模式高风险开关，方便测试者安全反馈卡点。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -299,6 +305,12 @@ v2.24.0 新增自动测试：
 - `isExploreStalledState` 对 `autoExploreRunning=true` 和 `autoExplorePending=true` 都会按 `stallTimeoutSeconds` 判定卡住。
 - 自动探索未运行且无恢复挂起时，即使进度时间很旧也不会判定卡住。
 
+v2.25.0 新增自动测试：
+
+- `buildAfkDebugSummary` 会去掉页面 URL 的 query/hash，脱敏常见 token/session/key 参数。
+- `buildAfkDebugSummary` 会压缩历史为最近 8 条决策/日志，并截断长日志和长奇遇选项。
+- 摘要保留富裕模式高风险开关，便于判断测试者是否开启迎战、护道、复活、用符、用丹等动作。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -307,8 +319,8 @@ v2.24.0 新增自动测试：
 
 ## 下一步建议
 
-1. 用户实测 v2.24.0 低境界 1 倍模式：开启自动迎战和遭遇前自动护道，但不开复活/丹/符。
+1. 用户实测 v2.25.0 低境界 1 倍模式：开启自动迎战和遭遇前自动护道，但不开复活/丹/符。
 2. 继续用真实挂机日志收集“自动探索停住”的事件原因，尤其记录护道失败 message。
 3. 富裕 50 倍模式继续小号测试：用符、复活、用丹都保持 opt-in，观察战斗结算后恢复窗口是否够用。
 4. 用真实奇遇链继续记录每个 adventureId 的选项、奖励和后续步骤。
-6. 为快照补“复制后自动脱敏/压缩摘要”和“可导入的问题回放视图”。
+5. 为摘要补“可导入的问题回放视图”。

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.24.0
+// @version      2.25.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,9 +20,11 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.24.0';
+    const SCRIPT_VERSION = '2.25.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
+    const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
+    const DEBUG_SUMMARY_TEXT_LIMIT = 150;
 
     // 配置对象
     const CONFIG = {
@@ -784,6 +786,131 @@
         }));
     }
 
+    function stripUrlQueryAndHash(text) {
+        return String(text || '').replace(/(https?:\/\/[^\s?#]+(?:\/[^\s?#]*)?)[?#][^\s]*/gi, '$1');
+    }
+
+    function redactSensitiveParams(text) {
+        return String(text || '').replace(/\b(token|session|jwt|auth|key|secret|password|access_token|refresh_token)=([^\s&;#]+)/gi, '$1=<redacted>');
+    }
+
+    function truncateDebugText(text, limit) {
+        const maxLength = Math.max(8, toFiniteNumber(limit, DEBUG_SUMMARY_TEXT_LIMIT));
+        const value = String(text || '');
+        if (value.length <= maxLength) return value;
+        return `${value.slice(0, maxLength - 3)}...`;
+    }
+
+    function sanitizeDebugText(value, limit) {
+        return truncateDebugText(redactSensitiveParams(stripUrlQueryAndHash(value)), limit);
+    }
+
+    function sanitizeDebugUrl(value) {
+        const stripped = stripUrlQueryAndHash(value).trim();
+        const match = stripped.match(/^https?:\/\/[^\s]+/i);
+        return sanitizeDebugText(match ? match[0] : stripped, 200);
+    }
+
+    function buildAfkDebugSummary(debugSnapshot) {
+        const full = debugSnapshot || {};
+        const page = full.page && typeof full.page === 'object' ? full.page : {};
+        const decision = full.decision && typeof full.decision === 'object' ? full.decision : {};
+        const player = full.player && typeof full.player === 'object' ? full.player : {};
+        const blockers = full.blockers && typeof full.blockers === 'object' ? full.blockers : {};
+        const automation = full.automation && typeof full.automation === 'object' ? full.automation : {};
+        const adventure = full.adventure && typeof full.adventure === 'object' ? full.adventure : {};
+        const config = full.config && typeof full.config === 'object' ? full.config : {};
+        const history = full.history && typeof full.history === 'object' ? full.history : {};
+
+        return {
+            schema: 'lingverse-afk-debug-summary/v1',
+            sourceSchema: String(full.schema || ''),
+            scriptVersion: String(full.scriptVersion || SCRIPT_VERSION),
+            capturedAt: String(full.capturedAt || ''),
+            page: {
+                title: sanitizeDebugText(page.title, 100),
+                url: sanitizeDebugUrl(page.url)
+            },
+            decision: {
+                action: String(decision.action || ''),
+                reason: String(decision.reason || '')
+            },
+            player: {
+                spirit: numberOrNull(player.spirit),
+                maxSpirit: numberOrNull(player.maxSpirit),
+                spiritCost: numberOrNull(player.spiritCost),
+                canExplore: player.canExplore !== false,
+                isDead: !!player.isDead,
+                isMeditating: !!player.isMeditating
+            },
+            blockers: {
+                merchantActive: !!blockers.merchantActive,
+                encounterActive: !!blockers.encounterActive,
+                combatActive: !!blockers.combatActive,
+                playerEncounterActive: !!blockers.playerEncounterActive,
+                adventureActive: !!blockers.adventureActive,
+                adventureId: blockers.adventureId || null,
+                adventureComplete: !!blockers.adventureComplete,
+                immortalPrisonActive: !!blockers.immortalPrisonActive
+            },
+            automation: {
+                autoExploreRunning: !!automation.autoExploreRunning,
+                autoExplorePending: !!automation.autoExplorePending,
+                exploreStalled: !!automation.exploreStalled,
+                postReviveResume: !!automation.postReviveResume
+            },
+            adventure: {
+                id: adventure.id || null,
+                step: numberOrNull(adventure.step),
+                totalSteps: numberOrNull(adventure.totalSteps),
+                isComplete: !!adventure.isComplete,
+                mode: String(adventure.mode || ''),
+                resolvedChoiceIndex: numberOrNull(adventure.resolvedChoiceIndex),
+                choices: (Array.isArray(adventure.choices) ? adventure.choices : [])
+                    .map(choice => sanitizeDebugText(choice, DEBUG_SUMMARY_TEXT_LIMIT))
+            },
+            config: {
+                meditationMinutes: numberOrNull(config.meditationMinutes),
+                minSpirit: numberOrNull(config.minSpirit),
+                exploreMultiplier: numberOrNull(config.exploreMultiplier),
+                stallTimeoutSeconds: numberOrNull(config.stallTimeoutSeconds),
+                resumeWindowSeconds: numberOrNull(config.resumeWindowSeconds),
+                adventureMode: String(config.adventureMode || ''),
+                risks: {
+                    autoFight: !!config.autoFight,
+                    autoHireGuardian: !!config.autoHireGuardian,
+                    autoRevive: !!config.autoRevive,
+                    useTalismans: !!config.useTalismans,
+                    useNirvanaPill: !!config.useNirvanaPill,
+                    queueNirvanaPill: !!config.queueNirvanaPill,
+                    autoDeclinePlayerEncounter: !!config.autoDeclinePlayerEncounter
+                }
+            },
+            history: {
+                decisionTail: tailRecords(history.decisionTail, DEBUG_SUMMARY_HISTORY_LIMIT).map(record => ({
+                    at: sanitizeDebugText(record && record.at, 40),
+                    action: sanitizeDebugText(record && record.action, 40),
+                    reason: sanitizeDebugText(record && record.reason, 80),
+                    spirit: numberOrNull(record && record.spirit),
+                    maxSpirit: numberOrNull(record && record.maxSpirit),
+                    isMeditating: !!(record && record.isMeditating),
+                    autoExploreRunning: !!(record && record.autoExploreRunning),
+                    merchantActive: !!(record && record.merchantActive),
+                    encounterActive: !!(record && record.encounterActive),
+                    playerEncounterActive: !!(record && record.playerEncounterActive),
+                    adventureActive: !!(record && record.adventureActive),
+                    adventureId: record && record.adventureId ? record.adventureId : null
+                })),
+                logTail: tailRecords(history.logTail, DEBUG_SUMMARY_HISTORY_LIMIT).map(record => ({
+                    at: sanitizeDebugText(record && record.at, 40),
+                    time: sanitizeDebugText(record && record.time, 20),
+                    type: sanitizeDebugText(record && record.type || 'info', 20),
+                    message: sanitizeDebugText(record && record.message, DEBUG_SUMMARY_TEXT_LIMIT)
+                }))
+            }
+        };
+    }
+
     function buildAfkDebugSnapshot(state, config, decision, context) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const snapshot = state || {};
@@ -899,6 +1026,7 @@
         formatAdventureChoiceMap,
         resolveAdventureChoiceIndex,
         buildAfkDebugSnapshot,
+        buildAfkDebugSummary,
         applyAfkPreset
     });
 
@@ -1494,7 +1622,7 @@
                         <div style="display:flex;gap:8px;">
                             <button id="am-afk-start" style="flex:1;padding:8px;background:#7c3aed;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">启动挂机</button>
                             <button id="am-afk-stop" style="flex:1;padding:8px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">停止挂机</button>
-                            <button id="am-afk-copy-debug" style="flex:1;padding:8px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制快照</button>
+                            <button id="am-afk-copy-debug" style="flex:1;padding:8px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制摘要</button>
                         </div>
                     </div>
 
@@ -2217,11 +2345,12 @@
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries()
                 });
-                const text = JSON.stringify(debugSnapshot, null, 2);
+                const debugSummary = buildAfkDebugSummary(debugSnapshot);
+                const text = JSON.stringify(debugSummary, null, 2);
                 await this.copyText(text);
-                Logger.success('已复制挂机调试快照，可直接发给开发者分析');
+                Logger.success('已复制挂机调试脱敏摘要，可直接发给开发者分析');
             } catch (e) {
-                Logger.warn(`复制挂机调试快照失败: ${e.message || e}`);
+                Logger.warn(`复制挂机调试脱敏摘要失败: ${e.message || e}`);
             }
         },
 

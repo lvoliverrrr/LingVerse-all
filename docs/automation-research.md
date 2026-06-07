@@ -277,6 +277,13 @@
 - `buildSnapshot` 在 `autoExplorePending=true` 时保留上次进度时间，不再每个 tick 认为“刚刚有进展”。
 - 效果：如果 `_autoResumeExplorePending` 因页面恢复函数没有成功重启探索而残留，挂机循环会按卡住判定回冥想。
 
+`lingverse-explore-helper.user.js` v2.25.0 新增：
+
+- `buildAfkDebugSummary(debugSnapshot)`：从完整快照生成 `lingverse-afk-debug-summary/v1` 脱敏摘要。
+- “复制摘要”按钮复制摘要而不是原始完整快照，减少测试者把 URL query/hash、token/session/key 参数或过长日志原样发出的风险。
+- 摘要保留当前决策、神识、阻塞状态、探索恢复状态、奇遇选项、最近 8 条决策/日志和富裕模式高风险开关。
+- 完整 `buildAfkDebugSnapshot` 仍作为内部纯函数和测试 hook 保留，后续问题回放可以继续从完整 schema 扩展。
+
 默认配置：
 
 - `enabled: false`
@@ -328,6 +335,9 @@
   - `autoRevive` 开启且死亡 -> `revive`
   - 复活后短时间内神识足够 -> `startAutoExplore`，沿用配置倍率。
   - 复活后神识不足 -> `startMeditation`。
+- 调试摘要：
+  - `buildAfkDebugSummary` 去掉页面 URL 的 query/hash，脱敏常见 token/session/key 参数。
+  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞和高风险开关。
 
 ## 待继续研究
 
@@ -337,4 +347,4 @@
 - 低境界 1 倍探索开启自动护道后的真实长跑稳定性，尤其是护道失败 message 和是否需要游戏内自动重试。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本，把 `adventureId`、每步选项、最终奖励记录成可分享策略。
-- 为快照增加可选脱敏摘要和导入式问题回放视图。
+- 为摘要增加导入式问题回放视图。

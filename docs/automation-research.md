@@ -245,6 +245,13 @@
 - `AfkLoopManager` 记录 `lastTalismanEncounterKey`，并在离开遭遇/战斗状态后清空。
 - 目的：避免同一遭遇面板卡住或 tick 重入时重复消耗战斗符箓。
 
+`lingverse-explore-helper.user.js` v2.21.0 新增：
+
+- `resolveCombatTalismanAttempt(lastKey, snapshot, selectedTalismans, options)`：统一决定本次遭遇是否还需要用符，以及是否要把 encounter key 标记为已处理。
+- `selectedTalismans=[]` 时代表已确认没有可用符，会标记本遭遇已处理，后续 tick 不再重复读取背包。
+- `attemptCompleted=true` 时代表已完成一轮用符尝试，会标记本遭遇已处理，避免同一遭遇重复尝试失败或重复消耗。
+- 背包读取异常不会标记，让下一轮 tick 仍可重试。
+
 默认配置：
 
 - `enabled: false`
@@ -279,7 +286,7 @@
 - 自动迎战开启且遭遇激活 -> `handleEncounter`
 - 战斗符箓选择：跳过隐匿符/神行符/锁定物品，同类只选最高品质。
 - 战斗符箓 family 顺序：支持 `ghost,fire,shield` 这类白名单顺序；留空保持按品质选择。
-- 战斗符箓去重：同一个遭遇 key 只自动用符一次，下一次遭遇重新允许用符。
+- 战斗符箓去重：同一个遭遇 key 只处理一次用符；没符会跳过并记住，下一次遭遇重新允许用符。
 - 涅槃重生丹选择：只选 `bp_pill_rebirth_*` 或明确“五行通灵/涅槃重生丹”的 pill，默认史诗以上。
 - 探索中断分类：
   - `merchant` -> 自动商人处理器。

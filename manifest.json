@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "灵界 LingVerse 助手",
-  "version": "2.20.0",
+  "version": "2.21.0",
   "description": "为灵界 LingVerse 注入自动开图与自动云游商人处理脚本。",
   "content_scripts": [
     {

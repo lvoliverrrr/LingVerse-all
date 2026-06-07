@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.20.0
+// @version      2.21.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.20.0';
+    const SCRIPT_VERSION = '2.21.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
 
@@ -453,6 +453,21 @@
         };
     }
 
+    function resolveCombatTalismanAttempt(lastEncounterKey, snapshot, selectedTalismans, options) {
+        const usage = shouldUseCombatTalismansForEncounter(lastEncounterKey, snapshot);
+        const selected = Array.isArray(selectedTalismans) ? selectedTalismans : null;
+        const attemptCompleted = !!(options && options.attemptCompleted);
+        const shouldMark = usage.shouldUse && !!usage.encounterKey && (
+            attemptCompleted ||
+            (selected && selected.length === 0)
+        );
+        return {
+            shouldAttempt: usage.shouldUse,
+            encounterKey: usage.encounterKey,
+            markEncounterKey: shouldMark ? usage.encounterKey : ''
+        };
+    }
+
     function isNirvanaRebirthPill(item) {
         const templateId = String(item && item.templateId || '');
         if (templateId.indexOf('bp_pill_rebirth_') === 0) return true;
@@ -765,6 +780,7 @@
         selectCombatTalismans,
         buildEncounterKey,
         shouldUseCombatTalismansForEncounter,
+        resolveCombatTalismanAttempt,
         selectNirvanaRebirthPill,
         classifyExploreInterruption,
         normalizeAdventureChoiceMap,
@@ -2450,9 +2466,9 @@
         },
 
         async useCombatTalismans(cfg, snapshot) {
-            const talismanUse = shouldUseCombatTalismansForEncounter(this.lastTalismanEncounterKey, snapshot);
-            if (!talismanUse.shouldUse) {
-                if (talismanUse.encounterKey) Logger.info('本次遭遇已使用过战斗符箓，跳过重复用符');
+            const talismanUse = resolveCombatTalismanAttempt(this.lastTalismanEncounterKey, snapshot, null);
+            if (!talismanUse.shouldAttempt) {
+                if (talismanUse.encounterKey) Logger.info('本次遭遇已处理过战斗符箓，跳过重复用符');
                 return;
             }
 
@@ -2471,6 +2487,8 @@
                 familyOrder: cfg.talismanFamilyOrder
             });
             if (selected.length === 0) {
+                const emptyAttempt = resolveCombatTalismanAttempt(this.lastTalismanEncounterKey, snapshot, selected);
+                if (emptyAttempt.markEncounterKey) this.lastTalismanEncounterKey = emptyAttempt.markEncounterKey;
                 Logger.info('没有可用战斗符箓，跳过用符');
                 return;
             }
@@ -2507,10 +2525,9 @@
                 }
             } catch (e) {}
 
-            if (usedKinds > 0) {
-                this.lastTalismanEncounterKey = talismanUse.encounterKey;
-                this.refreshGameData();
-            }
+            const completedAttempt = resolveCombatTalismanAttempt(this.lastTalismanEncounterKey, snapshot, selected, { attemptCompleted: true });
+            if (completedAttempt.markEncounterKey) this.lastTalismanEncounterKey = completedAttempt.markEncounterKey;
+            if (usedKinds > 0) this.refreshGameData();
         },
 
         async fightEncounter() {

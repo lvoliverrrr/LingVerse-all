@@ -159,6 +159,13 @@ v2.20.0 已完成：
 - 当快照不再处于遭遇/战斗状态时清空上一次用符 key，保证下一次新遭遇仍可按配置用符。
 - 真实页面只读确认：隐藏的遭遇面板仍可能保留旧怪物文本和 `_currentEncounterMonsterId`，所以脚本只在遭遇/战斗 active 时生成 key。
 
+v2.21.0 已完成：
+
+- 新增 `resolveCombatTalismanAttempt`，统一处理“是否还要尝试用符”和“是否标记本遭遇已处理”。
+- 同一遭遇若背包没有可用战斗符，也会标记为已处理，后续 tick 不再重复读取背包。
+- 同一遭遇完成一轮用符尝试后，无论最终成功几种符，都标记为已处理，避免网络/物品失败导致反复尝试。
+- 读取背包失败不会标记已处理，保留下一次 tick 重试机会。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -246,6 +253,12 @@ v2.20.0 新增自动测试：
 
 - `buildEncounterKey` 只在遭遇/战斗 active 时生成稳定 key，避免隐藏旧面板污染新判断。
 - `shouldUseCombatTalismansForEncounter` 对同一个 key 返回跳过，对新 key 允许用符。
+
+v2.21.0 新增自动测试：
+
+- `resolveCombatTalismanAttempt` 在同一遭遇无可用符时返回 `markEncounterKey`，让执行器后续跳过重复背包扫描。
+- `resolveCombatTalismanAttempt` 在选到符但尚未完成尝试时不提前标记，完成一轮尝试后才标记。
+- 已标记的同一遭遇不会再次尝试用符，新遭遇仍可重新尝试。
 
 浏览器验证：
 

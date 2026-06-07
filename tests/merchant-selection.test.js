@@ -364,6 +364,45 @@ test('shouldUseCombatTalismansForEncounter skips repeated talisman use in one en
     });
 });
 
+test('resolveCombatTalismanAttempt marks empty or completed attempts for one encounter', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const snapshot = {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7
+    };
+
+    assert.deepEqual(toPlain(hooks.resolveCombatTalismanAttempt('', snapshot, [])), {
+        shouldAttempt: true,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: 'monster:port_bandit:3:7'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveCombatTalismanAttempt('', snapshot, [
+        { itemId: 1, family: 'fire' }
+    ])), {
+        shouldAttempt: true,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: ''
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveCombatTalismanAttempt('', snapshot, [
+        { itemId: 1, family: 'fire' }
+    ], { attemptCompleted: true })), {
+        shouldAttempt: true,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: 'monster:port_bandit:3:7'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveCombatTalismanAttempt('monster:port_bandit:3:7', snapshot, [])), {
+        shouldAttempt: false,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: ''
+    });
+});
+
 test('selectNirvanaRebirthPill only selects configured five-root rebirth pills', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;

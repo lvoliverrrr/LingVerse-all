@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.19.0
+// @version      2.20.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.19.0';
+    const SCRIPT_VERSION = '2.20.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
 
@@ -421,6 +421,38 @@
             .slice(0, maxKinds);
     }
 
+    function normalizeEncounterText(value) {
+        return String(value || '')
+            .split(/\n+/)
+            .map(part => part.trim().replace(/\s+/g, ' '))
+            .filter(Boolean)
+            .slice(0, 3)
+            .join('|')
+            .slice(0, 160);
+    }
+
+    function buildEncounterKey(snapshot) {
+        const state = snapshot || {};
+        if (!state.encounterActive && !state.combatActive) return '';
+        const monsterId = String(state.encounterMonsterId || '').trim();
+        if (monsterId) {
+            const stage = Math.max(0, toFiniteNumber(state.encounterMonsterStage, 0));
+            const level = Math.max(0, toFiniteNumber(state.encounterMonsterLevel, 0));
+            return `monster:${monsterId}:${stage}:${level}`;
+        }
+        const text = normalizeEncounterText(state.encounterText);
+        if (text) return `text:${text}`;
+        return 'encounter:active';
+    }
+
+    function shouldUseCombatTalismansForEncounter(lastEncounterKey, snapshot) {
+        const encounterKey = buildEncounterKey(snapshot);
+        return {
+            shouldUse: !!encounterKey && encounterKey !== String(lastEncounterKey || ''),
+            encounterKey
+        };
+    }
+
     function isNirvanaRebirthPill(item) {
         const templateId = String(item && item.templateId || '');
         if (templateId.indexOf('bp_pill_rebirth_') === 0) return true;
@@ -731,6 +763,8 @@
         getResumeWindowMs,
         decideAfkNextAction,
         selectCombatTalismans,
+        buildEncounterKey,
+        shouldUseCombatTalismansForEncounter,
         selectNirvanaRebirthPill,
         classifyExploreInterruption,
         normalizeAdventureChoiceMap,
@@ -1990,6 +2024,7 @@
         lastAutoExploreCount: null,
         lastExploreProgressAt: 0,
         encounterBusy: false,
+        lastTalismanEncounterKey: '',
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
         decisionHistory: [],
@@ -2164,13 +2199,23 @@
                 const el = $(selector);
                 return !!(el && !el.classList.contains('hidden'));
             });
+            const combatActive = !!(combatPanel && combatPanel.classList.contains('active'));
             const encounterActive = !!(
                 _win._encounterActive ||
                 (encounterOverlay && !encounterOverlay.classList.contains('hidden')) ||
-                (combatPanel && combatPanel.classList.contains('active')) ||
+                combatActive ||
                 (talismanDialog && !talismanDialog.classList.contains('hidden'))
             );
             const adventureActive = !!(_win._companionAdventureActive || (adventureOverlay && !adventureOverlay.classList.contains('hidden')));
+            const encounterText = encounterOverlay && !encounterOverlay.classList.contains('hidden') ? encounterOverlay.innerText : '';
+            const encounterKey = buildEncounterKey({
+                encounterActive,
+                combatActive,
+                encounterMonsterId: _win._currentEncounterMonsterId,
+                encounterMonsterStage: _win._currentEncounterMonsterStage,
+                encounterMonsterLevel: _win._currentEncounterMonsterLevel,
+                encounterText
+            });
 
             const stalledMs = cfg.stallTimeoutSeconds * 1000;
             const exploreStalled = autoExploreRunning && stalledMs > 0 && (now - this.lastExploreProgressAt) >= stalledMs;
@@ -2194,6 +2239,11 @@
                 playerEncounterActive,
                 merchantActive: MerchantAutoBuyer.isMerchantActive(),
                 encounterActive,
+                combatActive,
+                encounterKey,
+                encounterMonsterId: _win._currentEncounterMonsterId,
+                encounterMonsterStage: _win._currentEncounterMonsterStage,
+                encounterMonsterLevel: _win._currentEncounterMonsterLevel,
                 autoExploreRunning,
                 autoExplorePending,
                 postReviveResume: this.postReviveResumeUntil > now || this.postInteractionResumeUntil > now,
@@ -2203,6 +2253,9 @@
 
         async executeDecision(decision, snapshot, cfg) {
             const key = `${decision.action}:${decision.reason}`;
+            if (!snapshot || (!snapshot.encounterActive && !snapshot.combatActive)) {
+                this.lastTalismanEncounterKey = '';
+            }
             if (decision.action === 'wait' || decision.action === 'idle') {
                 if (key !== this.lastDecisionKey && decision.reason !== 'auto-explore-running') {
                     Logger.info(`自动挂机等待：${this.formatReason(decision.reason)}`);
@@ -2229,7 +2282,7 @@
             }
             if (decision.action === 'handleEncounter') {
                 Logger.info(`自动挂机处理遭遇：${this.formatReason(decision.reason)}`);
-                await this.handleEncounter(cfg);
+                await this.handleEncounter(cfg, snapshot);
                 return;
             }
             if (decision.action === 'handlePlayerEncounter') {
@@ -2381,12 +2434,12 @@
             }
         },
 
-        async handleEncounter(cfg) {
+        async handleEncounter(cfg, snapshot) {
             if (this.encounterBusy) return;
             this.encounterBusy = true;
             try {
                 if (cfg.useTalismans) {
-                    await this.useCombatTalismans(cfg);
+                    await this.useCombatTalismans(cfg, snapshot);
                 }
                 if (cfg.autoFight) {
                     await this.fightEncounter();
@@ -2396,7 +2449,13 @@
             }
         },
 
-        async useCombatTalismans(cfg) {
+        async useCombatTalismans(cfg, snapshot) {
+            const talismanUse = shouldUseCombatTalismansForEncounter(this.lastTalismanEncounterKey, snapshot);
+            if (!talismanUse.shouldUse) {
+                if (talismanUse.encounterKey) Logger.info('本次遭遇已使用过战斗符箓，跳过重复用符');
+                return;
+            }
+
             let items = [];
             try {
                 const res = await API.getInventory();
@@ -2448,7 +2507,10 @@
                 }
             } catch (e) {}
 
-            if (usedKinds > 0) this.refreshGameData();
+            if (usedKinds > 0) {
+                this.lastTalismanEncounterKey = talismanUse.encounterKey;
+                this.refreshGameData();
+            }
         },
 
         async fightEncounter() {

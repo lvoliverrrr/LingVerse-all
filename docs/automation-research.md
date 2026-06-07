@@ -35,6 +35,7 @@
 - `_lastPlayerData` 包含 `spirit`、`maxSpirit`、`spiritCost`、`canExplore`、`exploreDisabledReason`、`isMeditating`、`isDead`。
 - 当前读到一次状态：神识 `3/2758`，未冥想，未死亡。
 - v2.18.0 再次只读状态：`autoExploreRunning=false`、`autoResumeExplorePending=false`、神识 `3/2758`、单次探索消耗 `4`、`canExplore=true`。
+- v2.20.0 只读遭遇状态：`_encounterActive=false` 且 `#encounterOverlay.hidden=true`，但页面仍保留旧 `_currentEncounterMonsterId=port_bandit` 和旧面板文本；因此 encounter key 必须只在 active 遭遇/战斗时生成。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -236,6 +237,14 @@
 - 设置为 0 时关闭短恢复窗口；常规挂机 tick 仍会继续根据神识、阻塞事件和配置做决策。
 - 稳妥/富裕预设保留当前 `resumeWindowSeconds`，适合慢网络或战斗结算较慢的测试者调大窗口。
 
+`lingverse-explore-helper.user.js` v2.20.0 新增：
+
+- `buildEncounterKey(snapshot)`：仅在 `encounterActive` 或 `combatActive` 时生成当前遭遇 key。
+- 优先使用 `encounterMonsterId + encounterMonsterStage + encounterMonsterLevel`；没有怪物 ID 时使用遭遇面板前三行文本。
+- `shouldUseCombatTalismansForEncounter(lastKey, snapshot)`：同一个 key 已用符则跳过，新 key 才允许用符。
+- `AfkLoopManager` 记录 `lastTalismanEncounterKey`，并在离开遭遇/战斗状态后清空。
+- 目的：避免同一遭遇面板卡住或 tick 重入时重复消耗战斗符箓。
+
 默认配置：
 
 - `enabled: false`
@@ -270,6 +279,7 @@
 - 自动迎战开启且遭遇激活 -> `handleEncounter`
 - 战斗符箓选择：跳过隐匿符/神行符/锁定物品，同类只选最高品质。
 - 战斗符箓 family 顺序：支持 `ghost,fire,shield` 这类白名单顺序；留空保持按品质选择。
+- 战斗符箓去重：同一个遭遇 key 只自动用符一次，下一次遭遇重新允许用符。
 - 涅槃重生丹选择：只选 `bp_pill_rebirth_*` 或明确“五行通灵/涅槃重生丹”的 pill，默认史诗以上。
 - 探索中断分类：
   - `merchant` -> 自动商人处理器。
@@ -287,7 +297,7 @@
 
 - 高阶“富裕模式”如何安全选择涅槃重生丹，避免吃错丹药。
 - 5 类战斗符箓的最佳收益顺序、每类用量和不同账号库存下的推荐 preset。
-- 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的完整状态机。
+- 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的真实长跑稳定性。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本，把 `adventureId`、每步选项、最终奖励记录成可分享策略。
 - 为快照增加可选脱敏摘要和导入式问题回放视图。

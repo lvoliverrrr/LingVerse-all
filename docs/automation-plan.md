@@ -152,6 +152,13 @@ v2.19.0 已完成：
 - 稳妥/富裕预设会保留测试者已设置的恢复窗口，避免慢网络账号被重置。
 - 调试快照会带上 `resumeWindowSeconds`，方便测试者反馈“处理完事件后为什么没继续”的问题。
 
+v2.20.0 已完成：
+
+- 新增 encounter key，用怪物 ID、境界 stage、等级 level 识别当前遭遇；缺少 ID 时退回到遭遇面板文本。
+- 自动战斗用符增加同遭遇去重：同一个 encounter key 已成功用过符时，后续 tick 只迎战，不重复消耗符箓。
+- 当快照不再处于遭遇/战斗状态时清空上一次用符 key，保证下一次新遭遇仍可按配置用符。
+- 真实页面只读确认：隐藏的遭遇面板仍可能保留旧怪物文本和 `_currentEncounterMonsterId`，所以脚本只在遭遇/战斗 active 时生成 key。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -234,6 +241,11 @@ v2.19.0 新增自动测试：
 - `getResumeWindowMs` 会把恢复窗口转换成毫秒，并保持同样的边界。
 - `applyAfkPreset` 保留已配置的恢复窗口。
 - `buildAfkDebugSnapshot` 输出恢复窗口配置。
+
+v2.20.0 新增自动测试：
+
+- `buildEncounterKey` 只在遭遇/战斗 active 时生成稳定 key，避免隐藏旧面板污染新判断。
+- `shouldUseCombatTalismansForEncounter` 对同一个 key 返回跳过，对新 key 允许用符。
 
 浏览器验证：
 

@@ -310,6 +310,60 @@ test('selectCombatTalismans can follow a configured talisman family order', () =
     ]);
 });
 
+test('buildEncounterKey creates stable keys only for active encounters', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(hooks.buildEncounterKey({
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        encounterText: '潮汐海兽\n金丹期中期'
+    }), 'monster:port_bandit:3:7');
+
+    assert.equal(hooks.buildEncounterKey({
+        combatActive: true,
+        encounterText: '潮汐海兽\n金丹期中期\n生命3,580'
+    }), 'text:潮汐海兽|金丹期中期|生命3,580');
+
+    assert.equal(hooks.buildEncounterKey({
+        encounterActive: false,
+        combatActive: false,
+        encounterMonsterId: 'stale_monster',
+        encounterText: '旧遭遇'
+    }), '');
+});
+
+test('shouldUseCombatTalismansForEncounter skips repeated talisman use in one encounter', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const snapshot = {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7
+    };
+
+    assert.deepEqual(toPlain(hooks.shouldUseCombatTalismansForEncounter('', snapshot)), {
+        shouldUse: true,
+        encounterKey: 'monster:port_bandit:3:7'
+    });
+    assert.deepEqual(toPlain(hooks.shouldUseCombatTalismansForEncounter('monster:port_bandit:3:7', snapshot)), {
+        shouldUse: false,
+        encounterKey: 'monster:port_bandit:3:7'
+    });
+    assert.deepEqual(toPlain(hooks.shouldUseCombatTalismansForEncounter('monster:port_bandit:3:7', {
+        encounterActive: true,
+        encounterMonsterId: 'new_monster',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 8
+    })), {
+        shouldUse: true,
+        encounterKey: 'monster:new_monster:3:8'
+    });
+});
+
 test('selectNirvanaRebirthPill only selects configured five-root rebirth pills', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;

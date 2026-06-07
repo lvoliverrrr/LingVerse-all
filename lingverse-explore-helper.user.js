@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.30.0
+// @version      2.31.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.30.0';
+    const SCRIPT_VERSION = '2.31.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -870,6 +870,9 @@
             return { action: 'wait', reason: 'merchant-active' };
         }
         if (snapshot.encounterActive || snapshot.combatActive) {
+            if (cfg.autoHireGuardian) {
+                return { action: 'handleEncounter', reason: 'encounter-auto-guardian-enabled' };
+            }
             if (cfg.autoFight) {
                 return { action: 'handleEncounter', reason: 'encounter-auto-fight-enabled' };
             }
@@ -1840,7 +1843,7 @@
                             </label>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-auto-hire-guardian" ${CONFIG.afkLoop.autoHireGuardian?'checked':''} style="cursor:pointer;">
-                                <span style="font-size:12px;color:${text};">迎战前按游戏护道设置自动雇护道</span>
+                                <span style="font-size:12px;color:${text};">遭遇时按游戏护道设置自动雇护道</span>
                             </label>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-auto-decline-player" ${CONFIG.afkLoop.autoDeclinePlayerEncounter?'checked':''} style="cursor:pointer;">
@@ -3416,6 +3419,7 @@
                 'post-interaction-ready': '事件/战斗后神识可探索',
                 'post-interaction-low-spirit': '事件/战斗后神识不足',
                 'dead-auto-revive-enabled': '已开启自动复活',
+                'encounter-auto-guardian-enabled': '已开启遭遇前自动护道',
                 'encounter-auto-fight-enabled': '已开启自动迎战'
             };
             return labels[reason] || reason || '状态变化';

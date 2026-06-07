@@ -631,7 +631,7 @@ test('resolveNirvanaRebirthPillAttempt explains rich-mode pill use decisions', (
     });
 });
 
-test('decideAfkNextAction handles encounters only when auto fight is enabled', () => {
+test('decideAfkNextAction handles encounters when auto fight or guardian hire is enabled', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
 
@@ -648,6 +648,22 @@ test('decideAfkNextAction handles encounters only when auto fight is enabled', (
     }, 1_000_000)), {
         action: 'wait',
         reason: 'encounter-active'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 200,
+        encounterActive: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        autoFight: false,
+        autoHireGuardian: true,
+        useTalismans: false
+    }, 1_000_000)), {
+        action: 'handleEncounter',
+        reason: 'encounter-auto-guardian-enabled'
     });
 
     assert.deepEqual(toPlain(hooks.decideAfkNextAction({

@@ -82,7 +82,7 @@ v2.9.0 已完成：
 - 第 1 步到第 8 步的 opt-in 骨架。
 - 不再把回血丹 `pill_nirvana_*` 当成涅槃重生丹；只选 `bp_pill_rebirth_*` 或明确五行通灵/涅槃重生命名的 pill。
 - 符箓按 family 去重，优先最高品质，最多 5 种。
-- 遭遇默认仍等待，只有 `autoFight` 开启才进入 handler。
+- 遭遇默认仍等待；v2.31.0 起 `autoHireGuardian` 或 `autoFight` 任一开启即可进入 handler。
 
 v2.10.0 已完成：
 
@@ -226,6 +226,12 @@ v2.30.0 已完成：
 - 护道摘要会带上当前游戏护道设置（模式、最高费用、最低攻击力、优先级、威胁阈值）、是否触发雇佣和失败消息摘要。
 - `AfkLoopManager` 记录 `lastGuardianAttempt`，自动护道失败后测试者点“复制摘要”即可回传原因，不需要翻日志。
 
+v2.31.0 已完成：
+
+- `decideAfkNextAction` 的遭遇分支改为 `autoHireGuardian || autoFight` 任一开启即可返回 `handleEncounter`。
+- 低境界 1 倍测试者现在可以只开“遭遇时自动雇护道”，不开“自动迎战”；护道失败仍停住等待手动处理，不会自动开打。
+- 新增 reason `encounter-auto-guardian-enabled`，日志/决策历史会显示为“已开启遭遇前自动护道”。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -257,7 +263,7 @@ v2.9.0 新增自动测试：
 
 - `selectCombatTalismans` 最多选择 5 种、跳过隐匿/神行/锁定符、同类取最高品质。
 - `selectNirvanaRebirthPill` 只选择五行通灵类涅槃重生丹，默认史诗以上。
-- `decideAfkNextAction` 只有 `autoFight` 开启时才把遭遇交给自动 handler。
+- `decideAfkNextAction` 只有 `autoHireGuardian` 或 `autoFight` 开启时才把遭遇交给自动 handler。
 
 v2.10.0 新增自动测试：
 
@@ -368,6 +374,11 @@ v2.30.0 新增自动测试：
 - `buildAfkDebugSnapshot` 会输出最近一次自动护道尝试，包括 encounter key、护道设置、是否触发雇佣和失败消息。
 - `buildAfkDebugSummary` 会脱敏并截断护道 encounter key 和失败消息，避免测试者回传 token-like 文本。
 
+v2.31.0 新增自动测试：
+
+- `decideAfkNextAction` 覆盖 `autoHireGuardian=true` 且 `autoFight=false` 时仍进入遭遇 handler，reason 为 `encounter-auto-guardian-enabled`。
+- 保留两个开关都关闭时遭遇等待、只开自动迎战时直接进入 handler 的回归覆盖。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -376,7 +387,7 @@ v2.30.0 新增自动测试：
 
 ## 下一步建议
 
-1. 用户实测 v2.30.0 低境界 1 倍模式：开启自动迎战和遭遇前自动护道，但不开复活/丹/符。
+1. 用户实测 v2.31.0 低境界 1 倍模式：只开启遭遇前自动护道，不开自动迎战/复活/丹/符。
 2. 继续用真实挂机摘要收集“自动探索停住”的事件原因，尤其记录 `automation.guardian` 的失败 message。
 3. 富裕 50 倍模式继续小号测试：用符、复活、用丹都保持 opt-in，观察战斗结算后恢复窗口是否够用。
 4. 用真实奇遇链继续记录每个 adventureId 的选项、奖励和后续步骤，并把摘要里的 `strategyHints.mapLine` 沉淀到策略表。

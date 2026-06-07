@@ -258,7 +258,7 @@
 
 `lingverse-explore-helper.user.js` v2.22.0 新增：
 
-- `autoHireGuardian`：AFK 遭遇处理中的独立开关，默认关闭；开启后必须同时开启自动迎战才会进入遭遇 handler。
+- `autoHireGuardian`：AFK 遭遇处理中的独立开关，默认关闭；v2.31.0 起开启后可独立进入遭遇 handler，不再要求同时开启自动迎战。
 - `getCurrentGuardianConfig()`：优先从真实页面 `getAutoHireConfig()` 读取当前自动护道设置，页面函数不可用时回退脚本配置。
 - `resolveEncounterGuardianAttempt(lastKey, snapshot, afkConfig, guardianConfig, options)`：按 encounter key 控制同一遭遇只尝试一次自动护道。
 - 执行顺序：可选用符 -> 可选自动护道 -> 未开自动护道时才直接迎战。
@@ -338,6 +338,14 @@
   - `hire-failed`：尝试后未触发护道，摘要会带失败消息。
 - `AfkLoopManager.lastGuardianAttempt` 在复制摘要时随用丹/用符尝试一起输出，服务低境界 1 倍护道模式测试。
 - 只读 Edge 证据（2026-06-08）：灵界标签 `292345702` 存在 `tryAutoHireProtectorForEncounter` 和 `getAutoHireConfig`；当时无遭遇、无自动探索、无死亡，神识 `3/2758`，未执行资源动作。
+
+`lingverse-explore-helper.user.js` v2.31.0 新增：
+
+- `decideAfkNextAction` 的遭遇分支从 `autoFight` 单条件改为 `autoHireGuardian || autoFight`。
+- 当只开自动护道时返回 `{ action: 'handleEncounter', reason: 'encounter-auto-guardian-enabled' }`，进入 handler 后仍由 `tryHireEncounterGuardian` 决定是否触发护道。
+- 护道失败仍返回 `false` 并暂停等待手动处理，不会因为未开启自动迎战而自动开打。
+- UI 文案从“迎战前按游戏护道设置自动雇护道”调整为“遭遇时按游戏护道设置自动雇护道”。
+- 只读 Edge 证据（2026-06-08）：灵界标签 `292345702` 有护道函数，当前无遭遇/战斗/死亡/自动探索，神识 `3/2758`，未执行资源动作。
 
 默认配置：
 

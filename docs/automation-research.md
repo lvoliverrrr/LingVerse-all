@@ -404,6 +404,13 @@
 - `buildAfkDebugSnapshot` 写入 `automation.waitDiagnosis`；`buildAfkDebugSummary` 脱敏保留；`buildAfkStatusReport` 在诊断激活时追加 `诊断:` 行。
 - 诊断只读取决策历史、配置和时间戳，不调用探索、购买、战斗、护道、复活、用符或用丹。
 
+`lingverse-explore-helper.user.js` v2.40.0 新增：
+
+- `detectGameUpdateNotice(text)` 识别真实 Edge 只读观察到的更新提示：`灵界已更新新版本，请点此刷新...`。
+- 快照新增 `blockers.gameUpdateNoticeActive`；摘要和可读状态报告会显示“游戏更新”阻塞。
+- 决策优先级：配置未启用后先检查游戏更新提示。默认 `autoReloadOnUpdate=false` 时等待；显式开启后才返回 `reloadPage`。
+- `reloadPage` 执行器只调用页面刷新，不调用探索、购买、战斗、护道、复活、用符或用丹。
+
 默认配置：
 
 - `enabled: false`
@@ -416,6 +423,7 @@
 - `autoRevive: false`
 - `reviveMaxPerRun: 0`
 - `autoHireGuardian: false`
+- `autoReloadOnUpdate: false`
 - `useTalismans: false`
 - `talismanMaxEncountersPerRun: 0`
 - `useNirvanaPill: false`

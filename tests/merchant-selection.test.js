@@ -299,6 +299,41 @@ test('decideAfkNextAction waits while merchant or encounter blocks the page', ()
     });
 });
 
+test('decideAfkNextAction handles game update notices without resource actions', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.detectGameUpdateNotice, 'function');
+    assert.equal(hooks.detectGameUpdateNotice('灵界已更新新版本，请点此刷新...'), true);
+    assert.equal(hooks.detectGameUpdateNotice('普通状态'), false);
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        gameUpdateNoticeActive: true,
+        isDead: true,
+        merchantActive: true
+    }, {
+        enabled: true,
+        autoRevive: true,
+        autoReloadOnUpdate: false
+    }, 1_000_000)), {
+        action: 'wait',
+        reason: 'game-update-available'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        gameUpdateNoticeActive: true,
+        isDead: true,
+        merchantActive: true
+    }, {
+        enabled: true,
+        autoRevive: true,
+        autoReloadOnUpdate: true
+    }, 1_000_000)), {
+        action: 'reloadPage',
+        reason: 'game-update-auto-reload'
+    });
+});
+
 test('selectCombatTalismans picks up to five unlocked combat talisman families', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -1137,6 +1172,7 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         meditationDurationSeconds: null
     });
     assert.deepEqual(snapshot.blockers, {
+        gameUpdateNoticeActive: false,
         merchantActive: false,
         encounterActive: true,
         combatActive: false,
@@ -1534,6 +1570,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         nirvanaMaxPerRun: 0,
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: false,
+        autoReloadOnUpdate: false,
         adventureMode: 'strategy',
         adventureChoiceIndex: 1,
         adventureChoiceMap: { 456: 2 }
@@ -1561,6 +1598,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         nirvanaMaxPerRun: 1,
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: true,
+        autoReloadOnUpdate: false,
         adventureMode: 'strategy',
         adventureChoiceIndex: 1,
         adventureChoiceMap: { 456: 2 }
@@ -1709,7 +1747,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.39.0',
+        scriptVersion: '2.40.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         page: {
             title: '灵界 LingVerse - 修仙世界',
@@ -1775,12 +1813,12 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
     assert.deepEqual(toPlain(report), {
         schema: 'lingverse-afk-status-report/v1',
         sourceSchema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.39.0',
+        scriptVersion: '2.40.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         headline: '挂机状态 · 等待 · 复活次数已到本轮上限',
         text: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.39.0',
+            '版本: 2.40.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -1794,7 +1832,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
         ].join('\n'),
         lines: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.39.0',
+            '版本: 2.40.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -1878,6 +1916,42 @@ test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', 
 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('诊断: 奇遇链等待处理已持续10分钟（连续5次），需要手动处理或配置自动策略'), true);
+});
+
+test('buildAfkStatusReport includes game update blockers from snapshots', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const state = {
+        gameUpdateNoticeActive: true,
+        spirit: 120,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    };
+    const config = {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        autoReloadOnUpdate: false
+    };
+    const decision = hooks.decideAfkNextAction(state, config, 1_000_000);
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot(state, config, decision, {
+        capturedAt: '2026-06-08T07:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    assert.equal(summary.blockers.gameUpdateNoticeActive, true);
+    assert.deepEqual(summary.decision, {
+        action: 'wait',
+        reason: 'game-update-available'
+    });
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
+    assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2007,7 +2081,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.39.0',
+        scriptVersion: '2.40.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {
@@ -2032,6 +2106,7 @@ test('AFK config packs export normalized settings and import safely', () => {
             nirvanaMaxPerRun: 0,
             queueNirvanaPill: false,
             autoDeclinePlayerEncounter: true,
+            autoReloadOnUpdate: false,
             adventureMode: 'strategy',
             adventureChoiceIndex: 1,
             adventureChoiceMap: { 456: 2, 789: 1 }
@@ -2113,6 +2188,7 @@ test('mergeAdventureStrategyImport adds replay hints without enabling AFK', () =
             nirvanaMaxPerRun: 0,
             queueNirvanaPill: false,
             autoDeclinePlayerEncounter: false,
+            autoReloadOnUpdate: false,
             adventureMode: 'strategy',
             adventureChoiceIndex: 1,
             adventureChoiceMap: { 111: 1, 456: 2, 789: 1 }

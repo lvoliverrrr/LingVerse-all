@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.39.0
+// @version      2.40.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.39.0';
+    const SCRIPT_VERSION = '2.40.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -68,6 +68,7 @@
             nirvanaMaxPerRun: 0,      // 单次挂机启动最多用丹次数，0 为不限
             queueNirvanaPill: false,  // 已有五行通灵时是否继续排队
             autoDeclinePlayerEncounter: false, // 陌生道友邂逅默认暂停，开启后自动婉拒/离开
+            autoReloadOnUpdate: false, // 页面提示游戏已更新时是否自动刷新，默认关闭
             adventureMode: 'pause',    // 奇遇链默认暂停，避免自动选择剧情分支
             adventureChoiceIndex: 1,    // fixed 模式下点击第几个奇遇选项，按界面顺序从1开始
             adventureChoiceMap: {}      // strategy 模式下按 adventureId 固定选择
@@ -129,6 +130,7 @@
         nirvanaMaxPerRun: 0,
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: false,
+        autoReloadOnUpdate: false,
         adventureMode: 'pause',
         adventureChoiceIndex: 1,
         adventureChoiceMap: {}
@@ -157,6 +159,12 @@
             }
         });
         return selected;
+    }
+
+    function detectGameUpdateNotice(text) {
+        const source = String(text || '');
+        return source.indexOf('灵界已更新新版本') >= 0 ||
+            (source.indexOf('已更新新版本') >= 0 && source.indexOf('刷新') >= 0);
     }
 
     function resolveApiObject() {
@@ -273,6 +281,7 @@
         cfg.nirvanaMaxPerRun = clampNumber(cfg.nirvanaMaxPerRun, 0, 999, 0);
         cfg.queueNirvanaPill = !!cfg.queueNirvanaPill;
         cfg.autoDeclinePlayerEncounter = !!cfg.autoDeclinePlayerEncounter;
+        cfg.autoReloadOnUpdate = !!cfg.autoReloadOnUpdate;
         cfg.adventureMode = cfg.adventureMode === 'fixed' || cfg.adventureMode === 'strategy' ? cfg.adventureMode : 'pause';
         cfg.adventureChoiceIndex = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
         cfg.adventureChoiceMap = normalizeAdventureChoiceMap(cfg.adventureChoiceMap);
@@ -322,6 +331,8 @@
     function formatAfkReason(reason) {
         const labels = {
             disabled: '未启用',
+            'game-update-available': '游戏有更新，等待刷新',
+            'game-update-auto-reload': '游戏有更新，自动刷新',
             'merchant-active': '云游商人处理中',
             'encounter-active': '遭遇或战斗处理中',
             'adventure-active': '奇遇链等待处理',
@@ -365,7 +376,8 @@
             startAutoExplore: '启动探索',
             handleEncounter: '处理遭遇',
             handlePlayerEncounter: '处理陌生道友',
-            handleAdventure: '处理奇遇'
+            handleAdventure: '处理奇遇',
+            reloadPage: '刷新页面'
         };
         return labels[action] || action || '等待';
     }
@@ -1342,6 +1354,11 @@
         if (!cfg.enabled) {
             return { action: 'idle', reason: 'disabled' };
         }
+        if (snapshot.gameUpdateNoticeActive) {
+            return cfg.autoReloadOnUpdate
+                ? { action: 'reloadPage', reason: 'game-update-auto-reload' }
+                : { action: 'wait', reason: 'game-update-available' };
+        }
         if (snapshot.immortalPrisonActive) {
             return { action: 'wait', reason: 'immortal-prison' };
         }
@@ -1473,6 +1490,7 @@
             maxSpirit: numberOrNull(record && record.maxSpirit),
             isMeditating: !!(record && record.isMeditating),
             autoExploreRunning: !!(record && record.autoExploreRunning),
+            gameUpdateNoticeActive: !!(record && record.gameUpdateNoticeActive),
             merchantActive: !!(record && record.merchantActive),
             encounterActive: !!(record && record.encounterActive),
             playerEncounterActive: !!(record && record.playerEncounterActive),
@@ -1623,6 +1641,7 @@
                 isMeditating: !!player.isMeditating
             },
             blockers: {
+                gameUpdateNoticeActive: !!blockers.gameUpdateNoticeActive,
                 merchantActive: !!blockers.merchantActive,
                 encounterActive: !!blockers.encounterActive,
                 combatActive: !!blockers.combatActive,
@@ -1665,6 +1684,7 @@
                 talismanMaxEncountersPerRun: numberOrNull(config.talismanMaxEncountersPerRun),
                 nirvanaMaxPerRun: numberOrNull(config.nirvanaMaxPerRun),
                 adventureMode: String(config.adventureMode || ''),
+                autoReloadOnUpdate: !!config.autoReloadOnUpdate,
                 risks: {
                     autoFight: !!config.autoFight,
                     autoHireGuardian: !!config.autoHireGuardian,
@@ -1685,6 +1705,7 @@
                     maxSpirit: numberOrNull(record && record.maxSpirit),
                     isMeditating: !!(record && record.isMeditating),
                     autoExploreRunning: !!(record && record.autoExploreRunning),
+                    gameUpdateNoticeActive: !!(record && record.gameUpdateNoticeActive),
                     merchantActive: !!(record && record.merchantActive),
                     encounterActive: !!(record && record.encounterActive),
                     playerEncounterActive: !!(record && record.playerEncounterActive),
@@ -1715,6 +1736,7 @@
         const player = summary.player && typeof summary.player === 'object' ? summary.player : {};
         const blockers = summary.blockers && typeof summary.blockers === 'object' ? summary.blockers : {};
         const labels = [];
+        if (blockers.gameUpdateNoticeActive) labels.push('游戏更新');
         if (player.isDead) labels.push('死亡');
         if (blockers.immortalPrisonActive) labels.push('混天典狱');
         if (blockers.merchantActive) labels.push('云游商人');
@@ -1984,6 +2006,7 @@
                 meditationDurationSeconds: numberOrNull(snapshot.meditationDurationSeconds)
             },
             blockers: {
+                gameUpdateNoticeActive: !!snapshot.gameUpdateNoticeActive,
                 merchantActive: !!snapshot.merchantActive,
                 encounterActive: !!snapshot.encounterActive,
                 combatActive: !!snapshot.combatActive,
@@ -2041,6 +2064,7 @@
                 nirvanaMaxPerRun: cfg.nirvanaMaxPerRun,
                 queueNirvanaPill: cfg.queueNirvanaPill,
                 autoDeclinePlayerEncounter: cfg.autoDeclinePlayerEncounter,
+                autoReloadOnUpdate: cfg.autoReloadOnUpdate,
                 adventureMode: cfg.adventureMode,
                 adventureChoiceIndex: cfg.adventureChoiceIndex,
                 adventureChoiceMap: normalizeAdventureChoiceMap(cfg.adventureChoiceMap),
@@ -2063,6 +2087,7 @@
     _win.LingVerseAutoMapTestHooks = Object.assign({}, _win.LingVerseAutoMapTestHooks, {
         parseMerchantPrice,
         selectMerchantItem,
+        detectGameUpdateNotice,
         resolveApiObject,
         normalizeAfkLoopConfig,
         normalizeAfkResourceUsage,
@@ -2344,6 +2369,7 @@
         cfg.nirvanaMaxPerRun = clampNumber($('#am-afk-nirvana-max-per-run')?.value, 0, 999, cfg.nirvanaMaxPerRun || 0);
         cfg.queueNirvanaPill = $('#am-afk-queue-nirvana')?.checked ?? cfg.queueNirvanaPill;
         cfg.autoDeclinePlayerEncounter = $('#am-afk-auto-decline-player')?.checked ?? cfg.autoDeclinePlayerEncounter;
+        cfg.autoReloadOnUpdate = $('#am-afk-auto-reload-update')?.checked ?? cfg.autoReloadOnUpdate;
         cfg.adventureMode = $('#am-afk-adventure-mode')?.value || cfg.adventureMode || 'pause';
         cfg.adventureChoiceIndex = clampNumber($('#am-afk-adventure-choice')?.value, 1, 10, cfg.adventureChoiceIndex || 1);
         cfg.adventureChoiceMap = normalizeAdventureChoiceMap($('#am-afk-adventure-map')?.value ?? cfg.adventureChoiceMap);
@@ -2632,6 +2658,10 @@
                             </div>
                         </div>
                         <div style="display:grid;grid-template-columns:1fr;gap:6px;margin-bottom:8px;">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="checkbox" id="am-afk-auto-reload-update" ${CONFIG.afkLoop.autoReloadOnUpdate?'checked':''} style="cursor:pointer;">
+                                <span style="font-size:12px;color:${text};">游戏提示更新时自动刷新页面</span>
+                            </label>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-auto-fight" ${CONFIG.afkLoop.autoFight?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">遭遇妖兽后自动迎战</span>
@@ -2952,6 +2982,7 @@
             const afkAutoFightEl = $('#am-afk-auto-fight');
             const afkAutoHireGuardianEl = $('#am-afk-auto-hire-guardian');
             const afkAutoDeclinePlayerEl = $('#am-afk-auto-decline-player');
+            const afkAutoReloadUpdateEl = $('#am-afk-auto-reload-update');
             const afkAdventureModeEl = $('#am-afk-adventure-mode');
             const afkAdventureChoiceEl = $('#am-afk-adventure-choice');
             const afkAdventureMapEl = $('#am-afk-adventure-map');
@@ -2988,6 +3019,7 @@
             if (afkAutoFightEl) afkAutoFightEl.checked = CONFIG.afkLoop.autoFight;
             if (afkAutoHireGuardianEl) afkAutoHireGuardianEl.checked = CONFIG.afkLoop.autoHireGuardian;
             if (afkAutoDeclinePlayerEl) afkAutoDeclinePlayerEl.checked = CONFIG.afkLoop.autoDeclinePlayerEncounter;
+            if (afkAutoReloadUpdateEl) afkAutoReloadUpdateEl.checked = CONFIG.afkLoop.autoReloadOnUpdate;
             if (afkAdventureModeEl) afkAdventureModeEl.value = CONFIG.afkLoop.adventureMode;
             if (afkAdventureChoiceEl) afkAdventureChoiceEl.value = CONFIG.afkLoop.adventureChoiceIndex;
             if (afkAdventureMapEl) afkAdventureMapEl.value = formatAdventureChoiceMap(CONFIG.afkLoop.adventureChoiceMap);
@@ -3735,6 +3767,7 @@
                 maxSpirit: numberOrNull(snapshot && snapshot.maxSpirit),
                 isMeditating: !!(snapshot && snapshot.isMeditating),
                 autoExploreRunning: !!(snapshot && snapshot.autoExploreRunning),
+                gameUpdateNoticeActive: !!(snapshot && snapshot.gameUpdateNoticeActive),
                 merchantActive: !!(snapshot && snapshot.merchantActive),
                 encounterActive: !!(snapshot && snapshot.encounterActive),
                 playerEncounterActive: !!(snapshot && snapshot.playerEncounterActive),
@@ -3809,6 +3842,7 @@
             const combatPanel = $('#combatPanel');
             const talismanDialog = $('#encounterTalismanDialog');
             const adventureOverlay = $('#adventureOverlay');
+            const gameUpdateNoticeActive = detectGameUpdateNotice(document.body ? document.body.innerText : '');
             const adventureStep = _win._lingverseAutoMapLastAdventureStep || null;
             const playerEncounterActive = [
                 '#pvpEncounterModal',
@@ -3854,6 +3888,7 @@
                 canExplore: player.canExplore,
                 exploreDisabledReason: player.exploreDisabledReason,
                 isDead: !!(player.isDead || _win.playerDead),
+                gameUpdateNoticeActive,
                 immortalPrisonActive: !!(player.currentArea && String(player.currentArea).indexOf('immortal_prison_') === 0),
                 adventureActive,
                 adventureId: adventureActive && adventureStep ? adventureStep.adventureId : undefined,
@@ -3893,6 +3928,11 @@
             }
 
             this.lastDecisionKey = key;
+            if (decision.action === 'reloadPage') {
+                Logger.info(`自动挂机刷新页面：${this.formatReason(decision.reason)}`);
+                this.reloadGamePage();
+                return;
+            }
             if (decision.action === 'startMeditation') {
                 Logger.info(`自动挂机进入冥想：${this.formatReason(decision.reason)}`);
                 await this.startMeditation();
@@ -3926,6 +3966,18 @@
             if (decision.action === 'revive') {
                 Logger.warn('自动挂机尝试灵石复活');
                 await this.revive(cfg);
+            }
+        },
+
+        reloadGamePage() {
+            try {
+                if (typeof location !== 'undefined' && location.reload) {
+                    location.reload();
+                } else if (_win.location && _win.location.reload) {
+                    _win.location.reload();
+                }
+            } catch (e) {
+                Logger.warn(`自动刷新页面失败: ${e.message || e}`);
             }
         },
 

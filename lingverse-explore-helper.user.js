@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.25.0
+// @version      2.26.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.25.0';
+    const SCRIPT_VERSION = '2.26.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -589,10 +589,83 @@
         return candidates[0] || null;
     }
 
-    function hasActiveFiveRootBuff(player) {
+    function getActiveFiveRootBuff(player, now) {
+        const currentTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
         const expire = Number(player && player.fiveRootBuffExpire);
         const grade = Number(player && player.fiveRootBuffGrade);
-        return Number.isFinite(expire) && Number.isFinite(grade) && grade > 0 && expire > Date.now();
+        const hasBuff = Number.isFinite(expire) && Number.isFinite(grade) && grade > 0 && expire > currentTime;
+        return {
+            active: hasBuff,
+            grade: Number.isFinite(grade) && grade > 0 ? grade : null,
+            expire: Number.isFinite(expire) && expire > 0 ? expire : null
+        };
+    }
+
+    function hasActiveFiveRootBuff(player, now) {
+        return getActiveFiveRootBuff(player, now).active;
+    }
+
+    function normalizeNirvanaPillAttempt(attempt) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        const pill = raw.pill && typeof raw.pill === 'object' ? raw.pill : null;
+        return {
+            shouldUse: !!raw.shouldUse,
+            reason: String(raw.reason || ''),
+            pill: pill ? {
+                itemId: pill.itemId ?? null,
+                templateId: String(pill.templateId || ''),
+                name: String(pill.name || ''),
+                rarity: optionalNumberOrNull(pill.rarity),
+                quantity: optionalNumberOrNull(pill.quantity)
+            } : null,
+            minRarity: optionalNumberOrNull(raw.minRarity),
+            activeBuffGrade: optionalNumberOrNull(raw.activeBuffGrade),
+            activeBuffExpire: optionalNumberOrNull(raw.activeBuffExpire)
+        };
+    }
+
+    function resolveNirvanaRebirthPillAttempt(player, items, config, now) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const activeBuff = getActiveFiveRootBuff(player || {}, now);
+        const base = {
+            minRarity: cfg.nirvanaMinRarity,
+            activeBuffGrade: activeBuff.grade,
+            activeBuffExpire: activeBuff.expire
+        };
+
+        if (!cfg.useNirvanaPill) {
+            return {
+                shouldUse: false,
+                reason: 'disabled',
+                pill: null,
+                ...base
+            };
+        }
+        if (activeBuff.active && !cfg.queueNirvanaPill) {
+            return {
+                shouldUse: false,
+                reason: 'active-five-root-buff',
+                pill: null,
+                ...base
+            };
+        }
+
+        const pill = selectNirvanaRebirthPill(items, { minRarity: cfg.nirvanaMinRarity });
+        if (!pill) {
+            return {
+                shouldUse: false,
+                reason: 'no-matching-pill',
+                pill: null,
+                ...base
+            };
+        }
+
+        return {
+            shouldUse: true,
+            reason: 'pill-ready',
+            pill,
+            ...base
+        };
     }
 
     function classifyExploreInterruption(data, config) {
@@ -746,6 +819,11 @@
         return Number.isFinite(parsed) ? parsed : null;
     }
 
+    function optionalNumberOrNull(value) {
+        if (value === null || typeof value === 'undefined' || value === '') return null;
+        return numberOrNull(value);
+    }
+
     function resolvePageInfo(context) {
         const supplied = context && context.page && typeof context.page === 'object' ? context.page : {};
         let title = supplied.title || '';
@@ -811,6 +889,25 @@
         return sanitizeDebugText(match ? match[0] : stripped, 200);
     }
 
+    function sanitizeDebugName(value, limit) {
+        return sanitizeDebugText(value, limit).replace(/[?#].*$/, '');
+    }
+
+    function summarizeNirvanaPillAttempt(attempt) {
+        const normalized = normalizeNirvanaPillAttempt(attempt);
+        const pill = normalized.pill || {};
+        return {
+            shouldUse: normalized.shouldUse,
+            reason: normalized.reason,
+            pillName: sanitizeDebugName(pill.name, 80),
+            pillTemplateId: sanitizeDebugText(pill.templateId, 80),
+            pillRarity: optionalNumberOrNull(pill.rarity),
+            minRarity: optionalNumberOrNull(normalized.minRarity),
+            activeBuffGrade: optionalNumberOrNull(normalized.activeBuffGrade),
+            activeBuffExpire: optionalNumberOrNull(normalized.activeBuffExpire)
+        };
+    }
+
     function buildAfkDebugSummary(debugSnapshot) {
         const full = debugSnapshot || {};
         const page = full.page && typeof full.page === 'object' ? full.page : {};
@@ -857,7 +954,8 @@
                 autoExploreRunning: !!automation.autoExploreRunning,
                 autoExplorePending: !!automation.autoExplorePending,
                 exploreStalled: !!automation.exploreStalled,
-                postReviveResume: !!automation.postReviveResume
+                postReviveResume: !!automation.postReviveResume,
+                nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill)
             },
             adventure: {
                 id: adventure.id || null,
@@ -954,7 +1052,8 @@
                 autoExploreRunning: !!snapshot.autoExploreRunning,
                 autoExplorePending: !!snapshot.autoExplorePending,
                 exploreStalled: !!snapshot.exploreStalled,
-                postReviveResume: !!snapshot.postReviveResume
+                postReviveResume: !!snapshot.postReviveResume,
+                nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt)
             },
             adventure: {
                 id: adventureId,
@@ -1020,6 +1119,7 @@
         buildGuardianHirePayload,
         resolveEncounterGuardianAttempt,
         selectNirvanaRebirthPill,
+        resolveNirvanaRebirthPillAttempt,
         getCurrentGuardianConfig,
         classifyExploreInterruption,
         normalizeAdventureChoiceMap,
@@ -2289,6 +2389,7 @@
         encounterBusy: false,
         lastTalismanEncounterKey: '',
         lastGuardianEncounterKey: '',
+        lastNirvanaPillAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
         decisionHistory: [],
@@ -2343,7 +2444,8 @@
                     capturedAt: new Date(now).toISOString(),
                     page: { title: document.title || '', url: location.href || '' },
                     decisionHistory: this.getDecisionHistory(),
-                    recentLogs: Logger.getRecentEntries()
+                    recentLogs: Logger.getRecentEntries(),
+                    nirvanaPillAttempt: this.lastNirvanaPillAttempt
                 });
                 const debugSummary = buildAfkDebugSummary(debugSnapshot);
                 const text = JSON.stringify(debugSummary, null, 2);
@@ -2547,7 +2649,7 @@
             }
             if (decision.action === 'startAutoExplore') {
                 Logger.info(`自动挂机启动探索：${this.formatReason(decision.reason)}，倍率×${cfg.exploreMultiplier}`);
-                await this.startAutoExplore(cfg.exploreMultiplier);
+                await this.startAutoExplore(cfg.exploreMultiplier, cfg);
                 return;
             }
             if (decision.action === 'handleEncounter') {
@@ -2605,9 +2707,9 @@
             }
         },
 
-        async startAutoExplore(multiplier) {
+        async startAutoExplore(multiplier, cfg) {
             try {
-                await this.maybeUseNirvanaRebirthPill(CONFIG.afkLoop);
+                await this.maybeUseNirvanaRebirthPill(cfg || CONFIG.afkLoop);
                 this.setExploreMultiplier(multiplier);
                 const toggle = $('#autoExploreToggle');
                 if (toggle) toggle.checked = true;
@@ -2628,8 +2730,12 @@
         },
 
         async maybeUseNirvanaRebirthPill(cfg) {
-            if (!cfg.useNirvanaPill) return;
-            if (!cfg.queueNirvanaPill && hasActiveFiveRootBuff(_win._lastPlayerData || {})) {
+            const normalizedCfg = normalizeAfkLoopConfig(cfg || {});
+            const now = Date.now();
+            let attempt = resolveNirvanaRebirthPillAttempt(_win._lastPlayerData || {}, [], normalizedCfg, now);
+            this.lastNirvanaPillAttempt = attempt;
+            if (attempt.reason === 'disabled') return;
+            if (attempt.reason === 'active-five-root-buff') {
                 Logger.info('已有五行通灵效果，跳过涅槃重生丹');
                 return;
             }
@@ -2643,12 +2749,14 @@
                 return;
             }
 
-            const pill = selectNirvanaRebirthPill(items, { minRarity: cfg.nirvanaMinRarity });
-            if (!pill) {
-                Logger.info(`未找到品质满足要求的涅槃重生丹（最低${cfg.nirvanaMinRarity}阶），跳过`);
+            attempt = resolveNirvanaRebirthPillAttempt(_win._lastPlayerData || {}, items, normalizedCfg, now);
+            this.lastNirvanaPillAttempt = attempt;
+            if (!attempt.shouldUse || !attempt.pill) {
+                Logger.info(`未找到品质满足要求的涅槃重生丹（最低${attempt.minRarity}阶），跳过`);
                 return;
             }
 
+            const pill = attempt.pill;
             try {
                 Logger.info(`自动使用涅槃重生丹: ${pill.name || pill.templateId}`);
                 const res = await API.useItem(pill.itemId, 1);

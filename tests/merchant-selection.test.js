@@ -554,6 +554,83 @@ test('selectNirvanaRebirthPill only selects configured five-root rebirth pills',
     });
 });
 
+test('resolveNirvanaRebirthPillAttempt explains rich-mode pill use decisions', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.resolveNirvanaRebirthPillAttempt, 'function');
+
+    const now = 1_000_000;
+    const items = [
+        { id: 1, templateId: 'pill_nirvana_4', name: '史诗九转还魂丹', type: 'pill', rarity: 4, quantity: 1 },
+        { id: 2, templateId: 'bp_pill_rebirth_3', name: '稀有涅槃重生丹', type: 'pill', rarity: 3, quantity: 1 },
+        { id: 3, templateId: 'bp_pill_rebirth_4', name: '史诗涅槃重生丹', type: 'pill', rarity: 4, quantity: 2 }
+    ];
+
+    assert.deepEqual(toPlain(hooks.resolveNirvanaRebirthPillAttempt({}, items, {
+        useNirvanaPill: false,
+        nirvanaMinRarity: 4
+    }, now)), {
+        shouldUse: false,
+        reason: 'disabled',
+        pill: null,
+        minRarity: 4,
+        activeBuffGrade: null,
+        activeBuffExpire: null
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveNirvanaRebirthPillAttempt({
+        fiveRootBuffGrade: 4,
+        fiveRootBuffExpire: now + 60_000
+    }, items, {
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: false
+    }, now)), {
+        shouldUse: false,
+        reason: 'active-five-root-buff',
+        pill: null,
+        minRarity: 4,
+        activeBuffGrade: 4,
+        activeBuffExpire: now + 60_000
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveNirvanaRebirthPillAttempt({
+        fiveRootBuffGrade: 4,
+        fiveRootBuffExpire: now + 60_000
+    }, items, {
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: true
+    }, now)), {
+        shouldUse: true,
+        reason: 'pill-ready',
+        pill: {
+            itemId: 3,
+            templateId: 'bp_pill_rebirth_4',
+            name: '史诗涅槃重生丹',
+            rarity: 4,
+            quantity: 1
+        },
+        minRarity: 4,
+        activeBuffGrade: 4,
+        activeBuffExpire: now + 60_000
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveNirvanaRebirthPillAttempt({}, items, {
+        useNirvanaPill: true,
+        nirvanaMinRarity: 5,
+        queueNirvanaPill: false
+    }, now)), {
+        shouldUse: false,
+        reason: 'no-matching-pill',
+        pill: null,
+        minRarity: 5,
+        activeBuffGrade: null,
+        activeBuffExpire: null
+    });
+});
+
 test('decideAfkNextAction handles encounters only when auto fight is enabled', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -963,7 +1040,15 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         capturedAt: '2026-06-08T00:00:00.000Z',
         page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
         decisionHistory,
-        recentLogs
+        recentLogs,
+        nirvanaPillAttempt: {
+            shouldUse: false,
+            reason: 'active-five-root-buff',
+            pill: null,
+            minRarity: 4,
+            activeBuffGrade: 4,
+            activeBuffExpire: 1_234_567
+        }
     }));
 
     assert.equal(snapshot.schema, 'lingverse-afk-debug-snapshot/v1');
@@ -1003,6 +1088,14 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
     assert.equal(snapshot.config.exploreMultiplier, 50);
     assert.equal(snapshot.config.autoFight, true);
     assert.equal(snapshot.config.resumeWindowSeconds, 60);
+    assert.deepEqual(snapshot.automation.nirvanaPill, {
+        shouldUse: false,
+        reason: 'active-five-root-buff',
+        pill: null,
+        minRarity: 4,
+        activeBuffGrade: 4,
+        activeBuffExpire: 1_234_567
+    });
     assert.equal(snapshot.history.decisionTail.length, 20);
     assert.equal(snapshot.history.decisionTail[0].spirit, 5);
     assert.equal(snapshot.history.decisionTail[19].adventureId, 456);
@@ -1072,7 +1165,21 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
             at: `2026-06-08T03:${String(index).padStart(2, '0')}:00.000Z`,
             type: index % 2 ? 'warning' : 'info',
             message: index === 11 ? longMessage : `普通日志${index}`
-        }))
+        })),
+        nirvanaPillAttempt: {
+            shouldUse: true,
+            reason: 'pill-ready',
+            pill: {
+                itemId: 3,
+                templateId: 'bp_pill_rebirth_4',
+                name: '史诗涅槃重生丹?token=pill-secret',
+                rarity: 4,
+                quantity: 1
+            },
+            minRarity: 4,
+            activeBuffGrade: null,
+            activeBuffExpire: null
+        }
     });
 
     const summary = toPlain(hooks.buildAfkDebugSummary(debugSnapshot));
@@ -1096,6 +1203,16 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
     assert.equal(summary.adventure.id, 999);
     assert.equal(summary.adventure.choices.length, 3);
     assert.equal(summary.adventure.choices[2].endsWith('...'), true);
+    assert.deepEqual(summary.automation.nirvanaPill, {
+        shouldUse: true,
+        reason: 'pill-ready',
+        pillName: '史诗涅槃重生丹',
+        pillTemplateId: 'bp_pill_rebirth_4',
+        pillRarity: 4,
+        minRarity: 4,
+        activeBuffGrade: null,
+        activeBuffExpire: null
+    });
     assert.equal(summary.config.exploreMultiplier, 50);
     assert.deepEqual(summary.config.risks, {
         autoFight: true,

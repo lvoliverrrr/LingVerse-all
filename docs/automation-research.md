@@ -295,6 +295,13 @@
 - `maybeUseNirvanaRebirthPill` 复用该纯函数，并记录 `lastNirvanaPillAttempt`。
 - 调试快照和脱敏摘要会输出用丹尝试结果，便于测试富裕 50 倍模式时判断“为什么没吃丹”。
 
+`lingverse-explore-helper.user.js` v2.27.0 新增：
+
+- `postReviveResume` 和 `postInteractionResume` 分离：复活后恢复和战斗/奇遇/护道等互动后恢复在快照里不再混成一个布尔。
+- `decideAfkNextAction` 对 `postInteractionResume` 单独返回 `post-interaction-ready` / `post-interaction-low-spirit`。
+- `fightEncounter(cfg)` 触发迎战后调用 `schedulePostInteractionResume(cfg)`，按本轮归一化配置中的 `resumeWindowSeconds` 继续调度下一次检查。
+- 目的：富裕 50 倍探索遇怪后，自动用符/迎战/结算完成时能在恢复窗口内主动回到探索，而不是等常规 tick 或被旧状态误判。
+
 默认配置：
 
 - `enabled: false`
@@ -347,6 +354,9 @@
   - `autoRevive` 开启且死亡 -> `revive`
   - 复活后短时间内神识足够 -> `startAutoExplore`，沿用配置倍率。
   - 复活后神识不足 -> `startMeditation`。
+- 互动后恢复：
+  - 自动迎战、自动护道、奇遇/陌生道友处理后进入 `postInteractionResume`。
+  - 恢复窗口内神识足够 -> `startAutoExplore`；神识不足 -> `startMeditation`。
 - 调试摘要：
   - `buildAfkDebugSummary` 去掉页面 URL 的 query/hash，脱敏常见 token/session/key 参数。
   - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞和高风险开关。

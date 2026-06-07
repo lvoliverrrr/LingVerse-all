@@ -734,7 +734,7 @@ test('classifyExploreInterruption categorizes auto-explore stopping events', () 
     });
 });
 
-test('decideAfkNextAction resumes exploration after revive or meditates if spirit is low', () => {
+test('decideAfkNextAction resumes exploration after revive or interaction windows', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
     const config = {
@@ -776,6 +776,30 @@ test('decideAfkNextAction resumes exploration after revive or meditates if spiri
     }, config, 1_000_000)), {
         action: 'startMeditation',
         reason: 'post-revive-low-spirit'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        postInteractionResume: true,
+        isDead: false,
+        isMeditating: false,
+        spirit: 100,
+        spiritCost: 4,
+        canExplore: true
+    }, config, 1_000_000)), {
+        action: 'startAutoExplore',
+        reason: 'post-interaction-ready'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        postInteractionResume: true,
+        isDead: false,
+        isMeditating: false,
+        spirit: 3,
+        spiritCost: 4,
+        canExplore: true
+    }, config, 1_000_000)), {
+        action: 'startMeditation',
+        reason: 'post-interaction-low-spirit'
     });
 });
 
@@ -1020,6 +1044,7 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         adventureChoices: ['入谷', '绕行'],
         autoExploreRunning: false,
         autoExplorePending: true,
+        postInteractionResume: true,
         exploreStalled: false
     };
     const decision = hooks.decideAfkNextAction(state, config, 1_000_000);
@@ -1088,6 +1113,7 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
     assert.equal(snapshot.config.exploreMultiplier, 50);
     assert.equal(snapshot.config.autoFight, true);
     assert.equal(snapshot.config.resumeWindowSeconds, 60);
+    assert.equal(snapshot.automation.postInteractionResume, true);
     assert.deepEqual(snapshot.automation.nirvanaPill, {
         shouldUse: false,
         reason: 'active-five-root-buff',
@@ -1131,6 +1157,7 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
         adventureChoices: ['接受试炼', '绕路离开', `${'观察'.repeat(80)}?token=choice-secret`],
         autoExploreRunning: false,
         autoExplorePending: true,
+        postInteractionResume: true,
         exploreStalled: true
     }, {
         enabled: true,
@@ -1213,6 +1240,7 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
         activeBuffGrade: null,
         activeBuffExpire: null
     });
+    assert.equal(summary.automation.postInteractionResume, true);
     assert.equal(summary.config.exploreMultiplier, 50);
     assert.deepEqual(summary.config.risks, {
         autoFight: true,

@@ -200,6 +200,12 @@ v2.26.0 已完成：
 - “复制摘要”会带上最近一次涅槃重生丹尝试结果，测试者反馈时能直接看出是没开、已有 buff、没找到史诗丹，还是准备使用。
 - `startAutoExplore` 现在使用本轮归一化后的挂机配置调用用丹逻辑，避免探索前用丹读取到旧的全局配置。
 
+v2.27.0 已完成：
+
+- `decideAfkNextAction` 新增 `postInteractionResume` 分支，区别于复活恢复；事件/战斗后神识足够返回 `post-interaction-ready`，神识不足返回 `post-interaction-low-spirit`。
+- `buildSnapshot` 分别输出 `postReviveResume` 和 `postInteractionResume`，调试快照/摘要可判断到底是复活后恢复，还是战斗/奇遇/护道等互动后恢复。
+- 自动迎战成功触发后会设置 `postInteractionResumeUntil`，并按 `resumeWindowSeconds` 安排下一次检查，帮助富裕 50 倍模式在战斗结算后继续探索循环。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -323,6 +329,11 @@ v2.26.0 新增自动测试：
 - `resolveNirvanaRebirthPillAttempt` 覆盖用丹关闭、已有五行通灵且不排队、允许排队、没有满足品质丹药四种路径。
 - `buildAfkDebugSnapshot` / `buildAfkDebugSummary` 会输出涅槃重生丹尝试结果，摘要中丹药名称也会脱敏。
 
+v2.27.0 新增自动测试：
+
+- `decideAfkNextAction` 覆盖 `postInteractionResume=true` 时神识足够继续探索、神识不足回冥想。
+- `buildAfkDebugSnapshot` / `buildAfkDebugSummary` 会输出 `postInteractionResume`，方便定位战斗/事件后为什么没有继续。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -331,7 +342,7 @@ v2.26.0 新增自动测试：
 
 ## 下一步建议
 
-1. 用户实测 v2.26.0 低境界 1 倍模式：开启自动迎战和遭遇前自动护道，但不开复活/丹/符。
+1. 用户实测 v2.27.0 低境界 1 倍模式：开启自动迎战和遭遇前自动护道，但不开复活/丹/符。
 2. 继续用真实挂机日志收集“自动探索停住”的事件原因，尤其记录护道失败 message。
 3. 富裕 50 倍模式继续小号测试：用符、复活、用丹都保持 opt-in，观察战斗结算后恢复窗口是否够用。
 4. 用真实奇遇链继续记录每个 adventureId 的选项、奖励和后续步骤。

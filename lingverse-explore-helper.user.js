@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.26.0
+// @version      2.27.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.26.0';
+    const SCRIPT_VERSION = '2.27.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -806,6 +806,12 @@
             }
             return { action: 'startAutoExplore', reason: 'post-revive-ready' };
         }
+        if (snapshot.postInteractionResume) {
+            if (lowSpirit) {
+                return { action: 'startMeditation', reason: 'post-interaction-low-spirit' };
+            }
+            return { action: 'startAutoExplore', reason: 'post-interaction-ready' };
+        }
 
         if (lowSpirit) {
             return { action: 'startMeditation', reason: 'spirit-below-threshold' };
@@ -955,6 +961,7 @@
                 autoExplorePending: !!automation.autoExplorePending,
                 exploreStalled: !!automation.exploreStalled,
                 postReviveResume: !!automation.postReviveResume,
+                postInteractionResume: !!automation.postInteractionResume,
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill)
             },
             adventure: {
@@ -1053,6 +1060,7 @@
                 autoExplorePending: !!snapshot.autoExplorePending,
                 exploreStalled: !!snapshot.exploreStalled,
                 postReviveResume: !!snapshot.postReviveResume,
+                postInteractionResume: !!snapshot.postInteractionResume,
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt)
             },
             adventure: {
@@ -2617,7 +2625,8 @@
                 encounterMonsterLevel: _win._currentEncounterMonsterLevel,
                 autoExploreRunning,
                 autoExplorePending,
-                postReviveResume: this.postReviveResumeUntil > now || this.postInteractionResumeUntil > now,
+                postReviveResume: this.postReviveResumeUntil > now,
+                postInteractionResume: this.postInteractionResumeUntil > now,
                 exploreStalled
             };
         },
@@ -2825,7 +2834,7 @@
                     return;
                 }
                 if (cfg.autoFight) {
-                    await this.fightEncounter();
+                    await this.fightEncounter(cfg);
                 }
             } finally {
                 this.encounterBusy = false;
@@ -2943,22 +2952,36 @@
             if (usedKinds > 0) this.refreshGameData();
         },
 
-        async fightEncounter() {
+        async fightEncounter(cfg) {
             try {
                 const fightBtn = $('#encounterFightBtn');
                 if (fightBtn && !fightBtn.disabled) {
                     fightBtn.click();
+                    this.schedulePostInteractionResume(cfg);
                     return;
                 }
                 if (typeof _win.handleCombatChoice === 'function') {
                     await _win.handleCombatChoice('fight');
+                    this.schedulePostInteractionResume(cfg);
                     return;
                 }
                 const res = await API.combatChoice('fight');
-                if (res.code !== 200) Logger.warn(`自动迎战失败: ${res.message || '未知错误'}`);
+                if (res.code !== 200) {
+                    Logger.warn(`自动迎战失败: ${res.message || '未知错误'}`);
+                    return;
+                }
+                this.schedulePostInteractionResume(cfg);
             } catch (e) {
                 Logger.warn(`自动迎战失败: ${e.message || e}`);
             }
+        },
+
+        schedulePostInteractionResume(cfg, delayMs = 1200) {
+            const windowMs = getResumeWindowMs(cfg || CONFIG.afkLoop);
+            this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
+            this.lastDecisionKey = '';
+            this.refreshGameData();
+            if (windowMs > 0) setTimeout(() => this.tick(true), delayMs);
         },
 
         async handleAdventure(cfg) {
@@ -3122,6 +3145,8 @@
                 'spirit-ready': '神识可探索',
                 'post-revive-ready': '复活后神识可探索',
                 'post-revive-low-spirit': '复活后神识不足',
+                'post-interaction-ready': '事件/战斗后神识可探索',
+                'post-interaction-low-spirit': '事件/战斗后神识不足',
                 'dead-auto-revive-enabled': '已开启自动复活',
                 'encounter-auto-fight-enabled': '已开启自动迎战'
             };

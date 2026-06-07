@@ -174,6 +174,13 @@ v2.22.0 已完成：
 - 自动护道未成功时不回退为直接迎战，停在遭遇面板等待测试者手动处理，降低低境界账号误送死风险。
 - 调试快照增加 `autoHireGuardian` 和当前护道配置，便于测试者反馈低境界挂机停顿原因。
 
+v2.23.0 已完成：
+
+- 调整 AFK 决策优先级：死亡状态现在高于奇遇、陌生道友、商人、遭遇和战斗残留面板。
+- `autoRevive` 开启且检测到死亡时会直接走 `revive`，避免战死后仍尝试处理旧遭遇或继续迎战。
+- `autoRevive` 未开启时死亡也会返回 `dead` 等待原因，方便快照和日志定位真实卡点。
+- 真实页面只读确认：`playerDead` / `_lastPlayerData.isDead` 是死亡来源，`handleRevive()` 调用 `/api/game/revive` 并清理死亡遮罩。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -276,6 +283,11 @@ v2.22.0 新增自动测试：
 - `resolveEncounterGuardianAttempt` 只在尝试完成后返回 `markEncounterKey`，避免同一遭遇重复雇佣。
 - `getCurrentGuardianConfig` 优先读取真实页面 `getAutoHireConfig()` 的模式、费用和优先级。
 
+v2.23.0 新增自动测试：
+
+- `decideAfkNextAction` 在 `isDead=true` 且残留 `encounterActive/combatActive` 时优先返回 `revive`。
+- `decideAfkNextAction` 在 `isDead=true` 且自动复活未开启时优先返回 `dead` 等待，而不是商人/奇遇/陌生道友等旧阻塞。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -284,7 +296,7 @@ v2.22.0 新增自动测试：
 
 ## 下一步建议
 
-1. 用户实测 v2.22.0 低境界 1 倍模式：开启自动迎战和遭遇前自动护道，但不开复活/丹/符。
+1. 用户实测 v2.23.0 低境界 1 倍模式：开启自动迎战和遭遇前自动护道，但不开复活/丹/符。
 2. 继续用真实挂机日志收集“自动探索停住”的事件原因，尤其记录护道失败 message。
 3. 富裕 50 倍模式继续小号测试：用符、复活、用丹都保持 opt-in，观察战斗结算后恢复窗口是否够用。
 4. 用真实奇遇链继续记录每个 adventureId 的选项、奖励和后续步骤。

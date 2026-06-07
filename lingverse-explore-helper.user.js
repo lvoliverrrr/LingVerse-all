@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.22.0
+// @version      2.23.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.22.0';
+    const SCRIPT_VERSION = '2.23.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
 
@@ -644,6 +644,11 @@
         if (snapshot.immortalPrisonActive) {
             return { action: 'wait', reason: 'immortal-prison' };
         }
+        if (snapshot.isDead) {
+            return cfg.autoRevive
+                ? { action: 'revive', reason: 'dead-auto-revive-enabled' }
+                : { action: 'wait', reason: 'dead' };
+        }
         if (snapshot.adventureActive) {
             const choiceIndex = resolveAdventureChoiceIndex(snapshot.adventureId, cfg);
             if (choiceIndex > 0) {
@@ -666,12 +671,6 @@
             }
             return { action: 'wait', reason: 'encounter-active' };
         }
-        if (snapshot.isDead) {
-            return cfg.autoRevive
-                ? { action: 'revive', reason: 'dead-auto-revive-enabled' }
-                : { action: 'wait', reason: 'dead' };
-        }
-
         const spirit = Math.max(0, toFiniteNumber(snapshot.spirit, 0));
         const maxSpirit = Math.max(0, toFiniteNumber(snapshot.maxSpirit, 0));
         const spiritCost = Math.max(1, toFiniteNumber(snapshot.spiritCost, 1));

@@ -558,6 +558,39 @@ test('decideAfkNextAction handles encounters only when auto fight is enabled', (
     });
 });
 
+test('decideAfkNextAction handles death before stale encounter or merchant blockers', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const config = {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        autoRevive: true,
+        autoFight: true
+    };
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isDead: true,
+        spirit: 200,
+        encounterActive: true,
+        combatActive: true
+    }, config, 1_000_000)), {
+        action: 'revive',
+        reason: 'dead-auto-revive-enabled'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isDead: true,
+        spirit: 200,
+        merchantActive: true,
+        adventureActive: true,
+        playerEncounterActive: true
+    }, Object.assign({}, config, { autoRevive: false }), 1_000_000)), {
+        action: 'wait',
+        reason: 'dead'
+    });
+});
+
 test('classifyExploreInterruption categorizes auto-explore stopping events', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;

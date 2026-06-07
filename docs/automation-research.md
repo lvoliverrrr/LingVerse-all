@@ -38,6 +38,7 @@
 - v2.20.0 只读遭遇状态：`_encounterActive=false` 且 `#encounterOverlay.hidden=true`，但页面仍保留旧 `_currentEncounterMonsterId=port_bandit` 和旧面板文本；因此 encounter key 必须只在 active 遭遇/战斗时生成。
 - v2.22.0 只读护道状态：`getAutoHireConfig()` 返回当前账号已开启自动护道，模式 `alone`，最高雇佣费 `51`，优先级 `normal,incarnation,body`。
 - v2.22.0 只读函数确认：`handleCombatChoice('fight')` 会直接调用 `/api/game/combat-choice` 迎战；`tryAutoHireProtectorForEncounter()` 会读取 `getAutoHireConfig()` 并调用 `/api/game/encounter-auto-hire`，遇 429 会等待 600ms 重试一次。
+- v2.23.0 只读死亡状态：页面同时暴露 `playerDead` 和 `_lastPlayerData.isDead`；`handleRevive()` 会调用 `/api/game/revive`、隐藏死亡遮罩、刷新玩家信息和地图。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -262,6 +263,13 @@
 - 执行顺序：可选用符 -> 可选自动护道 -> 未开自动护道时才直接迎战。
 - 自动护道成功后刷新状态并给恢复窗口；失败后不直接迎战，等待测试者手动处理。
 
+`lingverse-explore-helper.user.js` v2.23.0 新增：
+
+- `decideAfkNextAction` 将死亡判断提前到奇遇、陌生道友、商人、遭遇和战斗残留面板之前。
+- 当 `autoRevive=true` 且 `isDead=true` 时，下一步固定为 `revive`。
+- 当 `autoRevive=false` 且 `isDead=true` 时，下一步固定为 `wait/dead`，方便测试者从快照判断是复活开关未开。
+- 目的：避免战死后页面残留旧遭遇或战斗 active 状态，导致脚本继续走 `handleEncounter` 而不是复活。
+
 默认配置：
 
 - `enabled: false`
@@ -296,6 +304,7 @@
 - 商人/遭遇激活 -> `wait`
 - 自动迎战开启且遭遇激活 -> `handleEncounter`
 - 遭遇前自动护道：默认关闭；开启后按真实页面护道设置尝试一次，失败不回退直接迎战。
+- 死亡状态优先级高于商人/遭遇/奇遇/陌生道友等阻塞，自动复活开启时先复活。
 - 战斗符箓选择：跳过隐匿符/神行符/锁定物品，同类只选最高品质。
 - 战斗符箓 family 顺序：支持 `ghost,fire,shield` 这类白名单顺序；留空保持按品质选择。
 - 战斗符箓去重：同一个遭遇 key 只处理一次用符；没符会跳过并记住，下一次遭遇重新允许用符。

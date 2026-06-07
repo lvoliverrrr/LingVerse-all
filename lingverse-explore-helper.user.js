@@ -1,12 +1,13 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.6.1
-// @description  自动开启背包中的藏宝图
+// @version      2.7.0
+// @description  自动开启背包中的藏宝图，并在自动探索时自动处理云游商人
 // @author       LingVerse
 // @match        https://ling.muge.info/*
 // @match        http://ling.muge.info/*
 // @grant        GM_addStyle
+// @grant        unsafeWindow
 // @run-at       document-end
 // ==/UserScript==
 
@@ -34,6 +35,11 @@
             mode: 'together',      // 战斗模式（together或alone）
             priority: 'incarnation,normal,body', // 雇佣优先级
             threatLevel: 'danger'  // 威胁等级阈值：danger(危险/强敌/越阶)、warn(警告/略强/高层压制)、neutral(势均力敌)、safe(可稳战)、none(不判断)
+        },
+        merchant: {                 // 云游商人相关配置
+            enabled: true,          // 自动探索遇到商人时自动购买
+            onlyAutoExplore: true,  // 只处理自动探索挂起的商人，避免手动购物被抢单
+            buyDelay: 800           // 遇到商人后延迟购买，给原页面完成渲染
         }
     };
 
@@ -57,6 +63,62 @@
             Object.assign(CONFIG, parsed);
         } catch (e) {}
     }
+    CONFIG.guardian = Object.assign({
+        enabled: true,
+        maxFee: 0,
+        minAtk: 0,
+        mode: 'together',
+        priority: 'incarnation,normal,body',
+        threatLevel: 'danger'
+    }, CONFIG.guardian || {});
+    CONFIG.merchant = Object.assign({
+        enabled: true,
+        onlyAutoExplore: true,
+        buyDelay: 800
+    }, CONFIG.merchant || {});
+
+    function parseMerchantPrice(value) {
+        if (typeof value === 'number' && isFinite(value)) return value;
+        const normalized = String(value || '').replace(/[^\d.]/g, '');
+        const parsed = Number(normalized);
+        return isFinite(parsed) ? parsed : 0;
+    }
+
+    function selectMerchantItem(items) {
+        if (!Array.isArray(items)) return null;
+        let selected = null;
+        let selectedPrice = 0;
+        items.forEach(item => {
+            const price = parseMerchantPrice(item && item.price);
+            if (price > selectedPrice) {
+                selected = item;
+                selectedPrice = price;
+            }
+        });
+        return selected;
+    }
+
+    function resolveApiObject() {
+        let apiObj = null;
+        try {
+            apiObj = typeof api !== 'undefined' ? api : null;
+        } catch (e) {}
+        if (!apiObj) {
+            apiObj = window.api || _win.api || null;
+        }
+        if (!apiObj && typeof _win.eval === 'function') {
+            try {
+                apiObj = _win.eval('typeof api !== "undefined" ? api : null');
+            } catch (e) {}
+        }
+        return apiObj;
+    }
+
+    _win.LingVerseAutoMapTestHooks = Object.assign({}, _win.LingVerseAutoMapTestHooks, {
+        parseMerchantPrice,
+        selectMerchantItem,
+        resolveApiObject
+    });
 
     // 状态对象
     const STATE = {
@@ -113,7 +175,7 @@
          * 获取API对象
          */
         getApiObj() {
-            const apiObj = typeof api !== 'undefined' ? api : (window.api || _win.api);
+            const apiObj = resolveApiObject();
             if (!apiObj) {
                 throw new Error('API对象不可用');
             }
@@ -180,6 +242,22 @@
         async combatChoice(choice) {
             const apiObj = this.getApiObj();
             return await apiObj.post('/api/game/combat-choice', { choice });
+        },
+
+        /**
+         * 获取当前云游商人
+         */
+        async getMerchant() {
+            const apiObj = this.getApiObj();
+            return await apiObj.get('/api/game/merchant');
+        },
+
+        /**
+         * 购买云游商人商品
+         */
+        async buyMerchantItem(index) {
+            const apiObj = this.getApiObj();
+            return await apiObj.post('/api/game/merchant/buy', { index });
         }
     };
 
@@ -409,7 +487,23 @@
                             <option value="safe" ${CONFIG.guardian.threatLevel==='safe'?'selected':''}>可稳战（总是不雇）</option>
                         </select>
                     </div>
-                    
+
+                    <div style="margin-top:12px;padding-top:10px;border-top:1px solid ${border};">
+                        <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:10px;font-weight:bold;">🧳 自动商人配置</div>
+                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+                            <input type="checkbox" id="am-merchant-enabled" ${CONFIG.merchant.enabled?'checked':''} style="cursor:pointer;">
+                            <span style="font-size:13px;color:${text};">自动购买云游商人最高价商品</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+                            <input type="checkbox" id="am-merchant-auto-only" ${CONFIG.merchant.onlyAutoExplore?'checked':''} style="cursor:pointer;">
+                            <span style="font-size:13px;color:${text};">仅自动探索挂起时处理</span>
+                        </label>
+                        <div>
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">购买延迟 (ms)</div>
+                            <input type="number" id="am-merchant-delay" value="${CONFIG.merchant.buyDelay}" min="0" max="10000" step="100" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                    </div>
+
                     <button id="am-save-config" style="width:100%;margin-top:10px;padding:8px;background:#4dabf7;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">💾 保存配置</button>
                 </div>
 
@@ -459,7 +553,13 @@
                 CONFIG.guardian.mode = $('#am-guardian-mode')?.value || 'together';
                 CONFIG.guardian.priority = $('#am-guardian-priority')?.value || 'incarnation,normal,body';
                 CONFIG.guardian.threatLevel = $('#am-guardian-threat')?.value || 'danger';
-                
+
+                CONFIG.merchant.enabled = $('#am-merchant-enabled')?.checked ?? true;
+                CONFIG.merchant.onlyAutoExplore = $('#am-merchant-auto-only')?.checked ?? true;
+                CONFIG.merchant.buyDelay = parseInt($('#am-merchant-delay')?.value || '800') || 0;
+                if (CONFIG.merchant.buyDelay < 0) CONFIG.merchant.buyDelay = 0;
+                if (CONFIG.merchant.buyDelay > 10000) CONFIG.merchant.buyDelay = 10000;
+
                 localStorage.setItem('lingverse_auto_map_config', JSON.stringify(CONFIG));
                 
                 try {
@@ -574,15 +674,21 @@
             const minAtkEl = $('#am-guardian-minatk');
             const modeEl = $('#am-guardian-mode');
             const priorityEl = $('#am-guardian-priority');
+            const merchantEnabledEl = $('#am-merchant-enabled');
+            const merchantAutoOnlyEl = $('#am-merchant-auto-only');
+            const merchantDelayEl = $('#am-merchant-delay');
 
             if (enabledEl) enabledEl.checked = CONFIG.guardian.enabled;
             if (maxFeeEl) maxFeeEl.value = CONFIG.guardian.maxFee;
             if (minAtkEl) minAtkEl.value = CONFIG.guardian.minAtk;
             if (modeEl) modeEl.value = CONFIG.guardian.mode;
             if (priorityEl) priorityEl.value = CONFIG.guardian.priority;
-            
+
             const threatEl = $('#am-guardian-threat');
             if (threatEl) threatEl.value = CONFIG.guardian.threatLevel || 'danger';
+            if (merchantEnabledEl) merchantEnabledEl.checked = CONFIG.merchant.enabled;
+            if (merchantAutoOnlyEl) merchantAutoOnlyEl.checked = CONFIG.merchant.onlyAutoExplore;
+            if (merchantDelayEl) merchantDelayEl.value = CONFIG.merchant.buyDelay;
         },
 
         /**
@@ -786,17 +892,22 @@
          * 应用CSS样式
          */
         applyStyles() {
+            const css = `
+                #am-panel button:hover { opacity:0.9; transform:translateY(-1px); }
+                #am-log-content::-webkit-scrollbar { width:6px; }
+                #am-log-content::-webkit-scrollbar-thumb { background:rgba(148,163,184,0.3); border-radius:3px; }
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.5; }
+                }
+            `;
             if (typeof GM_addStyle !== 'undefined') {
-                GM_addStyle(`
-                    #am-panel button:hover { opacity:0.9; transform:translateY(-1px); }
-                    #am-log-content::-webkit-scrollbar { width:6px; }
-                    #am-log-content::-webkit-scrollbar-thumb { background:rgba(148,163,184,0.3); border-radius:3px; }
-                    @keyframes pulse {
-                        0%, 100% { opacity: 1; }
-                        50% { opacity: 0.5; }
-                    }
-                `);
+                GM_addStyle(css);
+                return;
             }
+            const style = document.createElement('style');
+            style.textContent = css;
+            document.head.appendChild(style);
         },
 
         /**
@@ -870,6 +981,119 @@
         }
     };
 
+    // 云游商人自动处理器
+    const MerchantAutoBuyer = {
+        intervalId: null,
+        busy: false,
+        lastAttemptKey: '',
+
+        init() {
+            if (this.intervalId) return;
+            this.intervalId = setInterval(() => this.tick(), 1500);
+            setTimeout(() => this.tick(), 500);
+        },
+
+        isMerchantActive() {
+            const overlay = $('#merchantOverlay');
+            return !!_win._merchantActive || !!(overlay && !overlay.classList.contains('hidden'));
+        },
+
+        isAutoExplorePending() {
+            const toggle = $('#autoExploreToggle');
+            return !!(_win._autoResumeExplorePending || _win._autoExploreRunning || toggle?.checked);
+        },
+
+        shouldHandle() {
+            if (!CONFIG.merchant.enabled) return false;
+            if (!this.isMerchantActive()) {
+                this.lastAttemptKey = '';
+                return false;
+            }
+            if (CONFIG.merchant.onlyAutoExplore && !this.isAutoExplorePending()) return false;
+            return true;
+        },
+
+        getMerchantKey(items) {
+            if (!Array.isArray(items)) return '';
+            return items.map(item => `${item?.index}:${item?.name}:${item?.price}`).join('|');
+        },
+
+        async tick() {
+            if (this.busy || !this.shouldHandle()) return;
+            this.busy = true;
+            try {
+                await this.handleMerchant();
+            } finally {
+                this.busy = false;
+            }
+        },
+
+        async handleMerchant() {
+            const delay = Math.max(0, Math.min(10000, parseInt(CONFIG.merchant.buyDelay, 10) || 0));
+            if (delay > 0) await wait(delay);
+            if (!this.shouldHandle()) return;
+
+            let res;
+            try {
+                res = await API.getMerchant();
+            } catch (e) {
+                Logger.warn(`自动商人读取失败: ${e.message}`);
+                return;
+            }
+
+            if (res.code !== 200 || !res.data) return;
+
+            const items = res.data.items || [];
+            const merchantKey = this.getMerchantKey(items);
+            if (merchantKey && merchantKey === this.lastAttemptKey) return;
+
+            const selected = selectMerchantItem(items);
+            if (!selected) {
+                Logger.warn('云游商人没有可自动购买的商品');
+                this.lastAttemptKey = merchantKey;
+                return;
+            }
+
+            this.lastAttemptKey = merchantKey;
+            const price = parseMerchantPrice(selected.price);
+            Logger.info(`自动购买云游商人最高价商品: ${selected.name || '未知商品'} (${price} 灵石)`);
+            await this.buySelected(selected);
+        },
+
+        async buySelected(item) {
+            if (typeof _win.buyMerchantItem === 'function') {
+                await _win.buyMerchantItem(item.index);
+                return;
+            }
+
+            const res = await API.buyMerchantItem(item.index);
+            if (res.code === 200) {
+                Logger.success('云游商人购买成功');
+                this.refreshAfterBuy();
+            } else {
+                Logger.warn(`云游商人购买失败: ${res.message || '未知错误'}`);
+            }
+        },
+
+        refreshAfterBuy() {
+            try {
+                if (typeof _win.clearMerchantState === 'function') {
+                    _win.clearMerchantState({ clearItems: true, resume: true });
+                } else {
+                    const overlay = $('#merchantOverlay');
+                    if (overlay) overlay.classList.add('hidden');
+                }
+                if (_win.loadGameLogs) _win.loadGameLogs();
+                if (_win.loadPlayerInfo) _win.loadPlayerInfo(true);
+                if (typeof _win._tryResumeAutoExploreAfterMerchant === 'function') {
+                    _win._tryResumeAutoExploreAfterMerchant();
+                }
+            } catch (e) {
+                // 页面刷新失败不影响购买请求本身
+            }
+        }
+    };
+
     // 地图开启器
     const MapOpener = {
         currentLuck: undefined,
@@ -930,10 +1154,13 @@
             CONFIG.guardian.minAtk = isNaN(minAtk) ? 0 : minAtk;
             CONFIG.guardian.mode = $('#am-guardian-mode')?.value || 'together';
             CONFIG.guardian.priority = $('#am-guardian-priority')?.value || 'incarnation,normal,body';
-            const monsterHp = parseInt($('#am-guardian-monsterhp')?.value);
-            CONFIG.guardian.monsterHp = isNaN(monsterHp) ? 0 : monsterHp;
-            const monsterAtk = parseInt($('#am-guardian-monsteratk')?.value);
-            CONFIG.guardian.monsterAtk = isNaN(monsterAtk) ? 0 : monsterAtk;
+            CONFIG.guardian.threatLevel = $('#am-guardian-threat')?.value || CONFIG.guardian.threatLevel || 'danger';
+            CONFIG.merchant.enabled = $('#am-merchant-enabled')?.checked ?? CONFIG.merchant.enabled;
+            CONFIG.merchant.onlyAutoExplore = $('#am-merchant-auto-only')?.checked ?? CONFIG.merchant.onlyAutoExplore;
+            const merchantDelay = parseInt($('#am-merchant-delay')?.value);
+            if (!isNaN(merchantDelay)) {
+                CONFIG.merchant.buyDelay = Math.max(0, Math.min(10000, merchantDelay));
+            }
         },
 
         /**
@@ -1374,7 +1601,7 @@
                     }
                 }
                 
-                if (i < maps.length - 1 && openedCount < maxToOpen && STATE.running) {
+                if (i < maps.length - 1 && openedCount < remainingToOpen && STATE.running) {
                     const randomInterval = getRandomInterval(CONFIG.openInterval, CONFIG.openIntervalRandom);
                     await wait(randomInterval);
                 }
@@ -1509,6 +1736,7 @@
         _win._autoMapInited = true;
         
         UI.init();
+        MerchantAutoBuyer.init();
         Logger.info('自动开藏宝图已加载，点击侧边栏"打开面板"使用');
     };
 

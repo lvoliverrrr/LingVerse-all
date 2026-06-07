@@ -1709,7 +1709,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.38.0',
+        scriptVersion: '2.39.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         page: {
             title: '灵界 LingVerse - 修仙世界',
@@ -1775,12 +1775,12 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
     assert.deepEqual(toPlain(report), {
         schema: 'lingverse-afk-status-report/v1',
         sourceSchema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.38.0',
+        scriptVersion: '2.39.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         headline: '挂机状态 · 等待 · 复活次数已到本轮上限',
         text: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.38.0',
+            '版本: 2.39.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -1794,7 +1794,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
         ].join('\n'),
         lines: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.38.0',
+            '版本: 2.39.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -1807,6 +1807,77 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '奇遇策略: 456=1 / 456=2'
         ]
     });
+});
+
+test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkWaitingDiagnosis, 'function');
+
+    const history = Array.from({ length: 5 }, (_, index) => ({
+        at: `2026-06-08T06:${String(index * 2).padStart(2, '0')}:00.000Z`,
+        action: 'wait',
+        reason: 'adventure-active',
+        spirit: 88,
+        maxSpirit: 2758,
+        isMeditating: false,
+        adventureActive: true,
+        adventureId: 456
+    }));
+    const now = Date.parse('2026-06-08T06:10:00.000Z');
+
+    const diagnosis = toPlain(hooks.buildAfkWaitingDiagnosis(history, {
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90
+    }, now));
+
+    assert.deepEqual(diagnosis, {
+        schema: 'lingverse-afk-wait-diagnosis/v1',
+        active: true,
+        severity: 'warning',
+        category: 'manual-action',
+        action: 'wait',
+        reason: 'adventure-active',
+        label: '奇遇链等待处理',
+        repeatCount: 5,
+        elapsedSeconds: 600,
+        firstAt: '2026-06-08T06:00:00.000Z',
+        lastAt: '2026-06-08T06:08:00.000Z',
+        message: '奇遇链等待处理已持续10分钟（连续5次），需要手动处理或配置自动策略',
+        suggestion: '处理当前奇遇，或在摘要回放里导入奇遇策略后再启动挂机'
+    });
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 88,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        adventureActive: true,
+        adventureId: 456
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        adventureMode: 'pause'
+    }, {
+        action: 'wait',
+        reason: 'adventure-active'
+    }, {
+        capturedAt: '2026-06-08T06:10:00.000Z',
+        now,
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decisionHistory: history
+    })));
+
+    assert.deepEqual(summary.automation.waitDiagnosis, diagnosis);
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('诊断: 奇遇链等待处理已持续10分钟（连续5次），需要手动处理或配置自动策略'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -1936,7 +2007,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.38.0',
+        scriptVersion: '2.39.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

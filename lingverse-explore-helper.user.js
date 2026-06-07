@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.38.0
+// @version      2.39.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.38.0';
+    const SCRIPT_VERSION = '2.39.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -420,6 +420,185 @@
             lastActionText,
             nextCheckText: seconds <= 0 ? '即将检查' : `${seconds}秒后`,
             nextCheckInSeconds: seconds
+        };
+    }
+
+    function parseAfkHistoryTime(value) {
+        const parsed = Date.parse(String(value || ''));
+        return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function resolveAfkDiagnosisNow(now, fallback) {
+        const direct = Number(now);
+        if (Number.isFinite(direct)) return direct;
+        const parsed = parseAfkHistoryTime(fallback);
+        return parsed || Date.now();
+    }
+
+    function formatAfkElapsedDuration(seconds) {
+        const safeSeconds = Math.max(0, Math.round(toFiniteNumber(seconds, 0)));
+        if (safeSeconds < 60) return `${safeSeconds}秒`;
+        const minutes = Math.max(1, Math.round(safeSeconds / 60));
+        if (minutes < 60) return `${minutes}分钟`;
+        const hours = Math.floor(minutes / 60);
+        const restMinutes = minutes % 60;
+        return restMinutes ? `${hours}小时${restMinutes}分钟` : `${hours}小时`;
+    }
+
+    function buildEmptyAfkWaitingDiagnosis(action, reason, repeatCount, elapsedSeconds, firstAt, lastAt) {
+        return {
+            schema: 'lingverse-afk-wait-diagnosis/v1',
+            active: false,
+            severity: 'normal',
+            category: 'none',
+            action: String(action || ''),
+            reason: String(reason || ''),
+            label: formatAfkReason(reason),
+            repeatCount: Math.max(0, Math.floor(toFiniteNumber(repeatCount, 0))),
+            elapsedSeconds: Math.max(0, Math.round(toFiniteNumber(elapsedSeconds, 0))),
+            firstAt: String(firstAt || ''),
+            lastAt: String(lastAt || ''),
+            message: '',
+            suggestion: ''
+        };
+    }
+
+    function getAfkWaitingDiagnosisMeta(reason, action) {
+        const labels = {
+            'merchant-active': {
+                category: 'auto-blocker',
+                suggestion: '确认云游商人窗口是否仍在，或复制摘要给开发者检查商人自动购买'
+            },
+            'encounter-active': {
+                category: 'manual-action',
+                suggestion: '处理当前遭遇，或开启遭遇前自动护道/自动迎战后再启动挂机'
+            },
+            'player-encounter-active': {
+                category: 'manual-action',
+                suggestion: '处理陌生道友邂逅，或开启自动婉拒后再启动挂机'
+            },
+            'adventure-active': {
+                category: 'manual-action',
+                suggestion: '处理当前奇遇，或在摘要回放里导入奇遇策略后再启动挂机'
+            },
+            'immortal-prison': {
+                category: 'hard-stop',
+                suggestion: '混天典狱需要手动处理，脚本不会自动跳过'
+            },
+            dead: {
+                category: 'manual-action',
+                suggestion: '手动复活，或确认资源风险后开启自动复活'
+            },
+            'revive-budget-exhausted': {
+                category: 'resource-budget',
+                suggestion: '本轮复活次数已达上限，检查死亡原因后重新启动或调高上限'
+            },
+            'talisman-budget-exhausted': {
+                category: 'resource-budget',
+                suggestion: '本轮用符遭遇数已达上限，检查战斗风险后重新启动或调高上限'
+            },
+            'nirvana-budget-exhausted': {
+                category: 'resource-budget',
+                suggestion: '本轮用丹次数已达上限，检查丹药状态后重新启动或调高上限'
+            },
+            'explore-disabled': {
+                category: 'manual-action',
+                suggestion: '当前区域不可探索，换区域或查看页面提示后再启动挂机'
+            }
+        };
+        if (labels[reason]) return labels[reason];
+        if (action && action !== 'wait' && action !== 'idle') {
+            return {
+                category: 'auto-action',
+                suggestion: '自动处理动作重复未前进，复制摘要给开发者定位执行结果'
+            };
+        }
+        return {
+            category: 'unknown',
+            suggestion: '复制状态和摘要给开发者，补充这个等待原因的自动化策略'
+        };
+    }
+
+    function getAfkWaitingDiagnosisThresholdSeconds(config) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const tickSeconds = Math.ceil(cfg.tickInterval / 1000);
+        const stallSeconds = cfg.stallTimeoutSeconds > 0 ? cfg.stallTimeoutSeconds * 2 : 0;
+        return Math.max(120, tickSeconds * 4, stallSeconds);
+    }
+
+    function buildAfkWaitingDiagnosis(decisionHistory, config, now) {
+        const history = normalizeDecisionHistory(decisionHistory);
+        if (!history.length) return buildEmptyAfkWaitingDiagnosis('', '', 0, 0, '', '');
+
+        const last = history[history.length - 1] || {};
+        const action = String(last.action || '');
+        const reason = String(last.reason || '');
+        if (!action && !reason) return buildEmptyAfkWaitingDiagnosis(action, reason, 0, 0, '', '');
+
+        const repeated = [];
+        for (let i = history.length - 1; i >= 0; i -= 1) {
+            const record = history[i] || {};
+            if (String(record.action || '') !== action || String(record.reason || '') !== reason) break;
+            repeated.unshift(record);
+        }
+
+        const first = repeated[0] || last;
+        const firstAt = String(first.at || '');
+        const lastAt = String(last.at || '');
+        const currentTime = resolveAfkDiagnosisNow(now, lastAt || firstAt);
+        const firstTime = parseAfkHistoryTime(firstAt);
+        const elapsedSeconds = firstTime ? Math.max(0, Math.round((currentTime - firstTime) / 1000)) : 0;
+        const base = buildEmptyAfkWaitingDiagnosis(action, reason, repeated.length, elapsedSeconds, firstAt, lastAt);
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const thresholdSeconds = getAfkWaitingDiagnosisThresholdSeconds(cfg);
+        const repeatThreshold = 4;
+
+        if (repeated.length < repeatThreshold || elapsedSeconds < thresholdSeconds) return base;
+        if (reason === 'disabled') return base;
+        if (reason === 'auto-explore-running' && elapsedSeconds < thresholdSeconds * 2) return base;
+        if (reason === 'meditating' && elapsedSeconds <= (cfg.meditationMinutes * 60 + thresholdSeconds)) return base;
+
+        const meta = getAfkWaitingDiagnosisMeta(reason, action);
+        const durationText = formatAfkElapsedDuration(elapsedSeconds);
+        const label = formatAfkReason(reason);
+        const extra = meta.category === 'unknown' || meta.category === 'auto-action'
+            ? '，建议复制摘要定位'
+            : '，需要手动处理或配置自动策略';
+        const message = `${label}已持续${durationText}（连续${repeated.length}次）${extra}`;
+
+        return {
+            schema: 'lingverse-afk-wait-diagnosis/v1',
+            active: true,
+            severity: meta.category === 'hard-stop' ? 'stop' : 'warning',
+            category: meta.category,
+            action,
+            reason,
+            label,
+            repeatCount: repeated.length,
+            elapsedSeconds,
+            firstAt,
+            lastAt,
+            message,
+            suggestion: meta.suggestion
+        };
+    }
+
+    function summarizeAfkWaitingDiagnosis(diagnosis) {
+        const source = diagnosis && typeof diagnosis === 'object' ? diagnosis : {};
+        return {
+            schema: 'lingverse-afk-wait-diagnosis/v1',
+            active: !!source.active,
+            severity: sanitizeDebugText(source.severity || (source.active ? 'warning' : 'normal'), 40),
+            category: sanitizeDebugText(source.category || 'none', 60),
+            action: sanitizeDebugText(source.action || '', 40),
+            reason: sanitizeDebugText(source.reason || '', 80),
+            label: sanitizeDebugText(source.label || formatAfkReason(source.reason), 80),
+            repeatCount: Math.max(0, Math.floor(toFiniteNumber(source.repeatCount, 0))),
+            elapsedSeconds: Math.max(0, Math.round(toFiniteNumber(source.elapsedSeconds, 0))),
+            firstAt: sanitizeDebugText(source.firstAt || '', 40),
+            lastAt: sanitizeDebugText(source.lastAt || '', 40),
+            message: sanitizeDebugText(source.message || '', DEBUG_SUMMARY_TEXT_LIMIT),
+            suggestion: sanitizeDebugText(source.suggestion || '', DEBUG_SUMMARY_TEXT_LIMIT)
         };
     }
 
@@ -1462,6 +1641,7 @@
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
                 talismans: summarizeCombatTalismanAttempt(automation.talismans),
                 guardian: summarizeGuardianAttempt(automation.guardian),
+                waitDiagnosis: summarizeAfkWaitingDiagnosis(automation.waitDiagnosis),
                 resourceUsage: normalizeAfkResourceUsage(automation.resourceUsage)
             },
             adventure: {
@@ -1755,6 +1935,9 @@
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
             .filter(Boolean)
             .forEach(item => lines.push(`! ${item}`));
+        if (automation.waitDiagnosis && automation.waitDiagnosis.active && automation.waitDiagnosis.message) {
+            lines.push(`诊断: ${sanitizeDebugText(automation.waitDiagnosis.message, DEBUG_SUMMARY_TEXT_LIMIT)}`);
+        }
         lines.push(`自动化: 护道 ${sanitizeDebugText(automation.guardian && automation.guardian.reason || 'unknown', 60)} · 用符 ${sanitizeDebugText(automation.talismans && automation.talismans.reason || 'unknown', 60)} · 用丹 ${sanitizeDebugText(automation.nirvanaPill && automation.nirvanaPill.reason || 'unknown', 60)}`);
         if (strategyImportText) {
             lines.push(`奇遇策略: ${strategyImportText.split('\n').join(' / ')}`);
@@ -1819,6 +2002,11 @@
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
                 talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
                 guardian: buildGuardianDebugAttempt(debugContext.guardianAttempt, snapshot, cfg, guardianCfg),
+                waitDiagnosis: buildAfkWaitingDiagnosis(
+                    debugContext.decisionHistory,
+                    cfg,
+                    resolveAfkDiagnosisNow(debugContext.now, debugContext.capturedAt)
+                ),
                 resourceUsage: normalizeAfkResourceUsage(snapshot.resourceUsage)
             },
             adventure: {
@@ -1885,6 +2073,7 @@
         formatAfkReason,
         formatAfkAction,
         buildAfkPanelStatus,
+        buildAfkWaitingDiagnosis,
         buildAfkRiskStatus,
         buildAfkConfigPack,
         resolveAfkConfigPackImport,

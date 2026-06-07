@@ -397,6 +397,13 @@
 - 面板新增“复制状态”按钮，服务测试群快速沟通；“复制摘要”仍用于开发侧 JSON 回放和策略导入。
 - 状态报告生成过程只读取快照/摘要，不调用游戏资源动作。
 
+`lingverse-explore-helper.user.js` v2.39.0 新增：
+
+- `buildAfkWaitingDiagnosis(decisionHistory, config, now)` 从最近决策历史诊断重复等待：连续相同 `action/reason` 达到阈值后，输出 `lingverse-afk-wait-diagnosis/v1`。
+- 默认把冥想、自动探索运行视为正常等待；奇遇、遭遇、陌生道友、死亡、混天典狱、资源上限耗尽、当前区域不可探索等等待会在持续过久时给出处理建议。
+- `buildAfkDebugSnapshot` 写入 `automation.waitDiagnosis`；`buildAfkDebugSummary` 脱敏保留；`buildAfkStatusReport` 在诊断激活时追加 `诊断:` 行。
+- 诊断只读取决策历史、配置和时间戳，不调用探索、购买、战斗、护道、复活、用符或用丹。
+
 默认配置：
 
 - `enabled: false`

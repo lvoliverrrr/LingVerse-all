@@ -553,3 +553,89 @@ test('per-adventure strategy only auto-handles mapped adventure ids', () => {
         reason: 'adventure-active'
     });
 });
+
+test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and config', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const config = {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 50,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        autoFight: true,
+        autoRevive: true,
+        useTalismans: true,
+        useNirvanaPill: true,
+        autoDeclinePlayerEncounter: true,
+        adventureMode: 'strategy',
+        adventureChoiceMap: { 456: 2 }
+    };
+    const state = {
+        spirit: 88,
+        maxSpirit: 2758,
+        spiritCost: 50,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        merchantActive: false,
+        encounterActive: true,
+        combatActive: false,
+        playerEncounterActive: false,
+        adventureActive: true,
+        adventureId: 456,
+        adventureComplete: false,
+        adventureStep: 1,
+        adventureTotalSteps: 3,
+        adventureChoices: ['入谷', '绕行'],
+        autoExploreRunning: false,
+        autoExplorePending: true,
+        exploreStalled: false
+    };
+    const decision = hooks.decideAfkNextAction(state, config, 1_000_000);
+
+    const snapshot = toPlain(hooks.buildAfkDebugSnapshot(state, config, decision, {
+        capturedAt: '2026-06-08T00:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    }));
+
+    assert.equal(snapshot.schema, 'lingverse-afk-debug-snapshot/v1');
+    assert.equal(typeof snapshot.scriptVersion, 'string');
+    assert.equal(snapshot.decision.action, 'handleAdventure');
+    assert.equal(snapshot.decision.reason, 'adventure-strategy-choice');
+    assert.deepEqual(snapshot.player, {
+        spirit: 88,
+        maxSpirit: 2758,
+        spiritCost: 50,
+        canExplore: true,
+        exploreDisabledReason: '',
+        isDead: false,
+        isMeditating: false,
+        meditationDurationSeconds: null
+    });
+    assert.deepEqual(snapshot.blockers, {
+        merchantActive: false,
+        encounterActive: true,
+        combatActive: false,
+        playerEncounterActive: false,
+        adventureActive: true,
+        adventureId: 456,
+        adventureComplete: false,
+        immortalPrisonActive: false
+    });
+    assert.deepEqual(snapshot.adventure, {
+        id: 456,
+        step: 1,
+        totalSteps: 3,
+        isComplete: false,
+        choices: ['入谷', '绕行'],
+        mode: 'strategy',
+        resolvedChoiceIndex: 2,
+        choiceMap: { 456: 2 }
+    });
+    assert.equal(snapshot.config.exploreMultiplier, 50);
+    assert.equal(snapshot.config.autoFight, true);
+    assert.equal(snapshot.page.url, 'https://ling.muge.info/game.html');
+});

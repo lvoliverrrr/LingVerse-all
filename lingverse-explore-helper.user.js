@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.13.0
+// @version      2.14.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,6 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
+    const SCRIPT_VERSION = '2.14.0';
 
     // 配置对象
     const CONFIG = {
@@ -509,6 +510,94 @@
         return { action: 'startAutoExplore', reason: 'spirit-ready' };
     }
 
+    function numberOrNull(value) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    function resolvePageInfo(context) {
+        const supplied = context && context.page && typeof context.page === 'object' ? context.page : {};
+        let title = supplied.title || '';
+        let url = supplied.url || '';
+        if (!title && typeof document !== 'undefined') title = document.title || '';
+        if (!url && typeof location !== 'undefined') url = location.href || '';
+        return { title, url };
+    }
+
+    function buildAfkDebugSnapshot(state, config, decision, context) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const snapshot = state || {};
+        const currentDecision = decision || decideAfkNextAction(snapshot, cfg, context && context.now);
+        const adventureId = snapshot.adventureId || null;
+
+        return {
+            schema: 'lingverse-afk-debug-snapshot/v1',
+            scriptVersion: SCRIPT_VERSION,
+            capturedAt: (context && context.capturedAt) || new Date().toISOString(),
+            page: resolvePageInfo(context || {}),
+            decision: {
+                action: currentDecision.action || '',
+                reason: currentDecision.reason || ''
+            },
+            player: {
+                spirit: numberOrNull(snapshot.spirit),
+                maxSpirit: numberOrNull(snapshot.maxSpirit),
+                spiritCost: numberOrNull(snapshot.spiritCost),
+                canExplore: snapshot.canExplore !== false,
+                exploreDisabledReason: String(snapshot.exploreDisabledReason || ''),
+                isDead: !!snapshot.isDead,
+                isMeditating: !!snapshot.isMeditating,
+                meditationDurationSeconds: numberOrNull(snapshot.meditationDurationSeconds)
+            },
+            blockers: {
+                merchantActive: !!snapshot.merchantActive,
+                encounterActive: !!snapshot.encounterActive,
+                combatActive: !!snapshot.combatActive,
+                playerEncounterActive: !!snapshot.playerEncounterActive,
+                adventureActive: !!snapshot.adventureActive,
+                adventureId,
+                adventureComplete: !!snapshot.adventureComplete,
+                immortalPrisonActive: !!snapshot.immortalPrisonActive
+            },
+            automation: {
+                autoExploreRunning: !!snapshot.autoExploreRunning,
+                autoExplorePending: !!snapshot.autoExplorePending,
+                exploreStalled: !!snapshot.exploreStalled,
+                postReviveResume: !!snapshot.postReviveResume
+            },
+            adventure: {
+                id: adventureId,
+                step: numberOrNull(snapshot.adventureStep),
+                totalSteps: numberOrNull(snapshot.adventureTotalSteps),
+                isComplete: !!snapshot.adventureComplete,
+                choices: Array.isArray(snapshot.adventureChoices) ? snapshot.adventureChoices.slice() : [],
+                mode: cfg.adventureMode,
+                resolvedChoiceIndex: resolveAdventureChoiceIndex(adventureId, cfg),
+                choiceMap: normalizeAdventureChoiceMap(cfg.adventureChoiceMap)
+            },
+            config: {
+                enabled: cfg.enabled,
+                meditationMinutes: cfg.meditationMinutes,
+                minSpirit: cfg.minSpirit,
+                exploreMultiplier: cfg.exploreMultiplier,
+                tickInterval: cfg.tickInterval,
+                stallTimeoutSeconds: cfg.stallTimeoutSeconds,
+                autoFight: cfg.autoFight,
+                autoRevive: cfg.autoRevive,
+                useTalismans: cfg.useTalismans,
+                talismanMaxKinds: cfg.talismanMaxKinds,
+                talismanQuantity: cfg.talismanQuantity,
+                useNirvanaPill: cfg.useNirvanaPill,
+                nirvanaMinRarity: cfg.nirvanaMinRarity,
+                queueNirvanaPill: cfg.queueNirvanaPill,
+                autoDeclinePlayerEncounter: cfg.autoDeclinePlayerEncounter,
+                adventureMode: cfg.adventureMode,
+                adventureChoiceIndex: cfg.adventureChoiceIndex,
+                adventureChoiceMap: normalizeAdventureChoiceMap(cfg.adventureChoiceMap)
+            }
+        };
+    }
+
     _win.LingVerseAutoMapTestHooks = Object.assign({}, _win.LingVerseAutoMapTestHooks, {
         parseMerchantPrice,
         selectMerchantItem,
@@ -520,7 +609,8 @@
         classifyExploreInterruption,
         normalizeAdventureChoiceMap,
         formatAdventureChoiceMap,
-        resolveAdventureChoiceIndex
+        resolveAdventureChoiceIndex,
+        buildAfkDebugSnapshot
     });
 
     // 状态对象
@@ -1080,6 +1170,7 @@
                         <div style="display:flex;gap:8px;">
                             <button id="am-afk-start" style="flex:1;padding:8px;background:#7c3aed;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">启动挂机</button>
                             <button id="am-afk-stop" style="flex:1;padding:8px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">停止挂机</button>
+                            <button id="am-afk-copy-debug" style="flex:1;padding:8px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制快照</button>
                         </div>
                     </div>
 
@@ -1118,6 +1209,7 @@
 
             $('#am-afk-start')?.addEventListener('click', () => AfkLoopManager.start());
             $('#am-afk-stop')?.addEventListener('click', () => AfkLoopManager.stop());
+            $('#am-afk-copy-debug')?.addEventListener('click', () => AfkLoopManager.copyDebugSnapshot());
 
 
 
@@ -1768,6 +1860,42 @@
             Logger.warn('自动挂机循环已停止');
         },
 
+        async copyDebugSnapshot() {
+            try {
+                const cfg = readAfkLoopConfigFromUI();
+                const now = Date.now();
+                const snapshot = await this.buildSnapshot(now, cfg);
+                const decision = decideAfkNextAction(snapshot, cfg, now);
+                const debugSnapshot = buildAfkDebugSnapshot(snapshot, cfg, decision, {
+                    capturedAt: new Date(now).toISOString(),
+                    page: { title: document.title || '', url: location.href || '' }
+                });
+                const text = JSON.stringify(debugSnapshot, null, 2);
+                await this.copyText(text);
+                Logger.success('已复制挂机调试快照，可直接发给开发者分析');
+            } catch (e) {
+                Logger.warn(`复制挂机调试快照失败: ${e.message || e}`);
+            }
+        },
+
+        async copyText(text) {
+            if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                await navigator.clipboard.writeText(text);
+                return;
+            }
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.left = '-9999px';
+            textarea.style.top = '0';
+            document.body.appendChild(textarea);
+            textarea.focus();
+            textarea.select();
+            const ok = document.execCommand && document.execCommand('copy');
+            textarea.remove();
+            if (!ok) throw new Error('浏览器不允许自动复制');
+        },
+
         async tick(force) {
             const cfg = normalizeAfkLoopConfig(CONFIG.afkLoop);
             CONFIG.afkLoop = cfg;
@@ -1857,6 +1985,9 @@
                 adventureActive,
                 adventureId: adventureActive && adventureStep ? adventureStep.adventureId : undefined,
                 adventureComplete: adventureActive && adventureStep ? !!adventureStep.isComplete : false,
+                adventureStep: adventureActive && adventureStep ? adventureStep.step : undefined,
+                adventureTotalSteps: adventureActive && adventureStep ? adventureStep.totalSteps : undefined,
+                adventureChoices: adventureActive && adventureStep ? adventureStep.choices || [] : [],
                 playerEncounterActive,
                 merchantActive: MerchantAutoBuyer.isMerchantActive(),
                 encounterActive,

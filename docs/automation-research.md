@@ -183,6 +183,20 @@
 - `installAdventureStepHook()` 包装页面 `showAdventureStep(step)`，记录最近奇遇 step，不改变页面原函数返回。
 - 策略模式下未知 `adventureId` 不会自动选择，仍保持 `adventure-active` 等待。
 
+`lingverse-explore-helper.user.js` v2.14.0 新增：
+
+- “复制快照”按钮：从面板导出当前挂机调试 JSON。
+- `buildAfkDebugSnapshot(state, config, decision, context)`：纯函数构建稳定快照。
+- 快照 schema：`lingverse-afk-debug-snapshot/v1`。
+- 快照字段：
+  - `page`：页面标题和 URL。
+  - `decision`：下一步动作和 reason。
+  - `player`：神识、神识上限、单次消耗、是否死亡、是否冥想、不可探索原因。
+  - `blockers`：商人、遭遇、战斗、陌生道友、奇遇、混天典狱等阻塞状态。
+  - `automation`：自动探索是否运行/挂起、是否卡住、复活恢复窗口。
+  - `adventure`：奇遇 ID、步骤、选项、策略模式、命中选项。
+  - `config`：关键挂机配置和高风险开关状态。
+
 默认配置：
 
 - `enabled: false`
@@ -231,4 +245,4 @@
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的完整状态机。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本，把 `adventureId`、每步选项、最终奖励记录成可分享策略。
-- 增加“导出挂机调试快照”，让测试者一键回传未知奇遇和停住原因。
+- 为快照增加最近决策历史、最近日志片段和可选脱敏摘要。

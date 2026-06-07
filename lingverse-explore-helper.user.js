@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.44.0
+// @version      2.45.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.44.0';
+    const SCRIPT_VERSION = '2.45.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -2179,6 +2179,16 @@
         ].join(' · ');
     }
 
+    function buildAfkEnvironmentStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const blockers = source.blockers && typeof source.blockers === 'object' ? source.blockers : {};
+        const version = sanitizeDebugText(source.scriptVersion || SCRIPT_VERSION, 40);
+        if (blockers.gameUpdateNoticeActive) {
+            return `环境: helper ${version} · 游戏更新提示，先刷新页面/重载扩展`;
+        }
+        return '';
+    }
+
     function formatReplayAttempt(label, attempt) {
         const source = attempt && typeof attempt === 'object' ? attempt : {};
         const reason = String(source.reason || 'unknown');
@@ -2391,6 +2401,10 @@
             ].join(' · ')}`,
             `风险: ${riskText}`
         ];
+        const environmentLine = buildAfkEnvironmentStatusLine(summary);
+        if (environmentLine) {
+            lines.splice(2, 0, environmentLine);
+        }
         (Array.isArray(riskStatus.warnings) ? riskStatus.warnings : [])
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
             .filter(Boolean)
@@ -2586,6 +2600,7 @@
         buildAfkDebugSnapshot,
         buildAfkDebugSummary,
         buildAfkIssueReplay,
+        buildAfkEnvironmentStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset

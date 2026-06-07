@@ -43,6 +43,7 @@
 - v2.42.0 只读状态：真实页仍显示“灵界已更新新版本，请点此刷新 获取最新内容”；helper 已注入（`window._autoMapInited=true`），但真实页需要刷新/重载扩展后才会加载本地最新版；页面神识 `3/2758`、位置沧澜港、可见“冥想修炼/探索(-4神识)/自动/万物图鉴”等入口。本次只读观察未点击探索、商人、战斗、护道、复活、用符或用丹。
 - v2.43.0 只读库存：`/api/game/inventory` 读到 184 项；当前相关资源包含 5 类战斗符箓 `ancient/ghost/thunder/fire/shield`，以及 `pill_nirvana_*` 九转还魂丹；没有读到 `bp_pill_rebirth_*` 涅槃重生丹。因此富裕模式应报告“用符 5/5类，涅槃丹无史诗+”，并继续避免把回血丹误当作五行通灵丹。
 - v2.44.0 只读护道配置：真实页仍显示更新提示，`window.LingVerseAutoMapVersion=null` 说明需要刷新/重载扩展；`getAutoHireConfig()` 返回游戏护道已开启，模式 `alone`，最高雇佣费 `51`，优先级 `normal,incarnation,body`。本次只读观察未点击探索、护道、战斗、复活、用符或用丹。
+- v2.45.0 只读环境状态：真实页仍显示“灵界已更新新版本，请点此刷新 获取最新内容”，helper hook 存在但 `window.LingVerseAutoMapVersion=null`，说明测试前需要刷新页面或重载扩展，否则测试反馈会混入旧页面状态。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -446,6 +447,12 @@
 - 面板新增“套用护道1倍”，仍只保存配置，不自动启动挂机。
 - `buildAfkStatusReport` 新增“护道:”行，把 `automation.guardian.reason` 翻译为中文，并带上失败消息、游戏护道开关、作战模式、最高费用、最低攻击力和优先级。
 - 目的：低境界测试者不用手动组合多个高风险开关；卡在遭遇时复制状态也能直接看出是游戏护道设置关闭、已触发、已失败，还是本遭遇已尝试过。
+
+`lingverse-explore-helper.user.js` v2.45.0 新增：
+
+- `buildAfkEnvironmentStatusLine(summary)` 从摘要的 `scriptVersion` 和 `blockers.gameUpdateNoticeActive` 生成只读环境提示。
+- 当游戏更新 blocker 存在时，`buildAfkStatusReport` 会插入 `环境: helper x.y.z · 游戏更新提示，先刷新页面/重载扩展`。
+- 目的：真实测试时常见“游戏页面提示更新、扩展脚本版本未刷新”的情况可以直接从状态报告看出，减少误判为挂机逻辑问题。
 
 默认配置：
 

@@ -284,3 +284,83 @@ test('decideAfkNextAction handles encounters only when auto fight is enabled', (
         reason: 'encounter-auto-fight-enabled'
     });
 });
+
+test('classifyExploreInterruption categorizes auto-explore stopping events', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption({ status: 'merchant' })), {
+        kind: 'merchant',
+        action: 'auto-handle',
+        reason: 'merchant'
+    });
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption({ status: 'player_encounter' })), {
+        kind: 'playerEncounter',
+        action: 'pause',
+        reason: 'player-encounter'
+    });
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption({ adventureId: 123 })), {
+        kind: 'adventure',
+        action: 'pause',
+        reason: 'adventure-chain'
+    });
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption({ status: 'immortal_prison' })), {
+        kind: 'immortalPrison',
+        action: 'hard-stop',
+        reason: 'immortal-prison'
+    });
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption({ status: 'error', message: '神识不足，无法探索' })), {
+        kind: 'noSpirit',
+        action: 'meditate',
+        reason: 'no-spirit'
+    });
+});
+
+test('decideAfkNextAction resumes exploration after revive or meditates if spirit is low', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const config = {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        autoRevive: true,
+        exploreMultiplier: 50
+    };
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isDead: true,
+        spirit: 100,
+        spiritCost: 4
+    }, config, 1_000_000)), {
+        action: 'revive',
+        reason: 'dead-auto-revive-enabled'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        postReviveResume: true,
+        isDead: false,
+        isMeditating: false,
+        spirit: 100,
+        spiritCost: 4,
+        canExplore: true
+    }, config, 1_000_000)), {
+        action: 'startAutoExplore',
+        reason: 'post-revive-ready'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        postReviveResume: true,
+        isDead: false,
+        isMeditating: false,
+        spirit: 3,
+        spiritCost: 4,
+        canExplore: true
+    }, config, 1_000_000)), {
+        action: 'startMeditation',
+        reason: 'post-revive-low-spirit'
+    });
+});

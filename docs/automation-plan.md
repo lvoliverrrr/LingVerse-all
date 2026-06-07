@@ -84,6 +84,15 @@ v2.9.0 已完成：
 - 符箓按 family 去重，优先最高品质，最多 5 种。
 - 遭遇默认仍等待，只有 `autoFight` 开启才进入 handler。
 
+v2.10.0 已完成：
+
+- 复活后 60 秒恢复窗口：如果神识仍足够，按配置倍率继续自动探索；如果神识不足，转入冥想。
+- 探索中断分类函数，明确哪些事件能自动处理、哪些事件默认暂停。
+- 页面 overlay 检测：
+  - 奇遇链 `#adventureOverlay`
+  - 陌生道友邂逅 `#pvpEncounterModal` / `#encounterInviteModal` / `#encounterSessionModal` 等
+  - 混天典狱 `currentArea` 前缀
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -115,6 +124,11 @@ v2.9.0 新增自动测试：
 - `selectNirvanaRebirthPill` 只选择五行通灵类涅槃重生丹，默认史诗以上。
 - `decideAfkNextAction` 只有 `autoFight` 开启时才把遭遇交给自动 handler。
 
+v2.10.0 新增自动测试：
+
+- `classifyExploreInterruption` 覆盖商人、陌生道友、奇遇链、混天典狱、神识不足。
+- `decideAfkNextAction` 覆盖死亡自动复活、复活后继续探索、复活后低神识回冥想。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -126,5 +140,6 @@ v2.9.0 新增自动测试：
 1. 把 v2.8.0 复制到 Edge 扩展测试目录，用户实测基础循环。
 2. 把 v2.9.0 复制到 Edge 扩展测试目录，用户实测富裕模式开关但先不要开 `autoRevive`。
 3. 用真实挂机日志收集“自动探索停住”的事件原因。
-4. 补“复活后继续 50 倍探索”的专门测试和节流。
+4. 把 v2.10.0 复制到 Edge 扩展测试目录，重点实测复活后是否能恢复到配置倍率。
 5. 继续补奇遇/道友邂逅/典狱等非战斗事件 handler。
+6. 为陌生道友邂逅设计“自动婉拒并继续探索”开关，默认关闭。

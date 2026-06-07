@@ -131,6 +131,12 @@
 - `nirvanaMinRarity` / `queueNirvanaPill`
 - opt-in 的遭遇 handler：可先用符，再迎战。
 
+`lingverse-explore-helper.user.js` v2.10.0 新增：
+
+- `classifyExploreInterruption(data)`：把探索返回的中断状态归类。
+- 自动检测奇遇链 overlay、陌生道友邂逅 modal、混天典狱区域。
+- 自动复活成功后设置短暂恢复窗口：神识够则按配置倍率继续探索，神识不足则回冥想。
+
 默认配置：
 
 - `enabled: false`
@@ -157,6 +163,17 @@
 - 自动迎战开启且遭遇激活 -> `handleEncounter`
 - 战斗符箓选择：跳过隐匿符/神行符/锁定物品，同类只选最高品质。
 - 涅槃重生丹选择：只选 `bp_pill_rebirth_*` 或明确“五行通灵/涅槃重生丹”的 pill，默认史诗以上。
+- 探索中断分类：
+  - `merchant` -> 自动商人处理器。
+  - `encounter` -> 妖兽遭遇 handler 或等待。
+  - `player_encounter` -> 暂停，默认等待用户处理陌生道友邂逅。
+  - `adventureId` -> 暂停，默认等待用户处理奇遇链。
+  - `immortal_prison/prison_material` -> hard-stop，暂停挂机。
+  - `error` 且包含“神识不足” -> 回冥想。
+- 复活后恢复：
+  - `autoRevive` 开启且死亡 -> `revive`
+  - 复活后短时间内神识足够 -> `startAutoExplore`，沿用配置倍率。
+  - 复活后神识不足 -> `startMeditation`。
 
 ## 待继续研究
 
@@ -164,3 +181,4 @@
 - 5 类战斗符箓的排序、每类用量、缺货跳过策略。
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的完整状态机。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
+- 陌生道友邂逅是否应提供“自动婉拒并继续探索”配置；该事件含聊天、交易、切磋、生死对决，不应默认自动操作。

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.9.0
+// @version      2.10.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -267,6 +267,38 @@
         return Number.isFinite(expire) && Number.isFinite(grade) && grade > 0 && expire > Date.now();
     }
 
+    function classifyExploreInterruption(data) {
+        const payload = data || {};
+        const status = payload.status || '';
+        const message = String(payload.message || '');
+
+        if (payload.adventureId) {
+            return { kind: 'adventure', action: 'pause', reason: 'adventure-chain' };
+        }
+        if (status === 'merchant') {
+            return { kind: 'merchant', action: 'auto-handle', reason: 'merchant' };
+        }
+        if (status === 'player_encounter') {
+            return { kind: 'playerEncounter', action: 'pause', reason: 'player-encounter' };
+        }
+        if (status === 'encounter') {
+            return { kind: 'monsterEncounter', action: 'handle', reason: 'monster-encounter' };
+        }
+        if (status === 'immortal_prison' || status === 'prison_material') {
+            return { kind: 'immortalPrison', action: 'hard-stop', reason: 'immortal-prison' };
+        }
+        if (status === 'dead' || status === 'death') {
+            return { kind: 'death', action: 'revive-or-wait', reason: 'death' };
+        }
+        if (status === 'error') {
+            if (message.indexOf('神识不足') >= 0) {
+                return { kind: 'noSpirit', action: 'meditate', reason: 'no-spirit' };
+            }
+            return { kind: 'error', action: 'pause', reason: 'explore-error' };
+        }
+        return { kind: 'none', action: 'continue', reason: 'continue' };
+    }
+
     function getMeditationElapsedMs(state, now) {
         if (!state) return 0;
         const durationSeconds = toFiniteNumber(state.meditationDurationSeconds, NaN);
@@ -287,6 +319,15 @@
 
         if (!cfg.enabled) {
             return { action: 'idle', reason: 'disabled' };
+        }
+        if (snapshot.immortalPrisonActive) {
+            return { action: 'wait', reason: 'immortal-prison' };
+        }
+        if (snapshot.adventureActive) {
+            return { action: 'wait', reason: 'adventure-active' };
+        }
+        if (snapshot.playerEncounterActive) {
+            return { action: 'wait', reason: 'player-encounter-active' };
         }
         if (snapshot.merchantActive) {
             return { action: 'wait', reason: 'merchant-active' };
@@ -337,6 +378,13 @@
             return { action: 'wait', reason: 'explore-disabled' };
         }
 
+        if (snapshot.postReviveResume) {
+            if (spirit < cfg.minSpirit || spirit < spiritCost) {
+                return { action: 'startMeditation', reason: 'post-revive-low-spirit' };
+            }
+            return { action: 'startAutoExplore', reason: 'post-revive-ready' };
+        }
+
         if (spirit < cfg.minSpirit || spirit < spiritCost) {
             return { action: 'startMeditation', reason: 'spirit-below-threshold' };
         }
@@ -351,7 +399,8 @@
         normalizeAfkLoopConfig,
         decideAfkNextAction,
         selectCombatTalismans,
-        selectNirvanaRebirthPill
+        selectNirvanaRebirthPill,
+        classifyExploreInterruption
     });
 
     // 状态对象
@@ -1532,6 +1581,7 @@
         lastAutoExploreCount: null,
         lastExploreProgressAt: 0,
         encounterBusy: false,
+        postReviveResumeUntil: 0,
 
         init() {
             this.ensureTimer();
@@ -1614,12 +1664,25 @@
             const encounterOverlay = $('#encounterOverlay');
             const combatPanel = $('#combatPanel');
             const talismanDialog = $('#encounterTalismanDialog');
+            const adventureOverlay = $('#adventureOverlay');
+            const playerEncounterActive = [
+                '#pvpEncounterModal',
+                '#encounterInviteModal',
+                '#encounterSessionModal',
+                '#encounterTradeModal',
+                '#encounterBattleModal',
+                '#encounterRespondPickerModal'
+            ].some(selector => {
+                const el = $(selector);
+                return !!(el && !el.classList.contains('hidden'));
+            });
             const encounterActive = !!(
                 _win._encounterActive ||
                 (encounterOverlay && !encounterOverlay.classList.contains('hidden')) ||
                 (combatPanel && combatPanel.classList.contains('active')) ||
                 (talismanDialog && !talismanDialog.classList.contains('hidden'))
             );
+            const adventureActive = !!(_win._companionAdventureActive || (adventureOverlay && !adventureOverlay.classList.contains('hidden')));
 
             const stalledMs = cfg.stallTimeoutSeconds * 1000;
             const exploreStalled = autoExploreRunning && stalledMs > 0 && (now - this.lastExploreProgressAt) >= stalledMs;
@@ -1633,10 +1696,14 @@
                 canExplore: player.canExplore,
                 exploreDisabledReason: player.exploreDisabledReason,
                 isDead: !!(player.isDead || _win.playerDead),
+                immortalPrisonActive: !!(player.currentArea && String(player.currentArea).indexOf('immortal_prison_') === 0),
+                adventureActive,
+                playerEncounterActive,
                 merchantActive: MerchantAutoBuyer.isMerchantActive(),
                 encounterActive,
                 autoExploreRunning,
                 autoExplorePending,
+                postReviveResume: this.postReviveResumeUntil > now,
                 exploreStalled
             };
         },
@@ -1802,6 +1869,8 @@
                     const res = await API.revive();
                     if (res.code !== 200) throw new Error(res.message || '复活失败');
                 }
+                this.postReviveResumeUntil = Date.now() + 60000;
+                this.lastDecisionKey = '';
                 this.refreshGameData();
             } catch (e) {
                 Logger.warn(`自动复活失败: ${e.message || e}`);
@@ -1907,6 +1976,9 @@
                 disabled: '未启用',
                 'merchant-active': '云游商人处理中',
                 'encounter-active': '遭遇或战斗处理中',
+                'adventure-active': '奇遇链等待处理',
+                'player-encounter-active': '陌生道友邂逅等待处理',
+                'immortal-prison': '混天典狱状态，挂机暂停',
                 dead: '角色已陨落',
                 meditating: '冥想未到结束条件',
                 'spirit-full': '神识已满',
@@ -1917,6 +1989,8 @@
                 'explore-disabled': '当前区域不可探索',
                 'spirit-below-threshold': '神识低于阈值',
                 'spirit-ready': '神识可探索',
+                'post-revive-ready': '复活后神识可探索',
+                'post-revive-low-spirit': '复活后神识不足',
                 'dead-auto-revive-enabled': '已开启自动复活',
                 'encounter-auto-fight-enabled': '已开启自动迎战'
             };

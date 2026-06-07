@@ -477,3 +477,79 @@ test('decideAfkNextAction handles adventure only when fixed adventure mode is en
         reason: 'adventure-auto-choice'
     });
 });
+
+test('normalizeAfkLoopConfig parses per-adventure fixed choice maps', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.normalizeAfkLoopConfig({
+        adventureMode: 'strategy',
+        adventureChoiceMap: '{"456":2,"789":"3","huge":99,"zero":0,"bad":"x"}'
+    }).adventureChoiceMap), {
+        456: 2,
+        789: 3,
+        huge: 10
+    });
+
+    assert.deepEqual(toPlain(hooks.normalizeAfkLoopConfig({
+        adventureMode: 'strategy',
+        adventureChoiceMap: '456=2\n789:3\nhuge=99\nzero=0\nbad=x'
+    }).adventureChoiceMap), {
+        456: 2,
+        789: 3,
+        huge: 10
+    });
+});
+
+test('per-adventure strategy only auto-handles mapped adventure ids', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const config = {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        adventureMode: 'strategy',
+        adventureChoiceMap: { 456: 2 }
+    };
+
+    assert.equal(hooks.resolveAdventureChoiceIndex(456, config), 2);
+    assert.equal(hooks.resolveAdventureChoiceIndex(999, config), 0);
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption(
+        { adventureId: 456 },
+        config
+    )), {
+        kind: 'adventure',
+        action: 'auto-choice',
+        reason: 'adventure-strategy-choice'
+    });
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption(
+        { adventureId: 999 },
+        config
+    )), {
+        kind: 'adventure',
+        action: 'pause',
+        reason: 'adventure-chain'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        adventureActive: true,
+        adventureId: 456,
+        spirit: 200,
+        isDead: false
+    }, config, 1_000_000)), {
+        action: 'handleAdventure',
+        reason: 'adventure-strategy-choice'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        adventureActive: true,
+        adventureId: 999,
+        spirit: 200,
+        isDead: false
+    }, config, 1_000_000)), {
+        action: 'wait',
+        reason: 'adventure-active'
+    });
+});

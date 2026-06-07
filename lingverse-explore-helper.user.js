@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.12.0
+// @version      2.13.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -58,7 +58,8 @@
             queueNirvanaPill: false,  // 已有五行通灵时是否继续排队
             autoDeclinePlayerEncounter: false, // 陌生道友邂逅默认暂停，开启后自动婉拒/离开
             adventureMode: 'pause',    // 奇遇链默认暂停，避免自动选择剧情分支
-            adventureChoiceIndex: 1     // fixed 模式下点击第几个奇遇选项，按界面顺序从1开始
+            adventureChoiceIndex: 1,    // fixed 模式下点击第几个奇遇选项，按界面顺序从1开始
+            adventureChoiceMap: {}      // strategy 模式下按 adventureId 固定选择
         }
     };
 
@@ -112,7 +113,8 @@
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: false,
         adventureMode: 'pause',
-        adventureChoiceIndex: 1
+        adventureChoiceIndex: 1,
+        adventureChoiceMap: {}
     }, CONFIG.afkLoop || {});
 
     function saveConfig() {
@@ -168,6 +170,57 @@
         return parsed;
     }
 
+    function parseAdventureChoiceMapText(text) {
+        const parsed = {};
+        String(text || '').split(/[\n,;]+/).forEach(row => {
+            const match = row.trim().match(/^(.+?)[=:]\s*(.+)$/);
+            if (!match) return;
+            parsed[match[1].trim()] = match[2].trim();
+        });
+        return parsed;
+    }
+
+    function normalizeAdventureChoiceMap(value) {
+        let raw = {};
+        if (typeof value === 'string') {
+            const text = value.trim();
+            if (!text) return {};
+            try {
+                const parsed = JSON.parse(text);
+                raw = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+                    ? parsed
+                    : parseAdventureChoiceMapText(text);
+            } catch (e) {
+                raw = parseAdventureChoiceMapText(text);
+            }
+        } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+            raw = value;
+        }
+
+        const normalized = {};
+        Object.keys(raw).forEach(key => {
+            const id = String(key || '').trim();
+            const choice = Number(raw[key]);
+            if (!id || !Number.isFinite(choice) || choice <= 0) return;
+            normalized[id] = Math.max(1, Math.min(10, Math.floor(choice)));
+        });
+        return normalized;
+    }
+
+    function formatAdventureChoiceMap(value) {
+        const map = normalizeAdventureChoiceMap(value);
+        return Object.keys(map).map(key => `${key}=${map[key]}`).join('\n');
+    }
+
+    function escapeHtmlText(value) {
+        return String(value == null ? '' : value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     function normalizeAfkLoopConfig(config) {
         const cfg = Object.assign({}, CONFIG.afkLoop, config || {});
         cfg.enabled = !!cfg.enabled;
@@ -185,9 +238,51 @@
         cfg.nirvanaMinRarity = clampNumber(cfg.nirvanaMinRarity, 1, 5, 4);
         cfg.queueNirvanaPill = !!cfg.queueNirvanaPill;
         cfg.autoDeclinePlayerEncounter = !!cfg.autoDeclinePlayerEncounter;
-        cfg.adventureMode = cfg.adventureMode === 'fixed' ? 'fixed' : 'pause';
+        cfg.adventureMode = cfg.adventureMode === 'fixed' || cfg.adventureMode === 'strategy' ? cfg.adventureMode : 'pause';
         cfg.adventureChoiceIndex = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
+        cfg.adventureChoiceMap = normalizeAdventureChoiceMap(cfg.adventureChoiceMap);
         return cfg;
+    }
+
+    function resolveAdventureChoiceIndex(adventureId, config) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        if (cfg.adventureMode === 'fixed') {
+            return cfg.adventureChoiceIndex;
+        }
+        if (cfg.adventureMode === 'strategy') {
+            if (adventureId === null || typeof adventureId === 'undefined' || adventureId === '') return 0;
+            return cfg.adventureChoiceMap[String(adventureId)] || 0;
+        }
+        return 0;
+    }
+
+    function getAdventureChoiceReason(config) {
+        return config && config.adventureMode === 'strategy' ? 'adventure-strategy-choice' : 'adventure-auto-choice';
+    }
+
+    function rememberAdventureStep(step) {
+        if (!step || !step.adventureId) return;
+        _win._lingverseAutoMapLastAdventureStep = {
+            adventureId: step.adventureId,
+            step: step.step,
+            totalSteps: step.totalSteps,
+            isComplete: !!step.isComplete,
+            choices: Array.isArray(step.choices) ? step.choices.slice() : []
+        };
+    }
+
+    function installAdventureStepHook() {
+        if (_win._lingverseAutoMapAdventureHookInstalled) return true;
+        if (typeof _win.showAdventureStep !== 'function') return false;
+        const original = _win.showAdventureStep;
+        const wrapped = function(step) {
+            rememberAdventureStep(step);
+            return original.apply(this, arguments);
+        };
+        wrapped._lingverseAutoMapWrapped = true;
+        _win.showAdventureStep = wrapped;
+        _win._lingverseAutoMapAdventureHookInstalled = true;
+        return true;
     }
 
     function getItemId(item) {
@@ -283,8 +378,9 @@
         const message = String(payload.message || '');
 
         if (payload.adventureId) {
-            return cfg.adventureMode === 'fixed'
-                ? { kind: 'adventure', action: 'auto-choice', reason: 'adventure-auto-choice' }
+            const choiceIndex = resolveAdventureChoiceIndex(payload.adventureId, cfg);
+            return choiceIndex > 0
+                ? { kind: 'adventure', action: 'auto-choice', reason: getAdventureChoiceReason(cfg) }
                 : { kind: 'adventure', action: 'pause', reason: 'adventure-chain' };
         }
         if (status === 'merchant') {
@@ -338,8 +434,9 @@
             return { action: 'wait', reason: 'immortal-prison' };
         }
         if (snapshot.adventureActive) {
-            if (cfg.adventureMode === 'fixed') {
-                return { action: 'handleAdventure', reason: 'adventure-auto-choice' };
+            const choiceIndex = resolveAdventureChoiceIndex(snapshot.adventureId, cfg);
+            if (choiceIndex > 0) {
+                return { action: 'handleAdventure', reason: getAdventureChoiceReason(cfg) };
             }
             return { action: 'wait', reason: 'adventure-active' };
         }
@@ -420,7 +517,10 @@
         decideAfkNextAction,
         selectCombatTalismans,
         selectNirvanaRebirthPill,
-        classifyExploreInterruption
+        classifyExploreInterruption,
+        normalizeAdventureChoiceMap,
+        formatAdventureChoiceMap,
+        resolveAdventureChoiceIndex
     });
 
     // 状态对象
@@ -650,6 +750,7 @@
         cfg.autoDeclinePlayerEncounter = $('#am-afk-auto-decline-player')?.checked ?? cfg.autoDeclinePlayerEncounter;
         cfg.adventureMode = $('#am-afk-adventure-mode')?.value || cfg.adventureMode || 'pause';
         cfg.adventureChoiceIndex = clampNumber($('#am-afk-adventure-choice')?.value, 1, 10, cfg.adventureChoiceIndex || 1);
+        cfg.adventureChoiceMap = normalizeAdventureChoiceMap($('#am-afk-adventure-map')?.value ?? cfg.adventureChoiceMap);
         CONFIG.afkLoop = normalizeAfkLoopConfig(cfg);
         return CONFIG.afkLoop;
     }
@@ -926,12 +1027,17 @@
                                     <select id="am-afk-adventure-mode" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;cursor:pointer;">
                                         <option value="pause" ${CONFIG.afkLoop.adventureMode==='pause'?'selected':''}>暂停等待</option>
                                         <option value="fixed" ${CONFIG.afkLoop.adventureMode==='fixed'?'selected':''}>固定选择</option>
+                                        <option value="strategy" ${CONFIG.afkLoop.adventureMode==='strategy'?'selected':''}>按ID策略</option>
                                     </select>
                                 </div>
                                 <div>
                                     <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">选择序号</div>
                                     <input type="number" id="am-afk-adventure-choice" value="${CONFIG.afkLoop.adventureChoiceIndex}" min="1" max="10" step="1" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
                                 </div>
+                            </div>
+                            <div>
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">奇遇策略表</div>
+                                <textarea id="am-afk-adventure-map" rows="3" placeholder="456=2&#10;789=1" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;resize:vertical;">${escapeHtmlText(formatAdventureChoiceMap(CONFIG.afkLoop.adventureChoiceMap))}</textarea>
                             </div>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-auto-revive" ${CONFIG.afkLoop.autoRevive?'checked':''} style="cursor:pointer;">
@@ -1167,6 +1273,7 @@
             const afkAutoDeclinePlayerEl = $('#am-afk-auto-decline-player');
             const afkAdventureModeEl = $('#am-afk-adventure-mode');
             const afkAdventureChoiceEl = $('#am-afk-adventure-choice');
+            const afkAdventureMapEl = $('#am-afk-adventure-map');
             const afkUseTalismansEl = $('#am-afk-use-talismans');
             const afkTalismanMaxKindsEl = $('#am-afk-talisman-max-kinds');
             const afkTalismanQtyEl = $('#am-afk-talisman-qty');
@@ -1196,6 +1303,7 @@
             if (afkAutoDeclinePlayerEl) afkAutoDeclinePlayerEl.checked = CONFIG.afkLoop.autoDeclinePlayerEncounter;
             if (afkAdventureModeEl) afkAdventureModeEl.value = CONFIG.afkLoop.adventureMode;
             if (afkAdventureChoiceEl) afkAdventureChoiceEl.value = CONFIG.afkLoop.adventureChoiceIndex;
+            if (afkAdventureMapEl) afkAdventureMapEl.value = formatAdventureChoiceMap(CONFIG.afkLoop.adventureChoiceMap);
             if (afkUseTalismansEl) afkUseTalismansEl.checked = CONFIG.afkLoop.useTalismans;
             if (afkTalismanMaxKindsEl) afkTalismanMaxKindsEl.value = CONFIG.afkLoop.talismanMaxKinds;
             if (afkTalismanQtyEl) afkTalismanQtyEl.value = CONFIG.afkLoop.talismanQuantity;
@@ -1683,6 +1791,7 @@
         },
 
         async buildSnapshot(now, cfg) {
+            installAdventureStepHook();
             let player = _win._lastPlayerData || null;
             if (!player) {
                 try {
@@ -1712,6 +1821,7 @@
             const combatPanel = $('#combatPanel');
             const talismanDialog = $('#encounterTalismanDialog');
             const adventureOverlay = $('#adventureOverlay');
+            const adventureStep = _win._lingverseAutoMapLastAdventureStep || null;
             const playerEncounterActive = [
                 '#pvpEncounterModal',
                 '#encounterInviteModal',
@@ -1745,6 +1855,8 @@
                 isDead: !!(player.isDead || _win.playerDead),
                 immortalPrisonActive: !!(player.currentArea && String(player.currentArea).indexOf('immortal_prison_') === 0),
                 adventureActive,
+                adventureId: adventureActive && adventureStep ? adventureStep.adventureId : undefined,
+                adventureComplete: adventureActive && adventureStep ? !!adventureStep.isComplete : false,
                 playerEncounterActive,
                 merchantActive: MerchantAutoBuyer.isMerchantActive(),
                 encounterActive,
@@ -2022,19 +2134,26 @@
         },
 
         async handleAdventure(cfg) {
-            if (cfg.adventureMode !== 'fixed') return;
+            if (cfg.adventureMode !== 'fixed' && cfg.adventureMode !== 'strategy') return;
             try {
+                installAdventureStepHook();
                 const overlay = $('#adventureOverlay');
                 if (!overlay || overlay.classList.contains('hidden')) {
                     Logger.warn('未检测到可处理的奇遇面板，继续等待');
                     return;
                 }
 
+                const adventureStep = _win._lingverseAutoMapLastAdventureStep || null;
+                const adventureId = adventureStep ? adventureStep.adventureId : undefined;
                 const closeBtn = this.findAdventureCloseButton(overlay);
                 const choiceButtons = this.findAdventureChoiceButtons(overlay);
 
                 if (choiceButtons.length > 0) {
-                    const choiceNumber = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
+                    const choiceNumber = resolveAdventureChoiceIndex(adventureId, cfg);
+                    if (choiceNumber <= 0) {
+                        Logger.warn(`奇遇 ${adventureId || '未知'} 未命中固定策略，等待手动处理`);
+                        return;
+                    }
                     const choiceBtn = choiceButtons[choiceNumber - 1];
                     if (!choiceBtn || choiceBtn.disabled) {
                         Logger.warn(`奇遇固定选择第${choiceNumber}项，但当前只有${choiceButtons.length}个可选项，等待手动处理`);
@@ -2042,7 +2161,7 @@
                     }
 
                     choiceBtn.click();
-                    Logger.info(`已自动选择奇遇第${choiceNumber}项`);
+                    Logger.info(`已自动选择奇遇${adventureId ? ` ${adventureId}` : ''}第${choiceNumber}项`);
                 } else if (closeBtn && !closeBtn.disabled) {
                     closeBtn.click();
                     Logger.info('已自动结束/关闭奇遇');
@@ -2156,6 +2275,7 @@
                 'encounter-active': '遭遇或战斗处理中',
                 'adventure-active': '奇遇链等待处理',
                 'adventure-auto-choice': '奇遇链固定选择',
+                'adventure-strategy-choice': '奇遇链按ID策略选择',
                 'player-encounter-active': '陌生道友邂逅等待处理',
                 'player-encounter-auto-decline': '自动婉拒陌生道友',
                 'immortal-prison': '混天典狱状态，挂机暂停',
@@ -2820,7 +2940,8 @@
     const init = () => {
         if (_win._autoMapInited) return;
         _win._autoMapInited = true;
-        
+
+        installAdventureStepHook();
         UI.init();
         MerchantAutoBuyer.init();
         AfkLoopManager.init();

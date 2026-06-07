@@ -106,6 +106,13 @@ v2.12.0 已完成：
 - 奇遇完成后如果页面只剩“结束奇遇/关闭/完成”按钮，脚本会关闭面板并进入恢复窗口。
 - 固定选择序号超出当前可选项数量时只提示并等待手动处理，不自动改点其他选项。
 
+v2.13.0 已完成：
+
+- 新增 `adventureMode: strategy`，按 `adventureId -> choiceIndex` 策略表自动选择。
+- 新增 `adventureChoiceMap`，支持 JSON 对象和 `456=2` / `789:1` 多行文本。
+- 未命中策略表的奇遇仍暂停等待用户处理，不回退到全局固定选择。
+- 由于原游戏 DOM 不暴露 `adventureId`，脚本会包装 `showAdventureStep(step)`，只记录最近奇遇 step，不改变原 UI 流程。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -153,6 +160,12 @@ v2.12.0 新增自动测试：
 - `classifyExploreInterruption` 在 `adventureMode: pause` 时保持暂停，在 `fixed` 时归类为 `auto-choice`。
 - `decideAfkNextAction` 只有开启固定奇遇选择时才把奇遇交给 `handleAdventure`。
 
+v2.13.0 新增自动测试：
+
+- `normalizeAfkLoopConfig` 可解析 JSON 和多行文本格式的 `adventureChoiceMap`。
+- `resolveAdventureChoiceIndex` 只对策略表命中的 `adventureId` 返回选择序号。
+- `classifyExploreInterruption` / `decideAfkNextAction` 在策略模式下只自动处理已映射奇遇，未知奇遇保持等待。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -166,4 +179,4 @@ v2.12.0 新增自动测试：
 3. 用真实挂机日志收集“自动探索停住”的事件原因。
 4. 把 v2.10.0 复制到 Edge 扩展测试目录，重点实测复活后是否能恢复到配置倍率。
 5. 用真实奇遇链继续记录每个 adventureId 的选项、奖励和后续步骤。
-6. 为奇遇链升级“按 adventureId 配置固定策略”，当前 v2.12.0 只有全局固定第 N 项。
+6. 为奇遇链补“策略命中记录/导出调试快照”，方便测试者回传未知奇遇样本。

@@ -123,7 +123,9 @@
 - 选项容器为 `#adventureChoices`。
 - 可点选项按钮为 `.adventure-choice-btn`，按钮点击后调用 `handleAdventureChoice(step.adventureId, index, choice, currentStep)`。
 - 奇遇结束按钮为 `.adventure-close-btn`，常见文本为“结束奇遇”。
-- 当前脚本不解析奇遇含义，只提供“默认暂停”和“固定点击第 N 个选项”两种策略。
+- 当前 DOM 没有把 `adventureId` 写到 dataset 或隐藏字段，也没有全局 `_currentAdventureStep`。
+- v2.13.0 脚本通过包装 `showAdventureStep(step)` 记录最近 step，供按 ID 策略使用。
+- 当前脚本不解析奇遇含义，只提供“默认暂停”“固定点击第 N 个选项”“按 adventureId 策略表”三种策略。
 
 ## 当前脚本实现
 
@@ -165,6 +167,22 @@
 - `AfkLoopManager.handleAdventure()` 优先点击 `.adventure-choice-btn`，没有选项但有 `.adventure-close-btn` 时关闭已完成奇遇。
 - 固定序号超出当前选项数量时等待手动处理，避免自动改点其他分支。
 
+`lingverse-explore-helper.user.js` v2.13.0 新增：
+
+- `adventureMode: strategy`：只有当前 `adventureId` 命中策略表时才自动选择。
+- `adventureChoiceMap`：`adventureId -> choiceIndex`，选择序号仍按界面顺序从 1 开始。
+- 策略表输入支持 JSON：`{"456":2,"789":1}`。
+- 策略表输入也支持多行文本：
+
+```text
+456=2
+789:1
+```
+
+- `resolveAdventureChoiceIndex(adventureId, config)` 统一处理固定模式和策略模式。
+- `installAdventureStepHook()` 包装页面 `showAdventureStep(step)`，记录最近奇遇 step，不改变页面原函数返回。
+- 策略模式下未知 `adventureId` 不会自动选择，仍保持 `adventure-active` 等待。
+
 默认配置：
 
 - `enabled: false`
@@ -183,6 +201,7 @@
 - `queueNirvanaPill: false`
 - `adventureMode: "pause"`
 - `adventureChoiceIndex: 1`
+- `adventureChoiceMap: {}`
 
 测试覆盖：
 
@@ -197,7 +216,7 @@
   - `merchant` -> 自动商人处理器。
   - `encounter` -> 妖兽遭遇 handler 或等待。
   - `player_encounter` -> 默认暂停；开启 `autoDeclinePlayerEncounter` 后自动婉拒/离开。
-  - `adventureId` -> 默认暂停；开启 `adventureMode: fixed` 后固定选择第 N 项。
+  - `adventureId` -> 默认暂停；开启 `adventureMode: fixed` 后固定选择第 N 项；开启 `strategy` 后仅处理策略表命中的 ID。
   - `immortal_prison/prison_material` -> hard-stop，暂停挂机。
   - `error` 且包含“神识不足” -> 回冥想。
 - 复活后恢复：
@@ -211,4 +230,5 @@
 - 5 类战斗符箓的排序、每类用量、缺货跳过策略。
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的完整状态机。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
-- 继续收集真实奇遇链样本，后续做 `adventureId -> choiceIndex` 的 per-event 策略表；当前全局固定第 N 项只适合测试者已知自己想怎么选的场景。
+- 继续收集真实奇遇链样本，把 `adventureId`、每步选项、最终奖励记录成可分享策略。
+- 增加“导出挂机调试快照”，让测试者一键回传未知奇遇和停住原因。

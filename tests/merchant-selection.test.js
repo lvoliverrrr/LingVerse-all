@@ -364,3 +364,59 @@ test('decideAfkNextAction resumes exploration after revive or meditates if spiri
         reason: 'post-revive-low-spirit'
     });
 });
+
+test('classifyExploreInterruption can opt into auto-declining player encounters', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption(
+        { status: 'player_encounter' },
+        { autoDeclinePlayerEncounter: false }
+    )), {
+        kind: 'playerEncounter',
+        action: 'pause',
+        reason: 'player-encounter'
+    });
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption(
+        { status: 'player_encounter' },
+        { autoDeclinePlayerEncounter: true }
+    )), {
+        kind: 'playerEncounter',
+        action: 'auto-decline',
+        reason: 'player-encounter-auto-decline'
+    });
+});
+
+test('decideAfkNextAction handles player encounters only when auto decline is enabled', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        playerEncounterActive: true,
+        spirit: 200,
+        isDead: false
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        autoDeclinePlayerEncounter: false
+    }, 1_000_000)), {
+        action: 'wait',
+        reason: 'player-encounter-active'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        playerEncounterActive: true,
+        spirit: 200,
+        isDead: false
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        autoDeclinePlayerEncounter: true
+    }, 1_000_000)), {
+        action: 'handlePlayerEncounter',
+        reason: 'player-encounter-auto-decline'
+    });
+});

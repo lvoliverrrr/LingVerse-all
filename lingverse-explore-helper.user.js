@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.10.0
+// @version      2.11.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -55,7 +55,8 @@
             talismanQuantity: 1,      // 每种符默认使用数量
             useNirvanaPill: false,   // 涅槃重生丹消耗品，默认关闭
             nirvanaMinRarity: 4,      // 默认只吃史诗及以上五行通灵丹
-            queueNirvanaPill: false  // 已有五行通灵时是否继续排队
+            queueNirvanaPill: false,  // 已有五行通灵时是否继续排队
+            autoDeclinePlayerEncounter: false // 陌生道友邂逅默认暂停，开启后自动婉拒/离开
         }
     };
 
@@ -106,7 +107,8 @@
         talismanQuantity: 1,
         useNirvanaPill: false,
         nirvanaMinRarity: 4,
-        queueNirvanaPill: false
+        queueNirvanaPill: false,
+        autoDeclinePlayerEncounter: false
     }, CONFIG.afkLoop || {});
 
     function saveConfig() {
@@ -178,6 +180,7 @@
         cfg.useNirvanaPill = !!cfg.useNirvanaPill;
         cfg.nirvanaMinRarity = clampNumber(cfg.nirvanaMinRarity, 1, 5, 4);
         cfg.queueNirvanaPill = !!cfg.queueNirvanaPill;
+        cfg.autoDeclinePlayerEncounter = !!cfg.autoDeclinePlayerEncounter;
         return cfg;
     }
 
@@ -267,8 +270,9 @@
         return Number.isFinite(expire) && Number.isFinite(grade) && grade > 0 && expire > Date.now();
     }
 
-    function classifyExploreInterruption(data) {
+    function classifyExploreInterruption(data, config) {
         const payload = data || {};
+        const cfg = normalizeAfkLoopConfig(config || {});
         const status = payload.status || '';
         const message = String(payload.message || '');
 
@@ -279,7 +283,9 @@
             return { kind: 'merchant', action: 'auto-handle', reason: 'merchant' };
         }
         if (status === 'player_encounter') {
-            return { kind: 'playerEncounter', action: 'pause', reason: 'player-encounter' };
+            return cfg.autoDeclinePlayerEncounter
+                ? { kind: 'playerEncounter', action: 'auto-decline', reason: 'player-encounter-auto-decline' }
+                : { kind: 'playerEncounter', action: 'pause', reason: 'player-encounter' };
         }
         if (status === 'encounter') {
             return { kind: 'monsterEncounter', action: 'handle', reason: 'monster-encounter' };
@@ -327,6 +333,9 @@
             return { action: 'wait', reason: 'adventure-active' };
         }
         if (snapshot.playerEncounterActive) {
+            if (cfg.autoDeclinePlayerEncounter) {
+                return { action: 'handlePlayerEncounter', reason: 'player-encounter-auto-decline' };
+            }
             return { action: 'wait', reason: 'player-encounter-active' };
         }
         if (snapshot.merchantActive) {
@@ -627,6 +636,7 @@
         cfg.useNirvanaPill = $('#am-afk-use-nirvana')?.checked ?? cfg.useNirvanaPill;
         cfg.nirvanaMinRarity = clampNumber($('#am-afk-nirvana-min-rarity')?.value, 1, 5, cfg.nirvanaMinRarity || 4);
         cfg.queueNirvanaPill = $('#am-afk-queue-nirvana')?.checked ?? cfg.queueNirvanaPill;
+        cfg.autoDeclinePlayerEncounter = $('#am-afk-auto-decline-player')?.checked ?? cfg.autoDeclinePlayerEncounter;
         CONFIG.afkLoop = normalizeAfkLoopConfig(cfg);
         return CONFIG.afkLoop;
     }
@@ -894,6 +904,10 @@
                                 <span style="font-size:12px;color:${text};">遭遇妖兽后自动迎战</span>
                             </label>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="checkbox" id="am-afk-auto-decline-player" ${CONFIG.afkLoop.autoDeclinePlayerEncounter?'checked':''} style="cursor:pointer;">
+                                <span style="font-size:12px;color:${text};">自动婉拒陌生道友邂逅</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-auto-revive" ${CONFIG.afkLoop.autoRevive?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">死亡后自动灵石复活</span>
                             </label>
@@ -1124,6 +1138,7 @@
             const afkStallTimeoutEl = $('#am-afk-stall-timeout');
             const afkAutoReviveEl = $('#am-afk-auto-revive');
             const afkAutoFightEl = $('#am-afk-auto-fight');
+            const afkAutoDeclinePlayerEl = $('#am-afk-auto-decline-player');
             const afkUseTalismansEl = $('#am-afk-use-talismans');
             const afkTalismanMaxKindsEl = $('#am-afk-talisman-max-kinds');
             const afkTalismanQtyEl = $('#am-afk-talisman-qty');
@@ -1150,6 +1165,7 @@
             if (afkStallTimeoutEl) afkStallTimeoutEl.value = CONFIG.afkLoop.stallTimeoutSeconds;
             if (afkAutoReviveEl) afkAutoReviveEl.checked = CONFIG.afkLoop.autoRevive;
             if (afkAutoFightEl) afkAutoFightEl.checked = CONFIG.afkLoop.autoFight;
+            if (afkAutoDeclinePlayerEl) afkAutoDeclinePlayerEl.checked = CONFIG.afkLoop.autoDeclinePlayerEncounter;
             if (afkUseTalismansEl) afkUseTalismansEl.checked = CONFIG.afkLoop.useTalismans;
             if (afkTalismanMaxKindsEl) afkTalismanMaxKindsEl.value = CONFIG.afkLoop.talismanMaxKinds;
             if (afkTalismanQtyEl) afkTalismanQtyEl.value = CONFIG.afkLoop.talismanQuantity;
@@ -1582,6 +1598,7 @@
         lastExploreProgressAt: 0,
         encounterBusy: false,
         postReviveResumeUntil: 0,
+        postInteractionResumeUntil: 0,
 
         init() {
             this.ensureTimer();
@@ -1703,7 +1720,7 @@
                 encounterActive,
                 autoExploreRunning,
                 autoExplorePending,
-                postReviveResume: this.postReviveResumeUntil > now,
+                postReviveResume: this.postReviveResumeUntil > now || this.postInteractionResumeUntil > now,
                 exploreStalled
             };
         },
@@ -1737,6 +1754,11 @@
             if (decision.action === 'handleEncounter') {
                 Logger.info(`自动挂机处理遭遇：${this.formatReason(decision.reason)}`);
                 await this.handleEncounter(cfg);
+                return;
+            }
+            if (decision.action === 'handlePlayerEncounter') {
+                Logger.info(`自动挂机处理陌生道友邂逅：${this.formatReason(decision.reason)}`);
+                await this.handlePlayerEncounter(cfg);
                 return;
             }
             if (decision.action === 'revive') {
@@ -1964,6 +1986,70 @@
             }
         },
 
+        async handlePlayerEncounter(cfg) {
+            if (!cfg.autoDeclinePlayerEncounter) return;
+            try {
+                let handled = false;
+                const pvpModal = $('#pvpEncounterModal');
+                if (pvpModal && typeof _win.PvpModule?.dismissEncounter === 'function') {
+                    _win.PvpModule.dismissEncounter();
+                    handled = true;
+                }
+
+                const inviteModal = $('#encounterInviteModal');
+                if (!handled && inviteModal && typeof _win.EncounterModule?.respondInvite === 'function') {
+                    await _win.EncounterModule.respondInvite(false);
+                    handled = true;
+                }
+
+                const sessionModal = $('#encounterSessionModal');
+                if (!handled && sessionModal && typeof _win.EncounterModule?.leave === 'function') {
+                    await _win.EncounterModule.leave();
+                    handled = true;
+                }
+
+                if (!handled) {
+                    handled = this.clickPlayerEncounterDeclineButton();
+                }
+
+                if (!handled) {
+                    Logger.warn('未找到可自动婉拒的陌生道友邂逅入口，已暂停等待手动处理');
+                    return;
+                }
+
+                Logger.info('已自动婉拒/离开陌生道友邂逅');
+                this.postInteractionResumeUntil = Date.now() + 60000;
+                this.lastDecisionKey = '';
+                this.refreshGameData();
+                setTimeout(() => this.tick(true), 1200);
+            } catch (e) {
+                Logger.warn(`自动婉拒陌生道友失败: ${e.message || e}`);
+            }
+        },
+
+        clickPlayerEncounterDeclineButton() {
+            const containers = [
+                '#pvpEncounterModal',
+                '#encounterInviteModal',
+                '#encounterSessionModal',
+                '#encounterTradeModal',
+                '#encounterBattleModal',
+                '#encounterRespondPickerModal'
+            ];
+            const labels = ['婉言告辞', '离开', '取消'];
+            for (const selector of containers) {
+                const container = $(selector);
+                if (!container) continue;
+                const buttons = Array.from(container.querySelectorAll('button'));
+                const btn = buttons.find(button => labels.some(label => String(button.textContent || '').indexOf(label) >= 0));
+                if (btn && !btn.disabled) {
+                    btn.click();
+                    return true;
+                }
+            }
+            return false;
+        },
+
         refreshGameData() {
             try {
                 if (_win.loadPlayerInfo) _win.loadPlayerInfo(true);
@@ -1978,6 +2064,7 @@
                 'encounter-active': '遭遇或战斗处理中',
                 'adventure-active': '奇遇链等待处理',
                 'player-encounter-active': '陌生道友邂逅等待处理',
+                'player-encounter-auto-decline': '自动婉拒陌生道友',
                 'immortal-prison': '混天典狱状态，挂机暂停',
                 dead: '角色已陨落',
                 meditating: '冥想未到结束条件',

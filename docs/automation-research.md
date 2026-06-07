@@ -137,6 +137,14 @@
 - 自动检测奇遇链 overlay、陌生道友邂逅 modal、混天典狱区域。
 - 自动复活成功后设置短暂恢复窗口：神识够则按配置倍率继续探索，神识不足则回冥想。
 
+`lingverse-explore-helper.user.js` v2.11.0 新增：
+
+- `autoDeclinePlayerEncounter`：陌生道友邂逅自动婉拒/离开开关，默认关闭。
+- 邂逅邀请卡优先调用 `EncounterModule.respondInvite(false)`。
+- 已打开邂逅会话优先调用 `EncounterModule.leave()`。
+- 邂逅卡优先调用 `PvpModule.dismissEncounter()`。
+- 处理成功后进入 60 秒恢复窗口，让挂机循环按神识状态继续探索或回冥想。
+
 默认配置：
 
 - `enabled: false`
@@ -166,7 +174,7 @@
 - 探索中断分类：
   - `merchant` -> 自动商人处理器。
   - `encounter` -> 妖兽遭遇 handler 或等待。
-  - `player_encounter` -> 暂停，默认等待用户处理陌生道友邂逅。
+  - `player_encounter` -> 默认暂停；开启 `autoDeclinePlayerEncounter` 后自动婉拒/离开。
   - `adventureId` -> 暂停，默认等待用户处理奇遇链。
   - `immortal_prison/prison_material` -> hard-stop，暂停挂机。
   - `error` 且包含“神识不足” -> 回冥想。
@@ -181,4 +189,4 @@
 - 5 类战斗符箓的排序、每类用量、缺货跳过策略。
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的完整状态机。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
-- 陌生道友邂逅是否应提供“自动婉拒并继续探索”配置；该事件含聊天、交易、切磋、生死对决，不应默认自动操作。
+- 奇遇链是否应提供“固定选择第 N 个选项”的配置；该事件含叙事和多分支奖励，不应默认自动操作。

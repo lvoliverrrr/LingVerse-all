@@ -93,6 +93,12 @@ v2.10.0 已完成：
   - 陌生道友邂逅 `#pvpEncounterModal` / `#encounterInviteModal` / `#encounterSessionModal` 等
   - 混天典狱 `currentArea` 前缀
 
+v2.11.0 已完成：
+
+- 新增 `autoDeclinePlayerEncounter`，默认关闭。
+- 开启后自动婉拒陌生道友邀请、关闭邂逅卡或离开已打开邂逅会话。
+- 处理成功后进入恢复窗口，继续走“神识够就探索，不够就冥想”的主循环。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -129,6 +135,11 @@ v2.10.0 新增自动测试：
 - `classifyExploreInterruption` 覆盖商人、陌生道友、奇遇链、混天典狱、神识不足。
 - `decideAfkNextAction` 覆盖死亡自动复活、复活后继续探索、复活后低神识回冥想。
 
+v2.11.0 新增自动测试：
+
+- `classifyExploreInterruption` 在 `autoDeclinePlayerEncounter` 开启时把 `player_encounter` 归类为 `auto-decline`。
+- `decideAfkNextAction` 只有开启 `autoDeclinePlayerEncounter` 才自动处理陌生道友邂逅。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -142,4 +153,4 @@ v2.10.0 新增自动测试：
 3. 用真实挂机日志收集“自动探索停住”的事件原因。
 4. 把 v2.10.0 复制到 Edge 扩展测试目录，重点实测复活后是否能恢复到配置倍率。
 5. 继续补奇遇/道友邂逅/典狱等非战斗事件 handler。
-6. 为陌生道友邂逅设计“自动婉拒并继续探索”开关，默认关闭。
+6. 为奇遇链设计“固定选择/始终暂停/自动结束”策略，默认暂停。

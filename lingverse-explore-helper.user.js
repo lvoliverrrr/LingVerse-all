@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.43.0
+// @version      2.44.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.43.0';
+    const SCRIPT_VERSION = '2.44.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -707,6 +707,42 @@
         return mode === 'alone' ? '独立作战' : '协同作战';
     }
 
+    function formatGuardianAttemptReason(reason) {
+        const labels = {
+            'afk-guardian-disabled': '自动护道关闭',
+            'guardian-config-disabled': '游戏护道关闭',
+            'no-encounter': '等待遭遇',
+            'guardian-already-attempted': '本次遭遇已尝试',
+            'guardian-ready': '遭遇可尝试护道',
+            'hire-triggered': '已触发自动护道',
+            'hire-failed': '自动护道失败'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function formatGuardianPriority(priority) {
+        const values = Array.isArray(priority) ? priority.filter(Boolean) : [];
+        return values.length ? values.join('>') : '默认优先级';
+    }
+
+    function buildAfkGuardianStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const reason = String(attempt.reason || '');
+        if (!reason || reason === 'afk-guardian-disabled') return '';
+        const guardian = normalizeGuardianConfig(attempt.guardian || {});
+        const parts = [
+            formatGuardianAttemptReason(reason)
+        ];
+        const failure = sanitizeDebugText(attempt.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        parts.push(guardian.enabled ? '游戏护道开' : '游戏护道关');
+        parts.push(formatGuardianMode(guardian.mode));
+        parts.push(`最高${guardian.maxFee || '不限'}`);
+        if (guardian.minAtk > 0) parts.push(`攻≥${guardian.minAtk}`);
+        parts.push(formatGuardianPriority(guardian.priority));
+        return `护道: ${parts.join(' · ')}`;
+    }
+
     function formatRarityThreshold(rarity) {
         const labels = {
             1: '任意',
@@ -937,6 +973,18 @@
                 autoRevive: false,
                 autoFight: false,
                 autoHireGuardian: false,
+                useTalismans: false,
+                useNirvanaPill: false,
+                autoDeclinePlayerEncounter: false
+            }, preserved));
+        }
+
+        if (presetName === 'guardian') {
+            return normalizeAfkLoopConfig(Object.assign({}, current, common, {
+                exploreMultiplier: 1,
+                autoRevive: false,
+                autoFight: false,
+                autoHireGuardian: true,
                 useTalismans: false,
                 useNirvanaPill: false,
                 autoDeclinePlayerEncounter: false
@@ -2347,6 +2395,10 @@
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
             .filter(Boolean)
             .forEach(item => lines.push(`! ${item}`));
+        const guardianStatusLine = buildAfkGuardianStatusLine(automation.guardian);
+        if (guardianStatusLine) {
+            lines.push(guardianStatusLine);
+        }
         if (automation.waitDiagnosis && automation.waitDiagnosis.active && automation.waitDiagnosis.message) {
             lines.push(`诊断: ${sanitizeDebugText(automation.waitDiagnosis.message, DEBUG_SUMMARY_TEXT_LIMIT)}`);
         }
@@ -3034,6 +3086,7 @@
                         </label>
                         <div style="display:flex;gap:8px;margin-bottom:8px;">
                             <button id="am-afk-preset-steady" style="flex:1;padding:7px;background:#475569;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">套用稳妥1倍</button>
+                            <button id="am-afk-preset-guardian" style="flex:1;padding:7px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">套用护道1倍</button>
                             <button id="am-afk-preset-rich" style="flex:1;padding:7px;background:#b45309;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">套用富裕50倍</button>
                         </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
@@ -3233,6 +3286,7 @@
             $('#am-afk-copy-status')?.addEventListener('click', () => AfkLoopManager.copyStatusReport());
             $('#am-afk-copy-debug')?.addEventListener('click', () => AfkLoopManager.copyDebugSnapshot());
             $('#am-afk-preset-steady')?.addEventListener('click', () => AfkLoopManager.applyPreset('steady'));
+            $('#am-afk-preset-guardian')?.addEventListener('click', () => AfkLoopManager.applyPreset('guardian'));
             $('#am-afk-preset-rich')?.addEventListener('click', () => AfkLoopManager.applyPreset('rich'));
             $('#am-afk-config-copy')?.addEventListener('click', () => this.copyAfkConfigPack());
             $('#am-afk-config-import')?.addEventListener('click', () => this.importAfkConfigPack());
@@ -4068,7 +4122,12 @@
             saveConfig();
             UI.updatePanelFromConfig();
             this.refreshPanelStatus();
-            const label = name === 'rich' ? '富裕50倍挂机预设' : '稳妥1倍挂机预设';
+            const labels = {
+                steady: '稳妥1倍挂机预设',
+                guardian: '护道1倍挂机预设',
+                rich: '富裕50倍挂机预设'
+            };
+            const label = labels[name] || '挂机预设';
             Logger.success(`已套用${label}，未自动启动挂机`);
         },
 

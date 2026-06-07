@@ -42,6 +42,7 @@
 - v2.24.0 只读恢复挂起逻辑：`_tryResumeAutoExploreAfterMerchant()` 会在 `_autoResumeExplorePending` 时清标记并延迟 1500ms 调 `startAutoExplore()`；若 pending 残留，辅助脚本需要按卡住超时兜底。
 - v2.42.0 只读状态：真实页仍显示“灵界已更新新版本，请点此刷新 获取最新内容”；helper 已注入（`window._autoMapInited=true`），但真实页需要刷新/重载扩展后才会加载本地最新版；页面神识 `3/2758`、位置沧澜港、可见“冥想修炼/探索(-4神识)/自动/万物图鉴”等入口。本次只读观察未点击探索、商人、战斗、护道、复活、用符或用丹。
 - v2.43.0 只读库存：`/api/game/inventory` 读到 184 项；当前相关资源包含 5 类战斗符箓 `ancient/ghost/thunder/fire/shield`，以及 `pill_nirvana_*` 九转还魂丹；没有读到 `bp_pill_rebirth_*` 涅槃重生丹。因此富裕模式应报告“用符 5/5类，涅槃丹无史诗+”，并继续避免把回血丹误当作五行通灵丹。
+- v2.44.0 只读护道配置：真实页仍显示更新提示，`window.LingVerseAutoMapVersion=null` 说明需要刷新/重载扩展；`getAutoHireConfig()` 返回游戏护道已开启，模式 `alone`，最高雇佣费 `51`，优先级 `normal,incarnation,body`。本次只读观察未点击探索、护道、战斗、复活、用符或用丹。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -439,6 +440,13 @@
 - 复制状态/复制摘要在开启 `useTalismans` 或 `useNirvanaPill` 时只读一次背包；读取失败只写 warning，不影响复制，不调用 `useItem`。
 - 调试摘要新增 `automation.resourcePreflight`；可读状态报告新增“预检:”行和预检 warning。
 
+`lingverse-explore-helper.user.js` v2.44.0 新增：
+
+- `applyAfkPreset(config, 'guardian')` 生成低境界护道 1 倍预设：1 倍探索、开启 `autoHireGuardian`，关闭自动迎战、复活、战斗用符、涅槃重生丹和陌生道友自动婉拒。
+- 面板新增“套用护道1倍”，仍只保存配置，不自动启动挂机。
+- `buildAfkStatusReport` 新增“护道:”行，把 `automation.guardian.reason` 翻译为中文，并带上失败消息、游戏护道开关、作战模式、最高费用、最低攻击力和优先级。
+- 目的：低境界测试者不用手动组合多个高风险开关；卡在遭遇时复制状态也能直接看出是游戏护道设置关闭、已触发、已失败，还是本遭遇已尝试过。
+
 默认配置：
 
 - `enabled: false`
@@ -507,7 +515,7 @@
 - 高阶“富裕模式”需要继续真实长跑验证涅槃重生丹使用后的 buff 状态和恢复 50 倍探索稳定性。
 - 5 类战斗符箓的最佳收益顺序、每类用量和不同账号库存下的推荐 preset。
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的真实长跑稳定性。
-- 低境界 1 倍探索开启自动护道后的真实长跑稳定性，尤其是 `automation.guardian.failureMessage` 和是否需要游戏内自动重试。
+- 低境界 1 倍护道预设的真实长跑稳定性，尤其是状态报告“护道:”行里的失败消息，以及是否需要游戏内自动重试。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本，把 `adventureId`、每步选项、最终奖励记录成可分享策略。
 - 为摘要增加导入式问题回放视图。

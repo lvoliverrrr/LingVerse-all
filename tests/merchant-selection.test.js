@@ -1590,7 +1590,7 @@ test('buildAfkDebugSummary reports exhausted AFK resource budgets', () => {
     assert.deepEqual(toPlain(summary.config.riskStatus.warnings), ['自动复活已到本轮上限']);
 });
 
-test('applyAfkPreset configures steady and rich AFK modes without enabling the loop', () => {
+test('applyAfkPreset configures steady, guardian, and rich AFK modes without enabling the loop', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
 
@@ -1627,6 +1627,34 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         reviveMaxPerRun: 0,
         autoFight: false,
         autoHireGuardian: false,
+        useTalismans: false,
+        talismanMaxKinds: 5,
+        talismanQuantity: 1,
+        talismanFamilyOrder: 'ghost,fire',
+        talismanMaxEncountersPerRun: 0,
+        useNirvanaPill: false,
+        nirvanaMinRarity: 4,
+        nirvanaMaxPerRun: 0,
+        queueNirvanaPill: false,
+        autoDeclinePlayerEncounter: false,
+        autoReloadOnUpdate: false,
+        adventureMode: 'strategy',
+        adventureChoiceIndex: 1,
+        adventureChoiceMap: { 456: 2 }
+    });
+
+    assert.deepEqual(toPlain(hooks.applyAfkPreset(base, 'guardian')), {
+        enabled: false,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 1,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        resumeWindowSeconds: 180,
+        autoRevive: false,
+        reviveMaxPerRun: 0,
+        autoFight: false,
+        autoHireGuardian: true,
         useTalismans: false,
         talismanMaxKinds: 5,
         talismanQuantity: 1,
@@ -1895,7 +1923,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.43.0',
+        scriptVersion: '2.44.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         page: {
             title: '灵界 LingVerse - 修仙世界',
@@ -1933,7 +1961,19 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
                 talismanEncounters: 2,
                 nirvanaPills: 1
             },
-            guardian: { reason: 'hire-failed', failureMessage: '余额不足' },
+            guardian: {
+                shouldAttempt: false,
+                reason: 'hire-failed',
+                failureMessage: '余额不足',
+                guardian: {
+                    enabled: true,
+                    maxFee: 51,
+                    minAtk: 0,
+                    mode: 'alone',
+                    priority: ['normal', 'incarnation', 'body'],
+                    threatLevel: 'danger'
+                }
+            },
             talismans: { reason: 'completed', selectedCount: 3, usedKinds: 3, failedKinds: 0 },
             fight: { reason: 'not-attempted', source: '', failureMessage: '' },
             nirvanaPill: { reason: 'budget-exhausted', minRarity: 4 },
@@ -1969,12 +2009,12 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
     assert.deepEqual(toPlain(report), {
         schema: 'lingverse-afk-status-report/v1',
         sourceSchema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.43.0',
+        scriptVersion: '2.44.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         headline: '挂机状态 · 等待 · 复活次数已到本轮上限',
         text: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.43.0',
+            '版本: 2.44.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -1984,6 +2024,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
             '! 自动复活已到本轮上限',
+            '护道: 自动护道失败 · 余额不足 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
             '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
             '! 战斗符箓不足5类，会按现有3类用符',
             '! 未找到史诗+涅槃重生丹，会跳过用丹',
@@ -1992,7 +2033,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
         ].join('\n'),
         lines: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.43.0',
+            '版本: 2.44.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -2002,6 +2043,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
             '! 自动复活已到本轮上限',
+            '护道: 自动护道失败 · 余额不足 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
             '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
             '! 战斗符箓不足5类，会按现有3类用符',
             '! 未找到史诗+涅槃重生丹，会跳过用丹',
@@ -2290,7 +2332,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.43.0',
+        scriptVersion: '2.44.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

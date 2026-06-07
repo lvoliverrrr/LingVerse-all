@@ -139,6 +139,12 @@ v2.17.0 已完成：
 - 填写如 `ghost,fire,shield` 时，只按该顺序选择存在且可用的 family，缺货跳过。
 - 稳妥/富裕预设会保留当前 family 顺序，不会替测试者清空偏好。
 
+v2.18.0 已完成：
+
+- 自动探索运行或恢复挂起时，若当前神识低于 `minSpirit` 或低于单次探索消耗，直接停探索并回冥想。
+- 自动探索恢复挂起时，若页面 `canExplore=false` 且原因包含“神识/体力”，优先回冥想，不再继续等待 pending 状态。
+- 商人、遭遇、奇遇、陌生道友和死亡等显式阻塞仍保持更高优先级，避免在事件未处理时抢操作。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -209,6 +215,11 @@ v2.17.0 新增自动测试：
 - `selectCombatTalismans` 可按配置的 family 顺序/白名单选择战斗符箓。
 - `normalizeAfkLoopConfig` 会清理 family 顺序输入中的重复项、空白和中英文分隔符。
 - `applyAfkPreset` 保留已配置的 family 顺序。
+
+v2.18.0 新增自动测试：
+
+- `decideAfkNextAction` 在自动探索运行或恢复挂起且神识低于阈值时返回 `startMeditation`。
+- `decideAfkNextAction` 在恢复挂起且页面提示神识不足/体力不足时返回 `startMeditation`，不再无限等待 pending。
 
 浏览器验证：
 

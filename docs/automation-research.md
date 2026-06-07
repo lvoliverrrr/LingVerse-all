@@ -34,6 +34,7 @@
 - `api` 存在，但 `window.api` 不存在，脚本需要继续支持 `eval('typeof api...')` 兜底。
 - `_lastPlayerData` 包含 `spirit`、`maxSpirit`、`spiritCost`、`canExplore`、`exploreDisabledReason`、`isMeditating`、`isDead`。
 - 当前读到一次状态：神识 `3/2758`，未冥想，未死亡。
+- v2.18.0 再次只读状态：`autoExploreRunning=false`、`autoResumeExplorePending=false`、神识 `3/2758`、单次探索消耗 `4`、`canExplore=true`。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -221,6 +222,13 @@
 - 已知样例 family 包括 `ancient`、`ghost`、`thunder`、`fire`、`shield`。
 - 稳妥/富裕预设保留当前 `talismanFamilyOrder`，避免重置测试者的符箓偏好。
 
+`lingverse-explore-helper.user.js` v2.18.0 新增：
+
+- 自动探索运行或恢复挂起时，如果神识低于 `minSpirit` 或低于 `spiritCost`，决策优先回冥想。
+- 自动探索恢复挂起时，如果页面 `canExplore=false` 且 `exploreDisabledReason` 包含“神识”或“体力”，决策优先回冥想。
+- 保留事件阻塞优先级：商人、遭遇、奇遇、陌生道友、混天典狱和死亡仍先处理或等待。
+- 目的：避免 `_autoResumeExplorePending` 或自动探索运行态残留时，脚本一直等待而不进入下一轮 140 分钟冥想。
+
 默认配置：
 
 - `enabled: false`
@@ -247,6 +255,8 @@
 - 神识低于阈值 -> `startMeditation`
 - 冥想达到配置时长 -> `stopMeditation`
 - 神识可用且空闲 -> `startAutoExplore`
+- 自动探索运行/恢复挂起且神识低于阈值 -> `startMeditation`
+- 自动探索恢复挂起且页面提示神识不足/体力不足 -> `startMeditation`
 - 商人/遭遇激活 -> `wait`
 - 自动迎战开启且遭遇激活 -> `handleEncounter`
 - 战斗符箓选择：跳过隐匿符/神行符/锁定物品，同类只选最高品质。

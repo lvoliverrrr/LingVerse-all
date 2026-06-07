@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.17.0
+// @version      2.18.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.17.0';
+    const SCRIPT_VERSION = '2.18.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
 
@@ -535,6 +535,10 @@
         const spirit = Math.max(0, toFiniteNumber(snapshot.spirit, 0));
         const maxSpirit = Math.max(0, toFiniteNumber(snapshot.maxSpirit, 0));
         const spiritCost = Math.max(1, toFiniteNumber(snapshot.spiritCost, 1));
+        const lowSpirit = spirit < cfg.minSpirit || spirit < spiritCost;
+        const disabledReason = String(snapshot.exploreDisabledReason || '');
+        const exploreDisabledForSpirit = snapshot.canExplore === false &&
+            (disabledReason.indexOf('神识') >= 0 || disabledReason.indexOf('体力') >= 0);
 
         if (snapshot.isMeditating) {
             if (maxSpirit > 0 && spirit >= maxSpirit) {
@@ -548,6 +552,12 @@
         }
 
         if (snapshot.autoExploreRunning || snapshot.autoExplorePending) {
+            if (exploreDisabledForSpirit) {
+                return { action: 'startMeditation', reason: 'explore-disabled-no-spirit' };
+            }
+            if (lowSpirit) {
+                return { action: 'startMeditation', reason: 'auto-explore-low-spirit' };
+            }
             if (snapshot.exploreStalled) {
                 return { action: 'startMeditation', reason: 'explore-stalled' };
             }
@@ -559,21 +569,20 @@
         }
 
         if (snapshot.canExplore === false) {
-            const disabledReason = String(snapshot.exploreDisabledReason || '');
-            if (disabledReason.indexOf('神识') >= 0 || disabledReason.indexOf('体力') >= 0) {
+            if (exploreDisabledForSpirit) {
                 return { action: 'startMeditation', reason: 'explore-disabled-no-spirit' };
             }
             return { action: 'wait', reason: 'explore-disabled' };
         }
 
         if (snapshot.postReviveResume) {
-            if (spirit < cfg.minSpirit || spirit < spiritCost) {
+            if (lowSpirit) {
                 return { action: 'startMeditation', reason: 'post-revive-low-spirit' };
             }
             return { action: 'startAutoExplore', reason: 'post-revive-ready' };
         }
 
-        if (spirit < cfg.minSpirit || spirit < spiritCost) {
+        if (lowSpirit) {
             return { action: 'startMeditation', reason: 'spirit-below-threshold' };
         }
 
@@ -2591,6 +2600,7 @@
                 'spirit-full': '神识已满',
                 'meditation-duration-reached': '冥想时长已到',
                 'auto-explore-running': '自动探索运行中',
+                'auto-explore-low-spirit': '自动探索中神识低于阈值',
                 'explore-stalled': '探索疑似卡住',
                 'explore-disabled-no-spirit': '不可探索且疑似神识不足',
                 'explore-disabled': '当前区域不可探索',

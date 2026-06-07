@@ -176,6 +176,67 @@ test('decideAfkNextAction starts auto explore when spirit is usable and idle', (
     });
 });
 
+test('decideAfkNextAction returns to meditation when auto explore is running with low spirit', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 12,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        autoExploreRunning: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140
+    }, 1_000_000)), {
+        action: 'startMeditation',
+        reason: 'auto-explore-low-spirit'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 12,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        autoExplorePending: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140
+    }, 1_000_000)), {
+        action: 'startMeditation',
+        reason: 'auto-explore-low-spirit'
+    });
+});
+
+test('decideAfkNextAction returns to meditation when pending auto explore cannot continue for spirit', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const decision = hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 80,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: false,
+        exploreDisabledReason: '神识不足，无法继续探索',
+        autoExplorePending: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140
+    }, 1_000_000);
+
+    assert.deepEqual(toPlain(decision), {
+        action: 'startMeditation',
+        reason: 'explore-disabled-no-spirit'
+    });
+});
+
 test('decideAfkNextAction waits while merchant or encounter blocks the page', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;

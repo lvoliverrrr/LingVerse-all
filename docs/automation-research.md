@@ -310,6 +310,20 @@
   - `mapLine`：可直接填入策略表的 `adventureId=choiceIndex` 行。
 - 目的：测试者遇到未知奇遇时，只要复制摘要，就能快速把可选策略行沉淀到 `adventureChoiceMap`，减少手工整理成本。
 
+`lingverse-explore-helper.user.js` v2.29.0 新增：
+
+- `normalizeCombatTalismanAttempt(attempt)`：把最近一次战斗用符尝试规整成稳定 schema。
+- `summarizeCombatTalismanAttempt(attempt)`：为脱敏摘要输出用符尝试路径、选中符箓、使用/失败数量和失败消息摘要。
+- `buildAfkDebugSnapshot` / `buildAfkDebugSummary` 的 `automation.talismans` 会覆盖：
+  - `disabled`：用符开关关闭。
+  - `no-encounter`：当前没有可用遭遇 key。
+  - `already-handled`：同一次遭遇已经处理过用符。
+  - `inventory-read-failed`：读取背包失败。
+  - `no-usable-talismans`：背包里没有满足配置的战斗符箓。
+  - `talismans-selected`：已选出符箓但尚未完成使用。
+  - `completed`：一轮用符尝试结束。
+- `AfkLoopManager.lastTalismanAttempt` 在复制摘要时随 `lastNirvanaPillAttempt` 一起输出，减少富裕模式测试时翻日志的成本。
+
 默认配置：
 
 - `enabled: false`
@@ -367,7 +381,7 @@
   - 恢复窗口内神识足够 -> `startAutoExplore`；神识不足 -> `startMeditation`。
 - 调试摘要：
   - `buildAfkDebugSummary` 去掉页面 URL 的 query/hash，脱敏常见 token/session/key 参数。
-  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞和高风险开关。
+  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞、高风险开关、用丹尝试和用符尝试。
 
 ## 待继续研究
 

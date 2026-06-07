@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.28.0
+// @version      2.29.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.28.0';
+    const SCRIPT_VERSION = '2.29.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -624,6 +624,66 @@
         };
     }
 
+    function normalizeCombatTalismanItem(item) {
+        const raw = item && typeof item === 'object' ? item : {};
+        return {
+            itemId: raw.itemId ?? raw.id ?? null,
+            templateId: String(raw.templateId || ''),
+            name: String(raw.name || ''),
+            family: String(raw.family || ''),
+            rarity: optionalNumberOrNull(raw.rarity),
+            quantity: optionalNumberOrNull(raw.quantity)
+        };
+    }
+
+    function normalizeCombatTalismanAttempt(attempt) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        return {
+            shouldAttempt: !!raw.shouldAttempt,
+            reason: String(raw.reason || ''),
+            encounterKey: String(raw.encounterKey || ''),
+            markEncounterKey: String(raw.markEncounterKey || ''),
+            selectedTalismans: (Array.isArray(raw.selectedTalismans) ? raw.selectedTalismans : [])
+                .map(normalizeCombatTalismanItem)
+                .filter(item => item.itemId !== null || item.templateId || item.name || item.family),
+            usedKinds: optionalNumberOrNull(raw.usedKinds),
+            failedKinds: optionalNumberOrNull(raw.failedKinds),
+            failureMessage: String(raw.failureMessage || '')
+        };
+    }
+
+    function buildCombatTalismanDebugAttempt(attempt, snapshot, config) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const encounterKey = buildEncounterKey(snapshot || {});
+        if (!cfg.useTalismans) {
+            return normalizeCombatTalismanAttempt({
+                shouldAttempt: false,
+                reason: 'disabled',
+                encounterKey
+            });
+        }
+        if (attempt && typeof attempt === 'object' && (
+            attempt.reason ||
+            attempt.encounterKey ||
+            Array.isArray(attempt.selectedTalismans)
+        )) {
+            return normalizeCombatTalismanAttempt(attempt);
+        }
+
+        if (!encounterKey) {
+            return normalizeCombatTalismanAttempt({
+                shouldAttempt: false,
+                reason: 'no-encounter',
+                encounterKey: ''
+            });
+        }
+        return normalizeCombatTalismanAttempt({
+            shouldAttempt: true,
+            reason: 'not-attempted',
+            encounterKey
+        });
+    }
+
     function resolveNirvanaRebirthPillAttempt(player, items, config, now) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const activeBuff = getActiveFiveRootBuff(player || {}, now);
@@ -914,6 +974,28 @@
         };
     }
 
+    function summarizeCombatTalismanAttempt(attempt) {
+        const normalized = normalizeCombatTalismanAttempt(attempt);
+        const selected = normalized.selectedTalismans.map(item => ({
+            templateId: sanitizeDebugText(item.templateId, 80),
+            name: sanitizeDebugName(item.name, 80),
+            family: sanitizeDebugText(item.family, 40),
+            rarity: optionalNumberOrNull(item.rarity),
+            quantity: optionalNumberOrNull(item.quantity)
+        }));
+        return {
+            shouldAttempt: normalized.shouldAttempt,
+            reason: normalized.reason,
+            encounterKey: sanitizeDebugName(normalized.encounterKey, 120),
+            markEncounterKey: sanitizeDebugName(normalized.markEncounterKey, 120),
+            selectedCount: selected.length,
+            usedKinds: optionalNumberOrNull(normalized.usedKinds),
+            failedKinds: optionalNumberOrNull(normalized.failedKinds),
+            selectedTalismans: selected,
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
+        };
+    }
+
     function buildAdventureStrategyHints(adventure) {
         const source = adventure && typeof adventure === 'object' ? adventure : {};
         const id = source.id || null;
@@ -974,7 +1056,8 @@
                 exploreStalled: !!automation.exploreStalled,
                 postReviveResume: !!automation.postReviveResume,
                 postInteractionResume: !!automation.postInteractionResume,
-                nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill)
+                nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
+                talismans: summarizeCombatTalismanAttempt(automation.talismans)
             },
             adventure: {
                 id: adventure.id || null,
@@ -1074,7 +1157,8 @@
                 exploreStalled: !!snapshot.exploreStalled,
                 postReviveResume: !!snapshot.postReviveResume,
                 postInteractionResume: !!snapshot.postInteractionResume,
-                nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt)
+                nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
+                talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg)
             },
             adventure: {
                 id: adventureId,
@@ -2410,6 +2494,7 @@
         encounterBusy: false,
         lastTalismanEncounterKey: '',
         lastGuardianEncounterKey: '',
+        lastTalismanAttempt: null,
         lastNirvanaPillAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
@@ -2466,7 +2551,8 @@
                     page: { title: document.title || '', url: location.href || '' },
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
-                    nirvanaPillAttempt: this.lastNirvanaPillAttempt
+                    nirvanaPillAttempt: this.lastNirvanaPillAttempt,
+                    talismanAttempt: this.lastTalismanAttempt
                 });
                 const debugSummary = buildAfkDebugSummary(debugSnapshot);
                 const text = JSON.stringify(debugSummary, null, 2);
@@ -2903,6 +2989,11 @@
         async useCombatTalismans(cfg, snapshot) {
             const talismanUse = resolveCombatTalismanAttempt(this.lastTalismanEncounterKey, snapshot, null);
             if (!talismanUse.shouldAttempt) {
+                this.lastTalismanAttempt = normalizeCombatTalismanAttempt({
+                    shouldAttempt: false,
+                    reason: talismanUse.encounterKey ? 'already-handled' : 'no-encounter',
+                    encounterKey: talismanUse.encounterKey
+                });
                 if (talismanUse.encounterKey) Logger.info('本次遭遇已处理过战斗符箓，跳过重复用符');
                 return;
             }
@@ -2910,8 +3001,25 @@
             let items = [];
             try {
                 const res = await API.getInventory();
-                if (res.code === 200 && res.data) items = res.data.items || res.data || [];
+                if (res.code === 200 && res.data) {
+                    items = res.data.items || res.data || [];
+                } else {
+                    this.lastTalismanAttempt = normalizeCombatTalismanAttempt({
+                        shouldAttempt: true,
+                        reason: 'inventory-read-failed',
+                        encounterKey: talismanUse.encounterKey,
+                        failureMessage: res && res.message || '读取背包失败'
+                    });
+                    Logger.warn(`读取战斗符箓失败: ${res && res.message || '未知错误'}`);
+                    return;
+                }
             } catch (e) {
+                this.lastTalismanAttempt = normalizeCombatTalismanAttempt({
+                    shouldAttempt: true,
+                    reason: 'inventory-read-failed',
+                    encounterKey: talismanUse.encounterKey,
+                    failureMessage: e.message || String(e)
+                });
                 Logger.warn(`读取战斗符箓失败: ${e.message || e}`);
                 return;
             }
@@ -2924,9 +3032,27 @@
             if (selected.length === 0) {
                 const emptyAttempt = resolveCombatTalismanAttempt(this.lastTalismanEncounterKey, snapshot, selected);
                 if (emptyAttempt.markEncounterKey) this.lastTalismanEncounterKey = emptyAttempt.markEncounterKey;
+                this.lastTalismanAttempt = normalizeCombatTalismanAttempt({
+                    shouldAttempt: true,
+                    reason: 'no-usable-talismans',
+                    encounterKey: emptyAttempt.encounterKey,
+                    markEncounterKey: emptyAttempt.markEncounterKey,
+                    selectedTalismans: selected,
+                    usedKinds: 0,
+                    failedKinds: 0
+                });
                 Logger.info('没有可用战斗符箓，跳过用符');
                 return;
             }
+
+            this.lastTalismanAttempt = normalizeCombatTalismanAttempt({
+                shouldAttempt: true,
+                reason: 'talismans-selected',
+                encounterKey: talismanUse.encounterKey,
+                selectedTalismans: selected,
+                usedKinds: 0,
+                failedKinds: selected.length
+            });
 
             try {
                 if (typeof _win.showEncounterTalismanDialog === 'function') {
@@ -2936,18 +3062,23 @@
             } catch (e) {}
 
             let usedKinds = 0;
+            const failures = [];
             for (const item of selected) {
                 try {
                     const res = await API.useItem(item.itemId, item.quantity);
                     if (res.code !== 200) {
-                        Logger.warn(`${item.name || item.templateId} 使用失败: ${res.message || '未知错误'}`);
+                        const message = `${item.name || item.templateId} 使用失败: ${res.message || '未知错误'}`;
+                        failures.push(message);
+                        Logger.warn(message);
                         continue;
                     }
                     usedKinds += 1;
                     Logger.info(`已用战斗符箓: ${item.name || item.templateId} ×${item.quantity}`);
                     await wait(650);
                 } catch (e) {
-                    Logger.warn(`${item.name || item.templateId} 使用失败: ${e.message || e}`);
+                    const message = `${item.name || item.templateId} 使用失败: ${e.message || e}`;
+                    failures.push(message);
+                    Logger.warn(message);
                 }
             }
 
@@ -2962,6 +3093,16 @@
 
             const completedAttempt = resolveCombatTalismanAttempt(this.lastTalismanEncounterKey, snapshot, selected, { attemptCompleted: true });
             if (completedAttempt.markEncounterKey) this.lastTalismanEncounterKey = completedAttempt.markEncounterKey;
+            this.lastTalismanAttempt = normalizeCombatTalismanAttempt({
+                shouldAttempt: true,
+                reason: 'completed',
+                encounterKey: completedAttempt.encounterKey,
+                markEncounterKey: completedAttempt.markEncounterKey,
+                selectedTalismans: selected,
+                usedKinds,
+                failedKinds: Math.max(0, selected.length - usedKinds),
+                failureMessage: failures.join(' | ')
+            });
             if (usedKinds > 0) this.refreshGameData();
         },
 

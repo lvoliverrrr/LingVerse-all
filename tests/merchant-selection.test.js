@@ -1073,6 +1073,19 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
             minRarity: 4,
             activeBuffGrade: 4,
             activeBuffExpire: 1_234_567
+        },
+        talismanAttempt: {
+            shouldAttempt: true,
+            reason: 'completed',
+            encounterKey: 'monster:port_bandit:3:7',
+            markEncounterKey: 'monster:port_bandit:3:7',
+            selectedTalismans: [
+                { itemId: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 },
+                { itemId: 2, templateId: 'talisman_fire_3', name: '稀有烈火符', family: 'fire', rarity: 3, quantity: 1 }
+            ],
+            usedKinds: 2,
+            failedKinds: 0,
+            failureMessage: ''
         }
     }));
 
@@ -1121,6 +1134,19 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         minRarity: 4,
         activeBuffGrade: 4,
         activeBuffExpire: 1_234_567
+    });
+    assert.deepEqual(snapshot.automation.talismans, {
+        shouldAttempt: true,
+        reason: 'completed',
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: 'monster:port_bandit:3:7',
+        selectedTalismans: [
+            { itemId: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 },
+            { itemId: 2, templateId: 'talisman_fire_3', name: '稀有烈火符', family: 'fire', rarity: 3, quantity: 1 }
+        ],
+        usedKinds: 2,
+        failedKinds: 0,
+        failureMessage: ''
     });
     assert.equal(snapshot.history.decisionTail.length, 20);
     assert.equal(snapshot.history.decisionTail[0].spirit, 5);
@@ -1206,6 +1232,33 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
             minRarity: 4,
             activeBuffGrade: null,
             activeBuffExpire: null
+        },
+        talismanAttempt: {
+            shouldAttempt: true,
+            reason: 'completed',
+            encounterKey: 'monster:port_bandit:3:7?token=talisman-secret',
+            markEncounterKey: 'monster:port_bandit:3:7?token=talisman-secret',
+            selectedTalismans: [
+                {
+                    itemId: 8,
+                    templateId: 'talisman_ancient_4',
+                    name: `史诗荒古符箓${'长名'.repeat(80)}?token=talisman-secret`,
+                    family: 'ancient',
+                    rarity: 4,
+                    quantity: 1
+                },
+                {
+                    itemId: 2,
+                    templateId: 'talisman_fire_3',
+                    name: '稀有烈火符',
+                    family: 'fire',
+                    rarity: 3,
+                    quantity: 1
+                }
+            ],
+            usedKinds: 1,
+            failedKinds: 1,
+            failureMessage: 'talisman_fire_3 使用失败: token=talisman-secret'
         }
     });
 
@@ -1245,6 +1298,35 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
         activeBuffGrade: null,
         activeBuffExpire: null
     });
+    assert.deepEqual(summary.automation.talismans, {
+        shouldAttempt: true,
+        reason: 'completed',
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: 'monster:port_bandit:3:7',
+        selectedCount: 2,
+        usedKinds: 1,
+        failedKinds: 1,
+        selectedTalismans: [
+            {
+                templateId: 'talisman_ancient_4',
+                name: summary.automation.talismans.selectedTalismans[0].name,
+                family: 'ancient',
+                rarity: 4,
+                quantity: 1
+            },
+            {
+                templateId: 'talisman_fire_3',
+                name: '稀有烈火符',
+                family: 'fire',
+                rarity: 3,
+                quantity: 1
+            }
+        ],
+        failureMessage: 'talisman_fire_3 使用失败: token=<redacted>'
+    });
+    assert.equal(summary.automation.talismans.selectedTalismans[0].name.startsWith('史诗荒古符箓'), true);
+    assert.equal(summary.automation.talismans.selectedTalismans[0].name.includes('talisman-secret'), false);
+    assert.equal(summary.automation.talismans.selectedTalismans[0].name.endsWith('...'), true);
     assert.equal(summary.automation.postInteractionResume, true);
     assert.equal(summary.config.exploreMultiplier, 50);
     assert.deepEqual(summary.config.risks, {

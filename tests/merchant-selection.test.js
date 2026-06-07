@@ -1701,6 +1701,114 @@ test('buildAfkIssueReplay turns copied summaries into a replay view', () => {
     });
 });
 
+test('buildAfkStatusReport formats copied summaries for testers', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkStatusReport, 'function');
+
+    const report = hooks.buildAfkStatusReport({
+        schema: 'lingverse-afk-debug-summary/v1',
+        scriptVersion: '2.38.0',
+        capturedAt: '2026-06-08T06:00:00.000Z',
+        page: {
+            title: '灵界 LingVerse - 修仙世界',
+            url: 'https://ling.muge.info/game.html'
+        },
+        decision: {
+            action: 'wait',
+            reason: 'revive-budget-exhausted'
+        },
+        player: {
+            spirit: 3,
+            maxSpirit: 2758,
+            spiritCost: 4,
+            canExplore: true,
+            isDead: true,
+            isMeditating: false
+        },
+        blockers: {
+            merchantActive: false,
+            encounterActive: false,
+            combatActive: false,
+            playerEncounterActive: false,
+            adventureActive: true,
+            adventureId: 456,
+            immortalPrisonActive: false
+        },
+        automation: {
+            autoExploreRunning: false,
+            autoExplorePending: false,
+            exploreStalled: false,
+            postReviveResume: false,
+            postInteractionResume: false,
+            resourceUsage: {
+                revive: 1,
+                talismanEncounters: 2,
+                nirvanaPills: 1
+            },
+            guardian: { reason: 'hire-failed', failureMessage: '余额不足' },
+            talismans: { reason: 'completed', selectedCount: 3, usedKinds: 3, failedKinds: 0 },
+            nirvanaPill: { reason: 'budget-exhausted', minRarity: 4 }
+        },
+        adventure: {
+            id: 456,
+            strategyHints: [
+                { mapLine: '456=1' },
+                { mapLine: '456=2' }
+            ]
+        },
+        config: {
+            meditationMinutes: 140,
+            minSpirit: 20,
+            exploreMultiplier: 50,
+            reviveMaxPerRun: 1,
+            talismanMaxEncountersPerRun: 3,
+            nirvanaMaxPerRun: 1,
+            riskStatus: {
+                summaryText: '富裕战斗模式 · 风险开关 6/7 · 警告 1',
+                warnings: ['自动复活已到本轮上限']
+            }
+        }
+    });
+
+    assert.deepEqual(toPlain(report), {
+        schema: 'lingverse-afk-status-report/v1',
+        sourceSchema: 'lingverse-afk-debug-summary/v1',
+        scriptVersion: '2.38.0',
+        capturedAt: '2026-06-08T06:00:00.000Z',
+        headline: '挂机状态 · 等待 · 复活次数已到本轮上限',
+        text: [
+            '挂机状态 · 等待 · 复活次数已到本轮上限',
+            '版本: 2.38.0',
+            '页面: 灵界 LingVerse - 修仙世界',
+            '神识: 3/2758 · 单次消耗4',
+            '阻塞: 死亡/奇遇#456',
+            '探索: 停止',
+            '配置: 冥想140分钟 · 神识<20 · 50倍',
+            '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
+            '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
+            '! 自动复活已到本轮上限',
+            '自动化: 护道 hire-failed · 用符 completed · 用丹 budget-exhausted',
+            '奇遇策略: 456=1 / 456=2'
+        ].join('\n'),
+        lines: [
+            '挂机状态 · 等待 · 复活次数已到本轮上限',
+            '版本: 2.38.0',
+            '页面: 灵界 LingVerse - 修仙世界',
+            '神识: 3/2758 · 单次消耗4',
+            '阻塞: 死亡/奇遇#456',
+            '探索: 停止',
+            '配置: 冥想140分钟 · 神识<20 · 50倍',
+            '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
+            '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
+            '! 自动复活已到本轮上限',
+            '自动化: 护道 hire-failed · 用符 completed · 用丹 budget-exhausted',
+            '奇遇策略: 456=1 / 456=2'
+        ]
+    });
+});
+
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -1828,7 +1936,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.37.0',
+        scriptVersion: '2.38.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

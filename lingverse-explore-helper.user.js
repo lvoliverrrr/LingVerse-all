@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.37.0
+// @version      2.38.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.37.0';
+    const SCRIPT_VERSION = '2.38.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -1694,6 +1694,83 @@
         };
     }
 
+    function formatAfkReportNumber(value, fallback) {
+        const n = numberOrNull(value);
+        return n === null ? (fallback || '?') : String(n);
+    }
+
+    function formatAfkReportLimit(label, used, max) {
+        const current = Math.max(0, toFiniteNumber(used, 0));
+        const limit = Math.max(0, toFiniteNumber(max, 0));
+        return `${label} ${current}/${limit > 0 ? limit : '不限'}`;
+    }
+
+    function formatAfkReportExploreState(automation) {
+        const source = automation && typeof automation === 'object' ? automation : {};
+        if (source.autoExploreRunning) return '运行中';
+        if (source.autoExplorePending) return '恢复挂起';
+        if (source.exploreStalled) return '疑似卡住';
+        if (source.postReviveResume) return '复活恢复窗口';
+        if (source.postInteractionResume) return '事件恢复窗口';
+        return '停止';
+    }
+
+    function buildAfkStatusReport(source) {
+        const parsed = source && typeof source === 'object' ? source : parseAfkIssueReplaySource(source);
+        const summary = parsed && parsed.schema === 'lingverse-afk-debug-summary/v1'
+            ? parsed
+            : buildAfkDebugSummary(parsed);
+        const page = summary.page && typeof summary.page === 'object' ? summary.page : {};
+        const decision = summary.decision && typeof summary.decision === 'object' ? summary.decision : {};
+        const player = summary.player && typeof summary.player === 'object' ? summary.player : {};
+        const automation = summary.automation && typeof summary.automation === 'object' ? summary.automation : {};
+        const config = summary.config && typeof summary.config === 'object' ? summary.config : {};
+        const riskStatus = config.riskStatus && typeof config.riskStatus === 'object' ? config.riskStatus : {};
+        const usage = normalizeAfkResourceUsage(automation.resourceUsage);
+        const pageText = sanitizeDebugText(page.title || page.url || '未知页面', 100);
+        const decisionText = `${formatAfkAction(decision.action)} · ${formatAfkReason(decision.reason)}`;
+        const headline = `挂机状态 · ${decisionText}`;
+        const spirit = formatAfkReportNumber(player.spirit);
+        const maxSpirit = formatAfkReportNumber(player.maxSpirit);
+        const spiritCost = numberOrNull(player.spiritCost);
+        const blockerText = buildReplayBlockerLabels(summary).join('/');
+        const riskText = sanitizeDebugText(riskStatus.summaryText || buildReplayRiskText(summary), 160);
+        const strategyImportText = buildReplayStrategyImportText(summary);
+        const lines = [
+            headline,
+            `版本: ${sanitizeDebugText(summary.scriptVersion || SCRIPT_VERSION, 40)}`,
+            `页面: ${pageText}`,
+            `神识: ${spirit}/${maxSpirit}${spiritCost === null ? '' : ` · 单次消耗${spiritCost}`}`,
+            `阻塞: ${blockerText}`,
+            `探索: ${formatAfkReportExploreState(automation)}`,
+            `配置: 冥想${formatAfkReportNumber(config.meditationMinutes)}分钟 · 神识<${formatAfkReportNumber(config.minSpirit)} · ${formatAfkReportNumber(config.exploreMultiplier)}倍`,
+            `资源: ${[
+                formatAfkReportLimit('复活', usage.revive, config.reviveMaxPerRun),
+                formatAfkReportLimit('用符', usage.talismanEncounters, config.talismanMaxEncountersPerRun),
+                formatAfkReportLimit('用丹', usage.nirvanaPills, config.nirvanaMaxPerRun)
+            ].join(' · ')}`,
+            `风险: ${riskText}`
+        ];
+        (Array.isArray(riskStatus.warnings) ? riskStatus.warnings : [])
+            .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
+            .filter(Boolean)
+            .forEach(item => lines.push(`! ${item}`));
+        lines.push(`自动化: 护道 ${sanitizeDebugText(automation.guardian && automation.guardian.reason || 'unknown', 60)} · 用符 ${sanitizeDebugText(automation.talismans && automation.talismans.reason || 'unknown', 60)} · 用丹 ${sanitizeDebugText(automation.nirvanaPill && automation.nirvanaPill.reason || 'unknown', 60)}`);
+        if (strategyImportText) {
+            lines.push(`奇遇策略: ${strategyImportText.split('\n').join(' / ')}`);
+        }
+
+        return {
+            schema: 'lingverse-afk-status-report/v1',
+            sourceSchema: String(summary.schema || summary.sourceSchema || ''),
+            scriptVersion: String(summary.scriptVersion || SCRIPT_VERSION),
+            capturedAt: String(summary.capturedAt || ''),
+            headline,
+            text: lines.join('\n'),
+            lines
+        };
+    }
+
     function buildAfkDebugSnapshot(state, config, decision, context) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const snapshot = state || {};
@@ -1828,6 +1905,7 @@
         buildAfkDebugSnapshot,
         buildAfkDebugSummary,
         buildAfkIssueReplay,
+        buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset
     });
@@ -2451,10 +2529,11 @@
                                 </label>
                             </div>
                         </div>
-                        <div style="display:flex;gap:8px;">
-                            <button id="am-afk-start" style="flex:1;padding:8px;background:#7c3aed;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">启动挂机</button>
-                            <button id="am-afk-stop" style="flex:1;padding:8px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">停止挂机</button>
-                            <button id="am-afk-copy-debug" style="flex:1;padding:8px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制摘要</button>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                            <button id="am-afk-start" style="flex:1 1 90px;padding:8px;background:#7c3aed;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">启动挂机</button>
+                            <button id="am-afk-stop" style="flex:1 1 90px;padding:8px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">停止挂机</button>
+                            <button id="am-afk-copy-status" style="flex:1 1 90px;padding:8px;background:#0369a1;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制状态</button>
+                            <button id="am-afk-copy-debug" style="flex:1 1 90px;padding:8px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制摘要</button>
                         </div>
                         <div style="margin-top:8px;padding-top:8px;border-top:1px solid ${border};">
                             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
@@ -2517,6 +2596,7 @@
 
             $('#am-afk-start')?.addEventListener('click', () => AfkLoopManager.start());
             $('#am-afk-stop')?.addEventListener('click', () => AfkLoopManager.stop());
+            $('#am-afk-copy-status')?.addEventListener('click', () => AfkLoopManager.copyStatusReport());
             $('#am-afk-copy-debug')?.addEventListener('click', () => AfkLoopManager.copyDebugSnapshot());
             $('#am-afk-preset-steady')?.addEventListener('click', () => AfkLoopManager.applyPreset('steady'));
             $('#am-afk-preset-rich')?.addEventListener('click', () => AfkLoopManager.applyPreset('rich'));
@@ -3377,6 +3457,30 @@
                 Logger.success('已复制挂机调试脱敏摘要，可直接发给开发者分析');
             } catch (e) {
                 Logger.warn(`复制挂机调试脱敏摘要失败: ${e.message || e}`);
+            }
+        },
+
+        async copyStatusReport() {
+            try {
+                const cfg = readAfkLoopConfigFromUI();
+                const now = Date.now();
+                const snapshot = await this.buildSnapshot(now, cfg);
+                const decision = decideAfkNextAction(snapshot, cfg, now);
+                this.recordDecision(decision, snapshot, now);
+                const debugSnapshot = buildAfkDebugSnapshot(snapshot, cfg, decision, {
+                    capturedAt: new Date(now).toISOString(),
+                    page: { title: document.title || '', url: location.href || '' },
+                    decisionHistory: this.getDecisionHistory(),
+                    recentLogs: Logger.getRecentEntries(),
+                    nirvanaPillAttempt: this.lastNirvanaPillAttempt,
+                    talismanAttempt: this.lastTalismanAttempt,
+                    guardianAttempt: this.lastGuardianAttempt
+                });
+                const report = buildAfkStatusReport(buildAfkDebugSummary(debugSnapshot));
+                await this.copyText(report.text);
+                Logger.success('已复制挂机状态报告，可发给测试者或开发者快速查看');
+            } catch (e) {
+                Logger.warn(`复制挂机状态报告失败: ${e.message || e}`);
             }
         },
 

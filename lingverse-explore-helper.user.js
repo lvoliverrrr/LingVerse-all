@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.16.0
+// @version      2.17.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.16.0';
+    const SCRIPT_VERSION = '2.17.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
 
@@ -56,6 +56,7 @@
             useTalismans: false,     // 战斗符箓消耗品，默认关闭
             talismanMaxKinds: 5,      // 最多使用几种符
             talismanQuantity: 1,      // 每种符默认使用数量
+            talismanFamilyOrder: '',  // 可选：按 family 白名单/顺序使用战斗符
             useNirvanaPill: false,   // 涅槃重生丹消耗品，默认关闭
             nirvanaMinRarity: 4,      // 默认只吃史诗及以上五行通灵丹
             queueNirvanaPill: false,  // 已有五行通灵时是否继续排队
@@ -111,6 +112,7 @@
         useTalismans: false,
         talismanMaxKinds: 5,
         talismanQuantity: 1,
+        talismanFamilyOrder: '',
         useNirvanaPill: false,
         nirvanaMinRarity: 4,
         queueNirvanaPill: false,
@@ -171,6 +173,18 @@
         if (parsed < min) parsed = min;
         if (parsed > max) parsed = max;
         return parsed;
+    }
+
+    function parseTalismanFamilyOrder(value) {
+        const seen = new Set();
+        const families = [];
+        String(value || '').split(/[\s,，;；|]+/).forEach(part => {
+            const family = part.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+            if (!family || seen.has(family)) return;
+            seen.add(family);
+            families.push(family);
+        });
+        return families;
     }
 
     function parseAdventureChoiceMapText(text) {
@@ -237,6 +251,7 @@
         cfg.useTalismans = !!cfg.useTalismans;
         cfg.talismanMaxKinds = clampNumber(cfg.talismanMaxKinds, 1, 5, 5);
         cfg.talismanQuantity = clampNumber(cfg.talismanQuantity, 1, 20, 1);
+        cfg.talismanFamilyOrder = parseTalismanFamilyOrder(cfg.talismanFamilyOrder).join(',');
         cfg.useNirvanaPill = !!cfg.useNirvanaPill;
         cfg.nirvanaMinRarity = clampNumber(cfg.nirvanaMinRarity, 1, 5, 4);
         cfg.queueNirvanaPill = !!cfg.queueNirvanaPill;
@@ -262,6 +277,7 @@
             stallTimeoutSeconds: 90,
             talismanMaxKinds: 5,
             talismanQuantity: 1,
+            talismanFamilyOrder: current.talismanFamilyOrder,
             nirvanaMinRarity: 4,
             queueNirvanaPill: false
         };
@@ -361,6 +377,7 @@
     function selectCombatTalismans(items, options) {
         const maxKinds = clampNumber(options && options.maxKinds, 1, 5, 5);
         const quantityPerKind = clampNumber(options && options.quantityPerKind, 1, 20, 1);
+        const familyOrder = parseTalismanFamilyOrder(options && options.familyOrder);
         const bestByFamily = new Map();
 
         (Array.isArray(items) ? items : []).forEach(item => {
@@ -383,6 +400,13 @@
                 bestByFamily.set(family, candidate);
             }
         });
+
+        if (familyOrder.length > 0) {
+            return familyOrder
+                .map(family => bestByFamily.get(family))
+                .filter(Boolean)
+                .slice(0, maxKinds);
+        }
 
         return Array.from(bestByFamily.values())
             .sort((a, b) => (b.rarity - a.rarity) || a.family.localeCompare(b.family))
@@ -665,6 +689,7 @@
                 useTalismans: cfg.useTalismans,
                 talismanMaxKinds: cfg.talismanMaxKinds,
                 talismanQuantity: cfg.talismanQuantity,
+                talismanFamilyOrder: cfg.talismanFamilyOrder,
                 useNirvanaPill: cfg.useNirvanaPill,
                 nirvanaMinRarity: cfg.nirvanaMinRarity,
                 queueNirvanaPill: cfg.queueNirvanaPill,
@@ -931,6 +956,7 @@
         cfg.useTalismans = $('#am-afk-use-talismans')?.checked ?? cfg.useTalismans;
         cfg.talismanMaxKinds = clampNumber($('#am-afk-talisman-max-kinds')?.value, 1, 5, cfg.talismanMaxKinds || 5);
         cfg.talismanQuantity = clampNumber($('#am-afk-talisman-qty')?.value, 1, 20, cfg.talismanQuantity || 1);
+        cfg.talismanFamilyOrder = $('#am-afk-talisman-family-order')?.value ?? cfg.talismanFamilyOrder ?? '';
         cfg.useNirvanaPill = $('#am-afk-use-nirvana')?.checked ?? cfg.useNirvanaPill;
         cfg.nirvanaMinRarity = clampNumber($('#am-afk-nirvana-min-rarity')?.value, 1, 5, cfg.nirvanaMinRarity || 4);
         cfg.queueNirvanaPill = $('#am-afk-queue-nirvana')?.checked ?? cfg.queueNirvanaPill;
@@ -1248,6 +1274,10 @@
                                     <input type="number" id="am-afk-talisman-qty" value="${CONFIG.afkLoop.talismanQuantity}" min="1" max="20" step="1" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
                                 </div>
                             </div>
+                            <div>
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">符箓 family 顺序</div>
+                                <input type="text" id="am-afk-talisman-family-order" value="${escapeHtmlText(CONFIG.afkLoop.talismanFamilyOrder)}" placeholder="留空=按品质；如 ghost,fire,shield" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                            </div>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-use-nirvana" ${CONFIG.afkLoop.useNirvanaPill?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">探索前使用涅槃重生丹</span>
@@ -1472,6 +1502,7 @@
             const afkUseTalismansEl = $('#am-afk-use-talismans');
             const afkTalismanMaxKindsEl = $('#am-afk-talisman-max-kinds');
             const afkTalismanQtyEl = $('#am-afk-talisman-qty');
+            const afkTalismanFamilyOrderEl = $('#am-afk-talisman-family-order');
             const afkUseNirvanaEl = $('#am-afk-use-nirvana');
             const afkNirvanaMinRarityEl = $('#am-afk-nirvana-min-rarity');
             const afkQueueNirvanaEl = $('#am-afk-queue-nirvana');
@@ -1502,6 +1533,7 @@
             if (afkUseTalismansEl) afkUseTalismansEl.checked = CONFIG.afkLoop.useTalismans;
             if (afkTalismanMaxKindsEl) afkTalismanMaxKindsEl.value = CONFIG.afkLoop.talismanMaxKinds;
             if (afkTalismanQtyEl) afkTalismanQtyEl.value = CONFIG.afkLoop.talismanQuantity;
+            if (afkTalismanFamilyOrderEl) afkTalismanFamilyOrderEl.value = CONFIG.afkLoop.talismanFamilyOrder;
             if (afkUseNirvanaEl) afkUseNirvanaEl.checked = CONFIG.afkLoop.useNirvanaPill;
             if (afkNirvanaMinRarityEl) afkNirvanaMinRarityEl.value = CONFIG.afkLoop.nirvanaMinRarity;
             if (afkQueueNirvanaEl) afkQueueNirvanaEl.checked = CONFIG.afkLoop.queueNirvanaPill;
@@ -2347,7 +2379,8 @@
 
             const selected = selectCombatTalismans(items, {
                 maxKinds: cfg.talismanMaxKinds,
-                quantityPerKind: cfg.talismanQuantity
+                quantityPerKind: cfg.talismanQuantity,
+                familyOrder: cfg.talismanFamilyOrder
             });
             if (selected.length === 0) {
                 Logger.info('没有可用战斗符箓，跳过用符');

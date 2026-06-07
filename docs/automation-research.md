@@ -212,6 +212,15 @@
 - `rich` 预设：50 倍探索、冥想 140 分钟、最低神识 20，开启自动迎战/复活/用符/用丹/陌生道友自动婉拒。
 - 两个预设都保留当前 `enabled` 状态和奇遇策略配置，不会自动启动挂机，也不会清空已记录的 `adventureChoiceMap`。
 
+`lingverse-explore-helper.user.js` v2.17.0 新增：
+
+- `talismanFamilyOrder`：战斗符箓 family 顺序/白名单配置。
+- 留空时保持原选择逻辑：按 family 去重、跳过隐匿符/神行符/锁定物品，同类取最高品质，再按品质排序。
+- 填写如 `ghost,fire,shield` 时，只选择这些 family，并按填写顺序使用；缺货或不可用 family 会跳过。
+- 输入支持空格、英文/中文逗号、分号和 `|` 分隔，重复项会被清理。
+- 已知样例 family 包括 `ancient`、`ghost`、`thunder`、`fire`、`shield`。
+- 稳妥/富裕预设保留当前 `talismanFamilyOrder`，避免重置测试者的符箓偏好。
+
 默认配置：
 
 - `enabled: false`
@@ -226,6 +235,7 @@
 - `autoFight: false`
 - `talismanMaxKinds: 5`
 - `talismanQuantity: 1`
+- `talismanFamilyOrder: ""`
 - `nirvanaMinRarity: 4`
 - `queueNirvanaPill: false`
 - `adventureMode: "pause"`
@@ -240,6 +250,7 @@
 - 商人/遭遇激活 -> `wait`
 - 自动迎战开启且遭遇激活 -> `handleEncounter`
 - 战斗符箓选择：跳过隐匿符/神行符/锁定物品，同类只选最高品质。
+- 战斗符箓 family 顺序：支持 `ghost,fire,shield` 这类白名单顺序；留空保持按品质选择。
 - 涅槃重生丹选择：只选 `bp_pill_rebirth_*` 或明确“五行通灵/涅槃重生丹”的 pill，默认史诗以上。
 - 探索中断分类：
   - `merchant` -> 自动商人处理器。
@@ -256,7 +267,7 @@
 ## 待继续研究
 
 - 高阶“富裕模式”如何安全选择涅槃重生丹，避免吃错丹药。
-- 5 类战斗符箓的排序、每类用量、缺货跳过策略。
+- 5 类战斗符箓的最佳收益顺序、每类用量和不同账号库存下的推荐 preset。
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的完整状态机。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本，把 `adventureId`、每步选项、最终奖励记录成可分享策略。

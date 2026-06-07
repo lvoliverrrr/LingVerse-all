@@ -230,6 +230,25 @@ test('selectCombatTalismans picks up to five unlocked combat talisman families',
     ]);
 });
 
+test('selectCombatTalismans can follow a configured talisman family order', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const selected = hooks.selectCombatTalismans([
+        { id: 1, templateId: 'talisman_fire_1', name: '普通烈火符', type: 'misc', rarity: 1, quantity: 2 },
+        { id: 2, templateId: 'talisman_fire_3', name: '稀有烈火符', type: 'misc', rarity: 3, quantity: 1 },
+        { id: 5, templateId: 'bp_talisman_ghost_2', name: '优良冥鬼诅咒符', type: 'misc', rarity: 2, quantity: 1 },
+        { id: 6, templateId: 'talisman_shield_1', name: '普通金刚符', type: 'misc', rarity: 1, quantity: 3 },
+        { id: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', type: 'misc', rarity: 4, quantity: 1 }
+    ], { maxKinds: 5, quantityPerKind: 2, familyOrder: 'ghost,fire,shield' });
+
+    assert.deepEqual(toPlain(selected), [
+        { itemId: 5, templateId: 'bp_talisman_ghost_2', name: '优良冥鬼诅咒符', family: 'ghost', rarity: 2, quantity: 1 },
+        { itemId: 2, templateId: 'talisman_fire_3', name: '稀有烈火符', family: 'fire', rarity: 3, quantity: 1 },
+        { itemId: 6, templateId: 'talisman_shield_1', name: '普通金刚符', family: 'shield', rarity: 1, quantity: 2 }
+    ]);
+});
+
 test('selectNirvanaRebirthPill only selects configured five-root rebirth pills', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -482,6 +501,10 @@ test('normalizeAfkLoopConfig parses per-adventure fixed choice maps', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
 
+    assert.equal(hooks.normalizeAfkLoopConfig({
+        talismanFamilyOrder: ' ghost，fire;ghost | shield '
+    }).talismanFamilyOrder, 'ghost,fire,shield');
+
     assert.deepEqual(toPlain(hooks.normalizeAfkLoopConfig({
         adventureMode: 'strategy',
         adventureChoiceMap: '{"456":2,"789":"3","huge":99,"zero":0,"bad":"x"}'
@@ -674,6 +697,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         useTalismans: true,
         talismanMaxKinds: 3,
         talismanQuantity: 2,
+        talismanFamilyOrder: ' ghost;fire;ghost ',
         useNirvanaPill: true,
         nirvanaMinRarity: 2,
         queueNirvanaPill: true,
@@ -694,6 +718,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         useTalismans: false,
         talismanMaxKinds: 5,
         talismanQuantity: 1,
+        talismanFamilyOrder: 'ghost,fire',
         useNirvanaPill: false,
         nirvanaMinRarity: 4,
         queueNirvanaPill: false,
@@ -715,6 +740,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         useTalismans: true,
         talismanMaxKinds: 5,
         talismanQuantity: 1,
+        talismanFamilyOrder: 'ghost,fire',
         useNirvanaPill: true,
         nirvanaMinRarity: 4,
         queueNirvanaPill: false,

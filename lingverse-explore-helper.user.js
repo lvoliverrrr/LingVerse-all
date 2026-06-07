@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.21.0
+// @version      2.22.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.21.0';
+    const SCRIPT_VERSION = '2.22.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
 
@@ -54,6 +54,7 @@
             resumeWindowSeconds: 60, // 事件/复活后允许恢复探索的时间窗口，0 为关闭
             autoRevive: false,       // 复活会花资源，默认关闭
             autoFight: false,        // 自动迎战会触发战斗，默认关闭
+            autoHireGuardian: false, // 遭遇前按游戏护道设置自动雇护道，默认关闭
             useTalismans: false,     // 战斗符箓消耗品，默认关闭
             talismanMaxKinds: 5,      // 最多使用几种符
             talismanQuantity: 1,      // 每种符默认使用数量
@@ -111,6 +112,7 @@
         resumeWindowSeconds: 60,
         autoRevive: false,
         autoFight: false,
+        autoHireGuardian: false,
         useTalismans: false,
         talismanMaxKinds: 5,
         talismanQuantity: 1,
@@ -251,6 +253,7 @@
         cfg.resumeWindowSeconds = clampNumber(cfg.resumeWindowSeconds, 0, 3600, 60);
         cfg.autoRevive = !!cfg.autoRevive;
         cfg.autoFight = !!cfg.autoFight;
+        cfg.autoHireGuardian = !!cfg.autoHireGuardian;
         cfg.useTalismans = !!cfg.useTalismans;
         cfg.talismanMaxKinds = clampNumber(cfg.talismanMaxKinds, 1, 5, 5);
         cfg.talismanQuantity = clampNumber(cfg.talismanQuantity, 1, 20, 1);
@@ -263,6 +266,61 @@
         cfg.adventureChoiceIndex = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
         cfg.adventureChoiceMap = normalizeAdventureChoiceMap(cfg.adventureChoiceMap);
         return cfg;
+    }
+
+    function normalizeGuardianPriority(value) {
+        const allowed = new Set(['incarnation', 'normal', 'body']);
+        const seen = new Set();
+        const priority = [];
+        String(value || '').split(/[\s,，;；|]+/).forEach(part => {
+            const key = part.trim().toLowerCase();
+            if (!allowed.has(key) || seen.has(key)) return;
+            seen.add(key);
+            priority.push(key);
+        });
+        ['incarnation', 'normal', 'body'].forEach(key => {
+            if (!seen.has(key)) priority.push(key);
+        });
+        return priority;
+    }
+
+    function normalizeGuardianConfig(config) {
+        const cfg = Object.assign({}, CONFIG.guardian, config || {});
+        const priority = normalizeGuardianPriority(Array.isArray(cfg.priority) ? cfg.priority.join(',') : cfg.priority);
+        return {
+            enabled: !!cfg.enabled,
+            maxFee: clampNumber(cfg.maxFee, 0, 100000000, 0),
+            minAtk: clampNumber(cfg.minAtk, 0, 100000000, 0),
+            mode: cfg.mode === 'alone' ? 'alone' : 'together',
+            priority: priority,
+            priorityKey: priority.join(','),
+            threatLevel: cfg.threatLevel || 'danger'
+        };
+    }
+
+    function buildGuardianHirePayload(config) {
+        const cfg = normalizeGuardianConfig(config || {});
+        return {
+            mode: cfg.mode,
+            maxFee: cfg.maxFee,
+            minAtk: cfg.minAtk,
+            priority: cfg.priority.slice()
+        };
+    }
+
+    function getCurrentGuardianConfig() {
+        let pageConfig = null;
+        try {
+            if (typeof _win.getAutoHireConfig === 'function') {
+                pageConfig = _win.getAutoHireConfig();
+            }
+        } catch (e) {}
+        if (pageConfig && typeof pageConfig === 'object') {
+            return normalizeGuardianConfig(Object.assign({}, CONFIG.guardian, pageConfig, {
+                priority: Array.isArray(pageConfig.priority) ? pageConfig.priority.join(',') : pageConfig.priorityKey
+            }));
+        }
+        return normalizeGuardianConfig(CONFIG.guardian);
     }
 
     function applyAfkPreset(config, presetName) {
@@ -291,6 +349,7 @@
                 exploreMultiplier: 1,
                 autoRevive: false,
                 autoFight: false,
+                autoHireGuardian: false,
                 useTalismans: false,
                 useNirvanaPill: false,
                 autoDeclinePlayerEncounter: false
@@ -302,6 +361,7 @@
                 exploreMultiplier: 50,
                 autoRevive: true,
                 autoFight: true,
+                autoHireGuardian: false,
                 useTalismans: true,
                 useNirvanaPill: true,
                 autoDeclinePlayerEncounter: true
@@ -465,6 +525,31 @@
             shouldAttempt: usage.shouldUse,
             encounterKey: usage.encounterKey,
             markEncounterKey: shouldMark ? usage.encounterKey : ''
+        };
+    }
+
+    function resolveEncounterGuardianAttempt(lastEncounterKey, snapshot, afkConfig, guardianConfig, options) {
+        const encounterKey = buildEncounterKey(snapshot);
+        const cfg = normalizeAfkLoopConfig(afkConfig || {});
+        const guardian = normalizeGuardianConfig(guardianConfig || {});
+        const attemptCompleted = !!(options && options.attemptCompleted);
+        if (!encounterKey) {
+            return { shouldAttempt: false, encounterKey: '', markEncounterKey: '', reason: 'no-encounter' };
+        }
+        if (!cfg.autoHireGuardian) {
+            return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'afk-guardian-disabled' };
+        }
+        if (!guardian.enabled) {
+            return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'guardian-config-disabled' };
+        }
+        if (encounterKey === String(lastEncounterKey || '')) {
+            return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'guardian-already-attempted' };
+        }
+        return {
+            shouldAttempt: true,
+            encounterKey,
+            markEncounterKey: attemptCompleted ? encounterKey : '',
+            reason: 'guardian-ready'
         };
     }
 
@@ -695,6 +780,9 @@
         const currentDecision = decision || decideAfkNextAction(snapshot, cfg, context && context.now);
         const adventureId = snapshot.adventureId || null;
         const debugContext = context || {};
+        const guardianCfg = debugContext.guardianConfig
+            ? normalizeGuardianConfig(debugContext.guardianConfig)
+            : getCurrentGuardianConfig();
 
         return {
             schema: 'lingverse-afk-debug-snapshot/v1',
@@ -750,6 +838,7 @@
                 stallTimeoutSeconds: cfg.stallTimeoutSeconds,
                 resumeWindowSeconds: cfg.resumeWindowSeconds,
                 autoFight: cfg.autoFight,
+                autoHireGuardian: cfg.autoHireGuardian,
                 autoRevive: cfg.autoRevive,
                 useTalismans: cfg.useTalismans,
                 talismanMaxKinds: cfg.talismanMaxKinds,
@@ -761,7 +850,15 @@
                 autoDeclinePlayerEncounter: cfg.autoDeclinePlayerEncounter,
                 adventureMode: cfg.adventureMode,
                 adventureChoiceIndex: cfg.adventureChoiceIndex,
-                adventureChoiceMap: normalizeAdventureChoiceMap(cfg.adventureChoiceMap)
+                adventureChoiceMap: normalizeAdventureChoiceMap(cfg.adventureChoiceMap),
+                guardian: {
+                    enabled: guardianCfg.enabled,
+                    maxFee: guardianCfg.maxFee,
+                    minAtk: guardianCfg.minAtk,
+                    mode: guardianCfg.mode,
+                    priority: guardianCfg.priority.slice(),
+                    threatLevel: guardianCfg.threatLevel
+                }
             },
             history: {
                 decisionTail: normalizeDecisionHistory(debugContext.decisionHistory),
@@ -781,7 +878,11 @@
         buildEncounterKey,
         shouldUseCombatTalismansForEncounter,
         resolveCombatTalismanAttempt,
+        normalizeGuardianConfig,
+        buildGuardianHirePayload,
+        resolveEncounterGuardianAttempt,
         selectNirvanaRebirthPill,
+        getCurrentGuardianConfig,
         classifyExploreInterruption,
         normalizeAdventureChoiceMap,
         formatAdventureChoiceMap,
@@ -1023,6 +1124,7 @@
         cfg.resumeWindowSeconds = clampNumber($('#am-afk-resume-window')?.value, 0, 3600, cfg.resumeWindowSeconds ?? 60);
         cfg.autoRevive = $('#am-afk-auto-revive')?.checked ?? cfg.autoRevive;
         cfg.autoFight = $('#am-afk-auto-fight')?.checked ?? cfg.autoFight;
+        cfg.autoHireGuardian = $('#am-afk-auto-hire-guardian')?.checked ?? cfg.autoHireGuardian;
         cfg.useTalismans = $('#am-afk-use-talismans')?.checked ?? cfg.useTalismans;
         cfg.talismanMaxKinds = clampNumber($('#am-afk-talisman-max-kinds')?.value, 1, 5, cfg.talismanMaxKinds || 5);
         cfg.talismanQuantity = clampNumber($('#am-afk-talisman-qty')?.value, 1, 20, cfg.talismanQuantity || 1);
@@ -1311,6 +1413,10 @@
                                 <span style="font-size:12px;color:${text};">遭遇妖兽后自动迎战</span>
                             </label>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="checkbox" id="am-afk-auto-hire-guardian" ${CONFIG.afkLoop.autoHireGuardian?'checked':''} style="cursor:pointer;">
+                                <span style="font-size:12px;color:${text};">迎战前按游戏护道设置自动雇护道</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-auto-decline-player" ${CONFIG.afkLoop.autoDeclinePlayerEncounter?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">自动婉拒陌生道友邂逅</span>
                             </label>
@@ -1572,6 +1678,7 @@
             const afkResumeWindowEl = $('#am-afk-resume-window');
             const afkAutoReviveEl = $('#am-afk-auto-revive');
             const afkAutoFightEl = $('#am-afk-auto-fight');
+            const afkAutoHireGuardianEl = $('#am-afk-auto-hire-guardian');
             const afkAutoDeclinePlayerEl = $('#am-afk-auto-decline-player');
             const afkAdventureModeEl = $('#am-afk-adventure-mode');
             const afkAdventureChoiceEl = $('#am-afk-adventure-choice');
@@ -1604,6 +1711,7 @@
             if (afkResumeWindowEl) afkResumeWindowEl.value = CONFIG.afkLoop.resumeWindowSeconds;
             if (afkAutoReviveEl) afkAutoReviveEl.checked = CONFIG.afkLoop.autoRevive;
             if (afkAutoFightEl) afkAutoFightEl.checked = CONFIG.afkLoop.autoFight;
+            if (afkAutoHireGuardianEl) afkAutoHireGuardianEl.checked = CONFIG.afkLoop.autoHireGuardian;
             if (afkAutoDeclinePlayerEl) afkAutoDeclinePlayerEl.checked = CONFIG.afkLoop.autoDeclinePlayerEncounter;
             if (afkAdventureModeEl) afkAdventureModeEl.value = CONFIG.afkLoop.adventureMode;
             if (afkAdventureChoiceEl) afkAdventureChoiceEl.value = CONFIG.afkLoop.adventureChoiceIndex;
@@ -2041,6 +2149,7 @@
         lastExploreProgressAt: 0,
         encounterBusy: false,
         lastTalismanEncounterKey: '',
+        lastGuardianEncounterKey: '',
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
         decisionHistory: [],
@@ -2271,6 +2380,7 @@
             const key = `${decision.action}:${decision.reason}`;
             if (!snapshot || (!snapshot.encounterActive && !snapshot.combatActive)) {
                 this.lastTalismanEncounterKey = '';
+                this.lastGuardianEncounterKey = '';
             }
             if (decision.action === 'wait' || decision.action === 'idle') {
                 if (key !== this.lastDecisionKey && decision.reason !== 'auto-explore-running') {
@@ -2457,12 +2567,63 @@
                 if (cfg.useTalismans) {
                     await this.useCombatTalismans(cfg, snapshot);
                 }
+                if (cfg.autoHireGuardian) {
+                    const handled = await this.tryHireEncounterGuardian(cfg, snapshot);
+                    if (!handled) return;
+                    return;
+                }
                 if (cfg.autoFight) {
                     await this.fightEncounter();
                 }
             } finally {
                 this.encounterBusy = false;
             }
+        },
+
+        async tryHireEncounterGuardian(cfg, snapshot) {
+            const guardianCfg = getCurrentGuardianConfig();
+            const guardianUse = resolveEncounterGuardianAttempt(this.lastGuardianEncounterKey, snapshot, cfg, guardianCfg);
+            if (!guardianUse.shouldAttempt) {
+                return false;
+            }
+
+            let hireTriggered = false;
+            try {
+                Logger.info(`自动尝试雇护道：模式${guardianCfg.mode}，最高费用${guardianCfg.maxFee || '不限'}`);
+                const hireBtn = $('#encounterHireProtectorBtn');
+                if (hireBtn && !hireBtn.disabled) {
+                    hireBtn.click();
+                    hireTriggered = true;
+                } else if (typeof _win.tryAutoHireProtectorForEncounter === 'function') {
+                    hireTriggered = !!(await _win.tryAutoHireProtectorForEncounter({ silent: false }));
+                } else {
+                    let res = await API.autoHireGuardian(buildGuardianHirePayload(guardianCfg));
+                    if (res && res.code === 429) {
+                        await wait(600);
+                        res = await API.autoHireGuardian(buildGuardianHirePayload(guardianCfg));
+                    }
+                    hireTriggered = !!(res && res.code === 200 && res.data && res.data.combat);
+                    if (!hireTriggered && res && res.message) Logger.warn(`自动雇护道失败: ${res.message}`);
+                }
+            } catch (e) {
+                Logger.warn(`自动雇护道失败: ${e.message || e}`);
+            }
+
+            const completedAttempt = resolveEncounterGuardianAttempt(this.lastGuardianEncounterKey, snapshot, cfg, guardianCfg, { attemptCompleted: true });
+            if (completedAttempt.markEncounterKey) this.lastGuardianEncounterKey = completedAttempt.markEncounterKey;
+
+            if (!hireTriggered) {
+                Logger.warn('自动雇护道未成功，本次遭遇暂停等待手动处理');
+                return false;
+            }
+
+            Logger.success('已触发自动雇护道，等待战斗或遭遇结算');
+            const windowMs = getResumeWindowMs(cfg);
+            this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
+            this.lastDecisionKey = '';
+            this.refreshGameData();
+            setTimeout(() => this.tick(true), 1200);
+            return true;
         },
 
         async useCombatTalismans(cfg, snapshot) {

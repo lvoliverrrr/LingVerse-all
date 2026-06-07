@@ -36,6 +36,8 @@
 - 当前读到一次状态：神识 `3/2758`，未冥想，未死亡。
 - v2.18.0 再次只读状态：`autoExploreRunning=false`、`autoResumeExplorePending=false`、神识 `3/2758`、单次探索消耗 `4`、`canExplore=true`。
 - v2.20.0 只读遭遇状态：`_encounterActive=false` 且 `#encounterOverlay.hidden=true`，但页面仍保留旧 `_currentEncounterMonsterId=port_bandit` 和旧面板文本；因此 encounter key 必须只在 active 遭遇/战斗时生成。
+- v2.22.0 只读护道状态：`getAutoHireConfig()` 返回当前账号已开启自动护道，模式 `alone`，最高雇佣费 `51`，优先级 `normal,incarnation,body`。
+- v2.22.0 只读函数确认：`handleCombatChoice('fight')` 会直接调用 `/api/game/combat-choice` 迎战；`tryAutoHireProtectorForEncounter()` 会读取 `getAutoHireConfig()` 并调用 `/api/game/encounter-auto-hire`，遇 429 会等待 600ms 重试一次。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -252,6 +254,14 @@
 - `attemptCompleted=true` 时代表已完成一轮用符尝试，会标记本遭遇已处理，避免同一遭遇重复尝试失败或重复消耗。
 - 背包读取异常不会标记，让下一轮 tick 仍可重试。
 
+`lingverse-explore-helper.user.js` v2.22.0 新增：
+
+- `autoHireGuardian`：AFK 遭遇处理中的独立开关，默认关闭；开启后必须同时开启自动迎战才会进入遭遇 handler。
+- `getCurrentGuardianConfig()`：优先从真实页面 `getAutoHireConfig()` 读取当前自动护道设置，页面函数不可用时回退脚本配置。
+- `resolveEncounterGuardianAttempt(lastKey, snapshot, afkConfig, guardianConfig, options)`：按 encounter key 控制同一遭遇只尝试一次自动护道。
+- 执行顺序：可选用符 -> 可选自动护道 -> 未开自动护道时才直接迎战。
+- 自动护道成功后刷新状态并给恢复窗口；失败后不直接迎战，等待测试者手动处理。
+
 默认配置：
 
 - `enabled: false`
@@ -262,6 +272,7 @@
 - `stallTimeoutSeconds: 90`
 - `resumeWindowSeconds: 60`
 - `autoRevive: false`
+- `autoHireGuardian: false`
 - `useTalismans: false`
 - `useNirvanaPill: false`
 - `autoFight: false`
@@ -284,6 +295,7 @@
 - 恢复窗口：配置归一化为 0-3600 秒，快照包含 `resumeWindowSeconds`。
 - 商人/遭遇激活 -> `wait`
 - 自动迎战开启且遭遇激活 -> `handleEncounter`
+- 遭遇前自动护道：默认关闭；开启后按真实页面护道设置尝试一次，失败不回退直接迎战。
 - 战斗符箓选择：跳过隐匿符/神行符/锁定物品，同类只选最高品质。
 - 战斗符箓 family 顺序：支持 `ghost,fire,shield` 这类白名单顺序；留空保持按品质选择。
 - 战斗符箓去重：同一个遭遇 key 只处理一次用符；没符会跳过并记住，下一次遭遇重新允许用符。
@@ -305,6 +317,7 @@
 - 高阶“富裕模式”如何安全选择涅槃重生丹，避免吃错丹药。
 - 5 类战斗符箓的最佳收益顺序、每类用量和不同账号库存下的推荐 preset。
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的真实长跑稳定性。
+- 低境界 1 倍探索开启自动护道后的真实长跑稳定性，尤其是护道失败 message 和是否需要游戏内自动重试。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本，把 `adventureId`、每步选项、最终奖励记录成可分享策略。
 - 为快照增加可选脱敏摘要和导入式问题回放视图。

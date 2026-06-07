@@ -403,6 +403,106 @@ test('resolveCombatTalismanAttempt marks empty or completed attempts for one enc
     });
 });
 
+test('normalizeAfkLoopConfig keeps guardian auto-hire opt-in for encounters', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(hooks.normalizeAfkLoopConfig({}).autoHireGuardian, false);
+    assert.equal(hooks.normalizeAfkLoopConfig({ autoHireGuardian: true }).autoHireGuardian, true);
+    assert.equal(hooks.normalizeAfkLoopConfig({ autoHireGuardian: 'yes' }).autoHireGuardian, true);
+});
+
+test('resolveEncounterGuardianAttempt marks completed guardian attempts per encounter', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const snapshot = {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7
+    };
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterGuardianAttempt('', snapshot, {
+        autoHireGuardian: false
+    }, {
+        enabled: true
+    })), {
+        shouldAttempt: false,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: '',
+        reason: 'afk-guardian-disabled'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterGuardianAttempt('', snapshot, {
+        autoHireGuardian: true
+    }, {
+        enabled: false
+    })), {
+        shouldAttempt: false,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: '',
+        reason: 'guardian-config-disabled'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterGuardianAttempt('', snapshot, {
+        autoHireGuardian: true
+    }, {
+        enabled: true
+    })), {
+        shouldAttempt: true,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: '',
+        reason: 'guardian-ready'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterGuardianAttempt('', snapshot, {
+        autoHireGuardian: true
+    }, {
+        enabled: true
+    }, { attemptCompleted: true })), {
+        shouldAttempt: true,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: 'monster:port_bandit:3:7',
+        reason: 'guardian-ready'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterGuardianAttempt('monster:port_bandit:3:7', snapshot, {
+        autoHireGuardian: true
+    }, {
+        enabled: true
+    })), {
+        shouldAttempt: false,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: '',
+        reason: 'guardian-already-attempted'
+    });
+});
+
+test('getCurrentGuardianConfig prefers page auto-hire settings', () => {
+    const sandbox = loadUserScript({
+        getAutoHireConfig() {
+            return {
+                enabled: true,
+                mode: 'alone',
+                maxFee: 51,
+                priorityKey: 'normal,incarnation,body',
+                priority: ['normal', 'incarnation', 'body']
+            };
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.getCurrentGuardianConfig()), {
+        enabled: true,
+        maxFee: 51,
+        minAtk: 0,
+        mode: 'alone',
+        priority: ['normal', 'incarnation', 'body'],
+        priorityKey: 'normal,incarnation,body',
+        threatLevel: 'danger'
+    });
+});
+
 test('selectNirvanaRebirthPill only selects configured five-root rebirth pills', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -859,6 +959,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         exploreMultiplier: 20,
         resumeWindowSeconds: 180,
         autoFight: true,
+        autoHireGuardian: true,
         autoRevive: true,
         useTalismans: true,
         talismanMaxKinds: 3,
@@ -882,6 +983,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         resumeWindowSeconds: 180,
         autoRevive: false,
         autoFight: false,
+        autoHireGuardian: false,
         useTalismans: false,
         talismanMaxKinds: 5,
         talismanQuantity: 1,
@@ -905,6 +1007,7 @@ test('applyAfkPreset configures steady and rich AFK modes without enabling the l
         resumeWindowSeconds: 180,
         autoRevive: true,
         autoFight: true,
+        autoHireGuardian: false,
         useTalismans: true,
         talismanMaxKinds: 5,
         talismanQuantity: 1,

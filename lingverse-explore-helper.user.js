@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.7.0
-// @description  自动开启背包中的藏宝图，并在自动探索时自动处理云游商人
+// @version      2.8.0
+// @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
 // @match        http://ling.muge.info/*
@@ -40,6 +40,17 @@
             enabled: true,          // 自动探索遇到商人时自动购买
             onlyAutoExplore: true,  // 只处理自动探索挂起的商人，避免手动购物被抢单
             buyDelay: 800           // 遇到商人后延迟购买，给原页面完成渲染
+        },
+        afkLoop: {                   // 冥想-探索挂机循环配置
+            enabled: false,          // 默认不自动接管，需要用户在面板启动
+            meditationMinutes: 140,  // 默认2小时20分钟
+            minSpirit: 20,           // 神识低于该值进入冥想
+            exploreMultiplier: 1,    // 低风险默认1倍，富裕模式可手动调高
+            tickInterval: 30000,     // 循环检查间隔
+            stallTimeoutSeconds: 90, // 自动探索超过该时间无进展则回冥想
+            autoRevive: false,       // 复活会花资源，默认关闭
+            useTalismans: false,     // 战斗符箓消耗品，默认关闭
+            useNirvanaPill: false    // 涅槃重生丹消耗品，默认关闭
         }
     };
 
@@ -76,6 +87,21 @@
         onlyAutoExplore: true,
         buyDelay: 800
     }, CONFIG.merchant || {});
+    CONFIG.afkLoop = Object.assign({
+        enabled: false,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 1,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        autoRevive: false,
+        useTalismans: false,
+        useNirvanaPill: false
+    }, CONFIG.afkLoop || {});
+
+    function saveConfig() {
+        localStorage.setItem('lingverse_auto_map_config', JSON.stringify(CONFIG));
+    }
 
     function parseMerchantPrice(value) {
         if (typeof value === 'number' && isFinite(value)) return value;
@@ -114,10 +140,112 @@
         return apiObj;
     }
 
+    function toFiniteNumber(value, fallback) {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    function clampNumber(value, min, max, fallback) {
+        let parsed = toFiniteNumber(value, fallback);
+        if (parsed < min) parsed = min;
+        if (parsed > max) parsed = max;
+        return parsed;
+    }
+
+    function normalizeAfkLoopConfig(config) {
+        const cfg = Object.assign({}, CONFIG.afkLoop, config || {});
+        cfg.enabled = !!cfg.enabled;
+        cfg.meditationMinutes = clampNumber(cfg.meditationMinutes, 1, 720, 140);
+        cfg.minSpirit = clampNumber(cfg.minSpirit, 0, 100000000, 20);
+        cfg.exploreMultiplier = clampNumber(cfg.exploreMultiplier, 1, 50, 1);
+        cfg.tickInterval = clampNumber(cfg.tickInterval, 5000, 300000, 30000);
+        cfg.stallTimeoutSeconds = clampNumber(cfg.stallTimeoutSeconds, 0, 3600, 90);
+        cfg.autoRevive = !!cfg.autoRevive;
+        cfg.useTalismans = !!cfg.useTalismans;
+        cfg.useNirvanaPill = !!cfg.useNirvanaPill;
+        return cfg;
+    }
+
+    function getMeditationElapsedMs(state, now) {
+        if (!state) return 0;
+        const durationSeconds = toFiniteNumber(state.meditationDurationSeconds, NaN);
+        if (Number.isFinite(durationSeconds) && durationSeconds >= 0) {
+            return durationSeconds * 1000;
+        }
+        const startedAt = toFiniteNumber(state.meditationStartedAt, NaN);
+        if (Number.isFinite(startedAt) && startedAt > 0) {
+            return Math.max(0, now - startedAt);
+        }
+        return 0;
+    }
+
+    function decideAfkNextAction(state, config, now) {
+        const cfg = normalizeAfkLoopConfig(config);
+        const snapshot = state || {};
+        const currentTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+
+        if (!cfg.enabled) {
+            return { action: 'idle', reason: 'disabled' };
+        }
+        if (snapshot.merchantActive) {
+            return { action: 'wait', reason: 'merchant-active' };
+        }
+        if (snapshot.encounterActive || snapshot.combatActive) {
+            return { action: 'wait', reason: 'encounter-active' };
+        }
+        if (snapshot.isDead) {
+            return cfg.autoRevive
+                ? { action: 'revive', reason: 'dead-auto-revive-enabled' }
+                : { action: 'wait', reason: 'dead' };
+        }
+
+        const spirit = Math.max(0, toFiniteNumber(snapshot.spirit, 0));
+        const maxSpirit = Math.max(0, toFiniteNumber(snapshot.maxSpirit, 0));
+        const spiritCost = Math.max(1, toFiniteNumber(snapshot.spiritCost, 1));
+
+        if (snapshot.isMeditating) {
+            if (maxSpirit > 0 && spirit >= maxSpirit) {
+                return { action: 'stopMeditation', reason: 'spirit-full' };
+            }
+            const elapsedMs = getMeditationElapsedMs(snapshot, currentTime);
+            if (elapsedMs >= cfg.meditationMinutes * 60 * 1000) {
+                return { action: 'stopMeditation', reason: 'meditation-duration-reached' };
+            }
+            return { action: 'wait', reason: 'meditating' };
+        }
+
+        if (snapshot.autoExploreRunning || snapshot.autoExplorePending) {
+            if (snapshot.exploreStalled) {
+                return { action: 'startMeditation', reason: 'explore-stalled' };
+            }
+            return { action: 'wait', reason: 'auto-explore-running' };
+        }
+
+        if (snapshot.exploreStalled) {
+            return { action: 'startMeditation', reason: 'explore-stalled' };
+        }
+
+        if (snapshot.canExplore === false) {
+            const disabledReason = String(snapshot.exploreDisabledReason || '');
+            if (disabledReason.indexOf('神识') >= 0 || disabledReason.indexOf('体力') >= 0) {
+                return { action: 'startMeditation', reason: 'explore-disabled-no-spirit' };
+            }
+            return { action: 'wait', reason: 'explore-disabled' };
+        }
+
+        if (spirit < cfg.minSpirit || spirit < spiritCost) {
+            return { action: 'startMeditation', reason: 'spirit-below-threshold' };
+        }
+
+        return { action: 'startAutoExplore', reason: 'spirit-ready' };
+    }
+
     _win.LingVerseAutoMapTestHooks = Object.assign({}, _win.LingVerseAutoMapTestHooks, {
         parseMerchantPrice,
         selectMerchantItem,
-        resolveApiObject
+        resolveApiObject,
+        normalizeAfkLoopConfig,
+        decideAfkNextAction
     });
 
     // 状态对象
@@ -199,6 +327,30 @@
         },
 
         /**
+         * 获取冥想状态
+         */
+        async getMeditationStatus() {
+            const apiObj = this.getApiObj();
+            return await apiObj.get('/api/game/meditate/status');
+        },
+
+        /**
+         * 开始冥想
+         */
+        async startMeditation() {
+            const apiObj = this.getApiObj();
+            return await apiObj.post('/api/game/meditate/start');
+        },
+
+        /**
+         * 结束冥想
+         */
+        async stopMeditation() {
+            const apiObj = this.getApiObj();
+            return await apiObj.post('/api/game/meditate/stop');
+        },
+
+        /**
          * 使用藏宝图
          * @param {string} itemId - 物品ID
          * @param {number} quantity - 数量
@@ -258,6 +410,14 @@
         async buyMerchantItem(index) {
             const apiObj = this.getApiObj();
             return await apiObj.post('/api/game/merchant/buy', { index });
+        },
+
+        /**
+         * 灵石复活
+         */
+        async revive() {
+            const apiObj = this.getApiObj();
+            return await apiObj.post('/api/game/revive');
         }
     };
 
@@ -285,6 +445,21 @@
         warn(msg) { this.log(msg, 'warning'); },
         error(msg) { this.log(msg, 'error'); }
     };
+
+    function readAfkLoopConfigFromUI() {
+        const cfg = CONFIG.afkLoop;
+        cfg.enabled = $('#am-afk-enabled')?.checked ?? cfg.enabled;
+        cfg.meditationMinutes = clampNumber($('#am-afk-meditation-minutes')?.value, 1, 720, cfg.meditationMinutes || 140);
+        cfg.minSpirit = clampNumber($('#am-afk-min-spirit')?.value, 0, 100000000, cfg.minSpirit || 20);
+        cfg.exploreMultiplier = clampNumber($('#am-afk-explore-multiplier')?.value, 1, 50, cfg.exploreMultiplier || 1);
+        cfg.tickInterval = clampNumber($('#am-afk-tick-interval')?.value, 5000, 300000, cfg.tickInterval || 30000);
+        cfg.stallTimeoutSeconds = clampNumber($('#am-afk-stall-timeout')?.value, 0, 3600, cfg.stallTimeoutSeconds || 90);
+        cfg.autoRevive = $('#am-afk-auto-revive')?.checked ?? cfg.autoRevive;
+        cfg.useTalismans = $('#am-afk-use-talismans')?.checked ?? cfg.useTalismans;
+        cfg.useNirvanaPill = $('#am-afk-use-nirvana')?.checked ?? cfg.useNirvanaPill;
+        CONFIG.afkLoop = normalizeAfkLoopConfig(cfg);
+        return CONFIG.afkLoop;
+    }
 
     // 统计管理器
     const StatsManager = {
@@ -504,6 +679,65 @@
                         </div>
                     </div>
 
+                    <div style="margin-top:12px;padding-top:10px;border-top:1px solid ${border};">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;">
+                            <div style="font-size:12px;color:${isDark?'#94a3b8':'#64748b'};font-weight:bold;">🌙 自动挂机循环</div>
+                            <span id="am-afk-state" style="font-size:11px;color:${CONFIG.afkLoop.enabled?'#3dab97':'#94a3b8'};">${CONFIG.afkLoop.enabled?'运行中':'未启动'}</span>
+                        </div>
+                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+                            <input type="checkbox" id="am-afk-enabled" ${CONFIG.afkLoop.enabled?'checked':''} style="cursor:pointer;">
+                            <span style="font-size:13px;color:${text};">启用冥想-探索循环</span>
+                        </label>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                            <div>
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">冥想分钟</div>
+                                <input type="number" id="am-afk-meditation-minutes" value="${CONFIG.afkLoop.meditationMinutes}" min="1" max="720" step="1" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                            </div>
+                            <div>
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">最低神识</div>
+                                <input type="number" id="am-afk-min-spirit" value="${CONFIG.afkLoop.minSpirit}" min="0" step="1" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                            </div>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                            <div>
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">探索倍数</div>
+                                <select id="am-afk-explore-multiplier" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;cursor:pointer;">
+                                    <option value="1" ${CONFIG.afkLoop.exploreMultiplier===1?'selected':''}>1倍稳妥</option>
+                                    <option value="5" ${CONFIG.afkLoop.exploreMultiplier===5?'selected':''}>5倍</option>
+                                    <option value="10" ${CONFIG.afkLoop.exploreMultiplier===10?'selected':''}>10倍</option>
+                                    <option value="20" ${CONFIG.afkLoop.exploreMultiplier===20?'selected':''}>20倍</option>
+                                    <option value="50" ${CONFIG.afkLoop.exploreMultiplier===50?'selected':''}>50倍富裕</option>
+                                </select>
+                            </div>
+                            <div>
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">检查间隔(ms)</div>
+                                <input type="number" id="am-afk-tick-interval" value="${CONFIG.afkLoop.tickInterval}" min="5000" max="300000" step="1000" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                            </div>
+                        </div>
+                        <div style="margin-bottom:8px;">
+                            <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">卡住判定(秒)</div>
+                            <input type="number" id="am-afk-stall-timeout" value="${CONFIG.afkLoop.stallTimeoutSeconds}" min="0" max="3600" step="5" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr;gap:6px;margin-bottom:8px;">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="checkbox" id="am-afk-auto-revive" ${CONFIG.afkLoop.autoRevive?'checked':''} style="cursor:pointer;">
+                                <span style="font-size:12px;color:${text};">死亡后自动灵石复活</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="checkbox" id="am-afk-use-talismans" ${CONFIG.afkLoop.useTalismans?'checked':''} style="cursor:pointer;">
+                                <span style="font-size:12px;color:${text};">战斗前自动使用已选符箓策略（预留）</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="checkbox" id="am-afk-use-nirvana" ${CONFIG.afkLoop.useNirvanaPill?'checked':''} style="cursor:pointer;">
+                                <span style="font-size:12px;color:${text};">富裕模式使用涅槃重生丹（预留）</span>
+                            </label>
+                        </div>
+                        <div style="display:flex;gap:8px;">
+                            <button id="am-afk-start" style="flex:1;padding:8px;background:#7c3aed;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">启动挂机</button>
+                            <button id="am-afk-stop" style="flex:1;padding:8px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">停止挂机</button>
+                        </div>
+                    </div>
+
                     <button id="am-save-config" style="width:100%;margin-top:10px;padding:8px;background:#4dabf7;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">💾 保存配置</button>
                 </div>
 
@@ -537,6 +771,9 @@
                 $('#am-log-content').innerHTML = '<div style="color:#64748b;">日志已清空</div>';
             });
 
+            $('#am-afk-start')?.addEventListener('click', () => AfkLoopManager.start());
+            $('#am-afk-stop')?.addEventListener('click', () => AfkLoopManager.stop());
+
 
 
             $('#am-save-config')?.addEventListener('click', async () => {
@@ -560,7 +797,10 @@
                 if (CONFIG.merchant.buyDelay < 0) CONFIG.merchant.buyDelay = 0;
                 if (CONFIG.merchant.buyDelay > 10000) CONFIG.merchant.buyDelay = 10000;
 
-                localStorage.setItem('lingverse_auto_map_config', JSON.stringify(CONFIG));
+                readAfkLoopConfigFromUI();
+                saveConfig();
+                AfkLoopManager.ensureTimer();
+                UI.updateAfkState();
                 
                 try {
                     const apiObj = typeof api !== 'undefined' ? api : (window.api || _win.api);
@@ -677,6 +917,15 @@
             const merchantEnabledEl = $('#am-merchant-enabled');
             const merchantAutoOnlyEl = $('#am-merchant-auto-only');
             const merchantDelayEl = $('#am-merchant-delay');
+            const afkEnabledEl = $('#am-afk-enabled');
+            const afkMeditationMinutesEl = $('#am-afk-meditation-minutes');
+            const afkMinSpiritEl = $('#am-afk-min-spirit');
+            const afkExploreMultiplierEl = $('#am-afk-explore-multiplier');
+            const afkTickIntervalEl = $('#am-afk-tick-interval');
+            const afkStallTimeoutEl = $('#am-afk-stall-timeout');
+            const afkAutoReviveEl = $('#am-afk-auto-revive');
+            const afkUseTalismansEl = $('#am-afk-use-talismans');
+            const afkUseNirvanaEl = $('#am-afk-use-nirvana');
 
             if (enabledEl) enabledEl.checked = CONFIG.guardian.enabled;
             if (maxFeeEl) maxFeeEl.value = CONFIG.guardian.maxFee;
@@ -689,6 +938,26 @@
             if (merchantEnabledEl) merchantEnabledEl.checked = CONFIG.merchant.enabled;
             if (merchantAutoOnlyEl) merchantAutoOnlyEl.checked = CONFIG.merchant.onlyAutoExplore;
             if (merchantDelayEl) merchantDelayEl.value = CONFIG.merchant.buyDelay;
+            if (afkEnabledEl) afkEnabledEl.checked = CONFIG.afkLoop.enabled;
+            if (afkMeditationMinutesEl) afkMeditationMinutesEl.value = CONFIG.afkLoop.meditationMinutes;
+            if (afkMinSpiritEl) afkMinSpiritEl.value = CONFIG.afkLoop.minSpirit;
+            if (afkExploreMultiplierEl) afkExploreMultiplierEl.value = CONFIG.afkLoop.exploreMultiplier;
+            if (afkTickIntervalEl) afkTickIntervalEl.value = CONFIG.afkLoop.tickInterval;
+            if (afkStallTimeoutEl) afkStallTimeoutEl.value = CONFIG.afkLoop.stallTimeoutSeconds;
+            if (afkAutoReviveEl) afkAutoReviveEl.checked = CONFIG.afkLoop.autoRevive;
+            if (afkUseTalismansEl) afkUseTalismansEl.checked = CONFIG.afkLoop.useTalismans;
+            if (afkUseNirvanaEl) afkUseNirvanaEl.checked = CONFIG.afkLoop.useNirvanaPill;
+            this.updateAfkState();
+        },
+
+        updateAfkState() {
+            const stateEl = $('#am-afk-state');
+            if (stateEl) {
+                stateEl.textContent = CONFIG.afkLoop.enabled ? '运行中' : '未启动';
+                stateEl.style.color = CONFIG.afkLoop.enabled ? '#3dab97' : '#94a3b8';
+            }
+            const enabledEl = $('#am-afk-enabled');
+            if (enabledEl) enabledEl.checked = CONFIG.afkLoop.enabled;
         },
 
         /**
@@ -1094,6 +1363,276 @@
         }
     };
 
+    // 冥想-探索挂机循环
+    const AfkLoopManager = {
+        intervalId: null,
+        busy: false,
+        lastEvaluationAt: 0,
+        lastDecisionKey: '',
+        lastAutoExploreCount: null,
+        lastExploreProgressAt: 0,
+
+        init() {
+            this.ensureTimer();
+            if (CONFIG.afkLoop.enabled) {
+                setTimeout(() => this.tick(true), 1200);
+            }
+        },
+
+        ensureTimer() {
+            if (this.intervalId) return;
+            this.intervalId = setInterval(() => this.tick(false), 5000);
+        },
+
+        start() {
+            readAfkLoopConfigFromUI();
+            CONFIG.afkLoop.enabled = true;
+            saveConfig();
+            UI.updateAfkState();
+            this.ensureTimer();
+            Logger.success(`自动挂机循环已启动：冥想${CONFIG.afkLoop.meditationMinutes}分钟，神识低于${CONFIG.afkLoop.minSpirit}回冥想`);
+            this.tick(true);
+        },
+
+        stop() {
+            CONFIG.afkLoop.enabled = false;
+            saveConfig();
+            UI.updateAfkState();
+            this.lastDecisionKey = '';
+            Logger.warn('自动挂机循环已停止');
+        },
+
+        async tick(force) {
+            const cfg = normalizeAfkLoopConfig(CONFIG.afkLoop);
+            CONFIG.afkLoop = cfg;
+            if (!cfg.enabled) return;
+
+            const now = Date.now();
+            if (!force && now - this.lastEvaluationAt < cfg.tickInterval) return;
+            if (this.busy) return;
+
+            this.busy = true;
+            this.lastEvaluationAt = now;
+            try {
+                const snapshot = await this.buildSnapshot(now, cfg);
+                const decision = decideAfkNextAction(snapshot, cfg, now);
+                await this.executeDecision(decision, snapshot, cfg);
+            } catch (e) {
+                Logger.warn(`自动挂机循环检查失败: ${e.message || e}`);
+            } finally {
+                this.busy = false;
+            }
+        },
+
+        async buildSnapshot(now, cfg) {
+            let player = _win._lastPlayerData || null;
+            if (!player) {
+                try {
+                    const res = await API.getPlayerInfo();
+                    if (res.code === 200 && res.data) player = res.data;
+                } catch (e) {}
+            }
+            player = player || {};
+
+            let meditationStatus = null;
+            try {
+                const res = await API.getMeditationStatus();
+                if (res.code === 200 && res.data) meditationStatus = res.data;
+            } catch (e) {}
+
+            const toggle = $('#autoExploreToggle');
+            const autoExploreRunning = !!(_win._autoExploreRunning || toggle?.checked);
+            const autoExplorePending = !!_win._autoResumeExplorePending;
+            const autoExploreCount = toFiniteNumber(_win._autoExploreCount, 0);
+
+            if (!autoExploreRunning || this.lastAutoExploreCount === null || autoExploreCount !== this.lastAutoExploreCount) {
+                this.lastExploreProgressAt = now;
+                this.lastAutoExploreCount = autoExploreCount;
+            }
+
+            const encounterOverlay = $('#encounterOverlay');
+            const combatPanel = $('#combatPanel');
+            const talismanDialog = $('#encounterTalismanDialog');
+            const encounterActive = !!(
+                _win._encounterActive ||
+                (encounterOverlay && !encounterOverlay.classList.contains('hidden')) ||
+                (combatPanel && combatPanel.classList.contains('active')) ||
+                (talismanDialog && !talismanDialog.classList.contains('hidden'))
+            );
+
+            const stalledMs = cfg.stallTimeoutSeconds * 1000;
+            const exploreStalled = autoExploreRunning && stalledMs > 0 && (now - this.lastExploreProgressAt) >= stalledMs;
+
+            return {
+                isMeditating: meditationStatus ? !!meditationStatus.isMeditating : !!player.isMeditating,
+                meditationDurationSeconds: meditationStatus ? meditationStatus.durationSeconds : undefined,
+                spirit: player.spirit,
+                maxSpirit: player.maxSpirit,
+                spiritCost: player.spiritCost,
+                canExplore: player.canExplore,
+                exploreDisabledReason: player.exploreDisabledReason,
+                isDead: !!(player.isDead || _win.playerDead),
+                merchantActive: MerchantAutoBuyer.isMerchantActive(),
+                encounterActive,
+                autoExploreRunning,
+                autoExplorePending,
+                exploreStalled
+            };
+        },
+
+        async executeDecision(decision, snapshot, cfg) {
+            const key = `${decision.action}:${decision.reason}`;
+            if (decision.action === 'wait' || decision.action === 'idle') {
+                if (key !== this.lastDecisionKey && decision.reason !== 'auto-explore-running') {
+                    Logger.info(`自动挂机等待：${this.formatReason(decision.reason)}`);
+                }
+                this.lastDecisionKey = key;
+                return;
+            }
+
+            this.lastDecisionKey = key;
+            if (decision.action === 'startMeditation') {
+                Logger.info(`自动挂机进入冥想：${this.formatReason(decision.reason)}`);
+                await this.startMeditation();
+                return;
+            }
+            if (decision.action === 'stopMeditation') {
+                Logger.info(`自动挂机结束冥想：${this.formatReason(decision.reason)}`);
+                await this.stopMeditation();
+                return;
+            }
+            if (decision.action === 'startAutoExplore') {
+                Logger.info(`自动挂机启动探索：${this.formatReason(decision.reason)}，倍率×${cfg.exploreMultiplier}`);
+                await this.startAutoExplore(cfg.exploreMultiplier);
+                return;
+            }
+            if (decision.action === 'revive') {
+                Logger.warn('自动挂机尝试灵石复活');
+                await this.revive();
+            }
+        },
+
+        async startMeditation() {
+            try {
+                if (_win._autoExploreRunning && typeof _win.stopAutoExplore === 'function') {
+                    _win.stopAutoExplore('挂机循环回冥想', false);
+                    await wait(500);
+                }
+                if (typeof _win.handleMeditate === 'function') {
+                    await _win.handleMeditate();
+                } else {
+                    const res = await API.startMeditation();
+                    if (res.code !== 200) throw new Error(res.message || '开始冥想失败');
+                    if (typeof _win.startMeditationUI === 'function') _win.startMeditationUI();
+                }
+                this.refreshGameData();
+            } catch (e) {
+                Logger.warn(`自动冥想失败: ${e.message || e}`);
+            }
+        },
+
+        async stopMeditation() {
+            try {
+                if (typeof _win.handleStopMeditate === 'function') {
+                    await _win.handleStopMeditate();
+                } else {
+                    const res = await API.stopMeditation();
+                    if (typeof _win.stopMeditationUI === 'function') _win.stopMeditationUI();
+                    if (res.code !== 200) throw new Error(res.message || '结束冥想失败');
+                }
+                this.refreshGameData();
+            } catch (e) {
+                Logger.warn(`自动结束冥想失败: ${e.message || e}`);
+            }
+        },
+
+        async startAutoExplore(multiplier) {
+            try {
+                this.setExploreMultiplier(multiplier);
+                const toggle = $('#autoExploreToggle');
+                if (toggle) toggle.checked = true;
+
+                if (typeof _win.toggleAutoExplore === 'function') {
+                    await _win.toggleAutoExplore(true);
+                } else if (typeof _win.startAutoExplore === 'function') {
+                    await _win.startAutoExplore();
+                } else if (typeof _win.handleExplore === 'function') {
+                    await _win.handleExplore();
+                } else {
+                    throw new Error('页面探索函数不可用');
+                }
+                this.lastExploreProgressAt = Date.now();
+            } catch (e) {
+                Logger.warn(`自动探索启动失败: ${e.message || e}`);
+            }
+        },
+
+        setExploreMultiplier(multiplier) {
+            const n = clampNumber(multiplier, 1, 50, 1);
+            if (typeof _win.setExploreMultiplierValue === 'function') {
+                _win.setExploreMultiplierValue(n);
+                if (typeof _win.onExploreMultiplierChange === 'function') _win.onExploreMultiplierChange(true);
+                return;
+            }
+
+            const picker = $('#exploreMultiplier');
+            if (!picker) return;
+            if (picker.tagName === 'SELECT') {
+                picker.value = String(n);
+            } else {
+                picker.dataset.value = String(n);
+                const trigger = $('#exploreMultiplierButton');
+                if (trigger) trigger.textContent = `×${n}`;
+                picker.querySelectorAll('.explore-multiplier-option').forEach(option => {
+                    const active = parseInt(option.getAttribute('data-value') || '1', 10) === n;
+                    option.classList.toggle('active', active);
+                    option.setAttribute('aria-selected', active ? 'true' : 'false');
+                });
+            }
+        },
+
+        async revive() {
+            try {
+                if (typeof _win.handleRevive === 'function') {
+                    await _win.handleRevive();
+                } else {
+                    const res = await API.revive();
+                    if (res.code !== 200) throw new Error(res.message || '复活失败');
+                }
+                this.refreshGameData();
+            } catch (e) {
+                Logger.warn(`自动复活失败: ${e.message || e}`);
+            }
+        },
+
+        refreshGameData() {
+            try {
+                if (_win.loadPlayerInfo) _win.loadPlayerInfo(true);
+                if (_win.loadGameLogs) _win.loadGameLogs();
+            } catch (e) {}
+        },
+
+        formatReason(reason) {
+            const labels = {
+                disabled: '未启用',
+                'merchant-active': '云游商人处理中',
+                'encounter-active': '遭遇或战斗处理中',
+                dead: '角色已陨落',
+                meditating: '冥想未到结束条件',
+                'spirit-full': '神识已满',
+                'meditation-duration-reached': '冥想时长已到',
+                'auto-explore-running': '自动探索运行中',
+                'explore-stalled': '探索疑似卡住',
+                'explore-disabled-no-spirit': '不可探索且疑似神识不足',
+                'explore-disabled': '当前区域不可探索',
+                'spirit-below-threshold': '神识低于阈值',
+                'spirit-ready': '神识可探索',
+                'dead-auto-revive-enabled': '已开启自动复活'
+            };
+            return labels[reason] || reason || '状态变化';
+        }
+    };
+
     // 地图开启器
     const MapOpener = {
         currentLuck: undefined,
@@ -1161,6 +1700,8 @@
             if (!isNaN(merchantDelay)) {
                 CONFIG.merchant.buyDelay = Math.max(0, Math.min(10000, merchantDelay));
             }
+            readAfkLoopConfigFromUI();
+            saveConfig();
         },
 
         /**
@@ -1737,6 +2278,7 @@
         
         UI.init();
         MerchantAutoBuyer.init();
+        AfkLoopManager.init();
         Logger.info('自动开藏宝图已加载，点击侧边栏"打开面板"使用');
     };
 

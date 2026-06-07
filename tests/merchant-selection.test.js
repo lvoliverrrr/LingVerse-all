@@ -64,6 +64,10 @@ function loadUserScript(overrides = {}) {
     return sandbox;
 }
 
+function toPlain(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+
 test('selectMerchantItem picks the highest price merchant item', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -103,4 +107,102 @@ test('resolveApiObject falls back to page eval for non-window api globals', () =
     const hooks = sandbox.LingVerseAutoMapTestHooks;
 
     assert.equal(hooks.resolveApiObject(), fakeApi);
+});
+
+test('decideAfkNextAction starts meditation when spirit is below threshold', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const decision = hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 3,
+        maxSpirit: 2758,
+        spiritCost: 1,
+        canExplore: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140
+    }, 1_000_000);
+
+    assert.deepEqual(toPlain(decision), {
+        action: 'startMeditation',
+        reason: 'spirit-below-threshold'
+    });
+});
+
+test('decideAfkNextAction stops meditation after configured duration', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const now = 10_000_000;
+
+    const decision = hooks.decideAfkNextAction({
+        isMeditating: true,
+        spirit: 1800,
+        maxSpirit: 2758,
+        meditationStartedAt: now - 140 * 60 * 1000
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140
+    }, now);
+
+    assert.deepEqual(toPlain(decision), {
+        action: 'stopMeditation',
+        reason: 'meditation-duration-reached'
+    });
+});
+
+test('decideAfkNextAction starts auto explore when spirit is usable and idle', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const decision = hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 200,
+        maxSpirit: 2758,
+        spiritCost: 1,
+        canExplore: true,
+        autoExploreRunning: false
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140
+    }, 1_000_000);
+
+    assert.deepEqual(toPlain(decision), {
+        action: 'startAutoExplore',
+        reason: 'spirit-ready'
+    });
+});
+
+test('decideAfkNextAction waits while merchant or encounter blocks the page', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 200,
+        merchantActive: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140
+    }, 1_000_000)), {
+        action: 'wait',
+        reason: 'merchant-active'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 200,
+        encounterActive: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140
+    }, 1_000_000)), {
+        action: 'wait',
+        reason: 'encounter-active'
+    });
 });

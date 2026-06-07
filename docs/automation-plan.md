@@ -99,12 +99,20 @@ v2.11.0 已完成：
 - 开启后自动婉拒陌生道友邀请、关闭邂逅卡或离开已打开邂逅会话。
 - 处理成功后进入恢复窗口，继续走“神识够就探索，不够就冥想”的主循环。
 
+v2.12.0 已完成：
+
+- 新增 `adventureMode`，默认 `pause`，遇到奇遇链仍暂停等待用户处理。
+- 新增 `adventureChoiceIndex`，当 `adventureMode: fixed` 时按界面顺序点击第 N 个奇遇选项。
+- 奇遇完成后如果页面只剩“结束奇遇/关闭/完成”按钮，脚本会关闭面板并进入恢复窗口。
+- 固定选择序号超出当前可选项数量时只提示并等待手动处理，不自动改点其他选项。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
 - 复活和丹药都消耗资源。
 - 符箓使用顺序影响收益，需要更多游戏内资料和玩家实测。
 - 当前账号未读到 `bp_pill_rebirth_*`，所以涅槃重生丹分支只做了选择策略测试，未做真实消耗验证。
+- 奇遇链涉及剧情分支和奖励选择，固定选择必须由测试者显式开启，默认不能自动点。
 
 ## 第四阶段：脚本体验打磨
 
@@ -140,6 +148,11 @@ v2.11.0 新增自动测试：
 - `classifyExploreInterruption` 在 `autoDeclinePlayerEncounter` 开启时把 `player_encounter` 归类为 `auto-decline`。
 - `decideAfkNextAction` 只有开启 `autoDeclinePlayerEncounter` 才自动处理陌生道友邂逅。
 
+v2.12.0 新增自动测试：
+
+- `classifyExploreInterruption` 在 `adventureMode: pause` 时保持暂停，在 `fixed` 时归类为 `auto-choice`。
+- `decideAfkNextAction` 只有开启固定奇遇选择时才把奇遇交给 `handleAdventure`。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -152,5 +165,5 @@ v2.11.0 新增自动测试：
 2. 把 v2.9.0 复制到 Edge 扩展测试目录，用户实测富裕模式开关但先不要开 `autoRevive`。
 3. 用真实挂机日志收集“自动探索停住”的事件原因。
 4. 把 v2.10.0 复制到 Edge 扩展测试目录，重点实测复活后是否能恢复到配置倍率。
-5. 继续补奇遇/道友邂逅/典狱等非战斗事件 handler。
-6. 为奇遇链设计“固定选择/始终暂停/自动结束”策略，默认暂停。
+5. 用真实奇遇链继续记录每个 adventureId 的选项、奖励和后续步骤。
+6. 为奇遇链升级“按 adventureId 配置固定策略”，当前 v2.12.0 只有全局固定第 N 项。

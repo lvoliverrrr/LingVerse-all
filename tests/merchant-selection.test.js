@@ -420,3 +420,60 @@ test('decideAfkNextAction handles player encounters only when auto decline is en
         reason: 'player-encounter-auto-decline'
     });
 });
+
+test('classifyExploreInterruption can opt into fixed adventure choices', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption(
+        { adventureId: 456 },
+        { adventureMode: 'pause' }
+    )), {
+        kind: 'adventure',
+        action: 'pause',
+        reason: 'adventure-chain'
+    });
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption(
+        { adventureId: 456 },
+        { adventureMode: 'fixed', adventureChoiceIndex: 2 }
+    )), {
+        kind: 'adventure',
+        action: 'auto-choice',
+        reason: 'adventure-auto-choice'
+    });
+});
+
+test('decideAfkNextAction handles adventure only when fixed adventure mode is enabled', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        adventureActive: true,
+        spirit: 200,
+        isDead: false
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        adventureMode: 'pause'
+    }, 1_000_000)), {
+        action: 'wait',
+        reason: 'adventure-active'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        adventureActive: true,
+        spirit: 200,
+        isDead: false
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        adventureMode: 'fixed',
+        adventureChoiceIndex: 2
+    }, 1_000_000)), {
+        action: 'handleAdventure',
+        reason: 'adventure-auto-choice'
+    });
+});

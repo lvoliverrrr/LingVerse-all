@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.11.0
+// @version      2.12.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -56,7 +56,9 @@
             useNirvanaPill: false,   // 涅槃重生丹消耗品，默认关闭
             nirvanaMinRarity: 4,      // 默认只吃史诗及以上五行通灵丹
             queueNirvanaPill: false,  // 已有五行通灵时是否继续排队
-            autoDeclinePlayerEncounter: false // 陌生道友邂逅默认暂停，开启后自动婉拒/离开
+            autoDeclinePlayerEncounter: false, // 陌生道友邂逅默认暂停，开启后自动婉拒/离开
+            adventureMode: 'pause',    // 奇遇链默认暂停，避免自动选择剧情分支
+            adventureChoiceIndex: 1     // fixed 模式下点击第几个奇遇选项，按界面顺序从1开始
         }
     };
 
@@ -108,7 +110,9 @@
         useNirvanaPill: false,
         nirvanaMinRarity: 4,
         queueNirvanaPill: false,
-        autoDeclinePlayerEncounter: false
+        autoDeclinePlayerEncounter: false,
+        adventureMode: 'pause',
+        adventureChoiceIndex: 1
     }, CONFIG.afkLoop || {});
 
     function saveConfig() {
@@ -181,6 +185,8 @@
         cfg.nirvanaMinRarity = clampNumber(cfg.nirvanaMinRarity, 1, 5, 4);
         cfg.queueNirvanaPill = !!cfg.queueNirvanaPill;
         cfg.autoDeclinePlayerEncounter = !!cfg.autoDeclinePlayerEncounter;
+        cfg.adventureMode = cfg.adventureMode === 'fixed' ? 'fixed' : 'pause';
+        cfg.adventureChoiceIndex = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
         return cfg;
     }
 
@@ -277,7 +283,9 @@
         const message = String(payload.message || '');
 
         if (payload.adventureId) {
-            return { kind: 'adventure', action: 'pause', reason: 'adventure-chain' };
+            return cfg.adventureMode === 'fixed'
+                ? { kind: 'adventure', action: 'auto-choice', reason: 'adventure-auto-choice' }
+                : { kind: 'adventure', action: 'pause', reason: 'adventure-chain' };
         }
         if (status === 'merchant') {
             return { kind: 'merchant', action: 'auto-handle', reason: 'merchant' };
@@ -330,6 +338,9 @@
             return { action: 'wait', reason: 'immortal-prison' };
         }
         if (snapshot.adventureActive) {
+            if (cfg.adventureMode === 'fixed') {
+                return { action: 'handleAdventure', reason: 'adventure-auto-choice' };
+            }
             return { action: 'wait', reason: 'adventure-active' };
         }
         if (snapshot.playerEncounterActive) {
@@ -637,6 +648,8 @@
         cfg.nirvanaMinRarity = clampNumber($('#am-afk-nirvana-min-rarity')?.value, 1, 5, cfg.nirvanaMinRarity || 4);
         cfg.queueNirvanaPill = $('#am-afk-queue-nirvana')?.checked ?? cfg.queueNirvanaPill;
         cfg.autoDeclinePlayerEncounter = $('#am-afk-auto-decline-player')?.checked ?? cfg.autoDeclinePlayerEncounter;
+        cfg.adventureMode = $('#am-afk-adventure-mode')?.value || cfg.adventureMode || 'pause';
+        cfg.adventureChoiceIndex = clampNumber($('#am-afk-adventure-choice')?.value, 1, 10, cfg.adventureChoiceIndex || 1);
         CONFIG.afkLoop = normalizeAfkLoopConfig(cfg);
         return CONFIG.afkLoop;
     }
@@ -907,6 +920,19 @@
                                 <input type="checkbox" id="am-afk-auto-decline-player" ${CONFIG.afkLoop.autoDeclinePlayerEncounter?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">自动婉拒陌生道友邂逅</span>
                             </label>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                                <div>
+                                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">奇遇处理</div>
+                                    <select id="am-afk-adventure-mode" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;cursor:pointer;">
+                                        <option value="pause" ${CONFIG.afkLoop.adventureMode==='pause'?'selected':''}>暂停等待</option>
+                                        <option value="fixed" ${CONFIG.afkLoop.adventureMode==='fixed'?'selected':''}>固定选择</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">选择序号</div>
+                                    <input type="number" id="am-afk-adventure-choice" value="${CONFIG.afkLoop.adventureChoiceIndex}" min="1" max="10" step="1" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                                </div>
+                            </div>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-auto-revive" ${CONFIG.afkLoop.autoRevive?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">死亡后自动灵石复活</span>
@@ -1139,6 +1165,8 @@
             const afkAutoReviveEl = $('#am-afk-auto-revive');
             const afkAutoFightEl = $('#am-afk-auto-fight');
             const afkAutoDeclinePlayerEl = $('#am-afk-auto-decline-player');
+            const afkAdventureModeEl = $('#am-afk-adventure-mode');
+            const afkAdventureChoiceEl = $('#am-afk-adventure-choice');
             const afkUseTalismansEl = $('#am-afk-use-talismans');
             const afkTalismanMaxKindsEl = $('#am-afk-talisman-max-kinds');
             const afkTalismanQtyEl = $('#am-afk-talisman-qty');
@@ -1166,6 +1194,8 @@
             if (afkAutoReviveEl) afkAutoReviveEl.checked = CONFIG.afkLoop.autoRevive;
             if (afkAutoFightEl) afkAutoFightEl.checked = CONFIG.afkLoop.autoFight;
             if (afkAutoDeclinePlayerEl) afkAutoDeclinePlayerEl.checked = CONFIG.afkLoop.autoDeclinePlayerEncounter;
+            if (afkAdventureModeEl) afkAdventureModeEl.value = CONFIG.afkLoop.adventureMode;
+            if (afkAdventureChoiceEl) afkAdventureChoiceEl.value = CONFIG.afkLoop.adventureChoiceIndex;
             if (afkUseTalismansEl) afkUseTalismansEl.checked = CONFIG.afkLoop.useTalismans;
             if (afkTalismanMaxKindsEl) afkTalismanMaxKindsEl.value = CONFIG.afkLoop.talismanMaxKinds;
             if (afkTalismanQtyEl) afkTalismanQtyEl.value = CONFIG.afkLoop.talismanQuantity;
@@ -1761,6 +1791,11 @@
                 await this.handlePlayerEncounter(cfg);
                 return;
             }
+            if (decision.action === 'handleAdventure') {
+                Logger.info(`自动挂机处理奇遇链：${this.formatReason(decision.reason)}`);
+                await this.handleAdventure(cfg);
+                return;
+            }
             if (decision.action === 'revive') {
                 Logger.warn('自动挂机尝试灵石复活');
                 await this.revive();
@@ -1986,6 +2021,63 @@
             }
         },
 
+        async handleAdventure(cfg) {
+            if (cfg.adventureMode !== 'fixed') return;
+            try {
+                const overlay = $('#adventureOverlay');
+                if (!overlay || overlay.classList.contains('hidden')) {
+                    Logger.warn('未检测到可处理的奇遇面板，继续等待');
+                    return;
+                }
+
+                const closeBtn = this.findAdventureCloseButton(overlay);
+                const choiceButtons = this.findAdventureChoiceButtons(overlay);
+
+                if (choiceButtons.length > 0) {
+                    const choiceNumber = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
+                    const choiceBtn = choiceButtons[choiceNumber - 1];
+                    if (!choiceBtn || choiceBtn.disabled) {
+                        Logger.warn(`奇遇固定选择第${choiceNumber}项，但当前只有${choiceButtons.length}个可选项，等待手动处理`);
+                        return;
+                    }
+
+                    choiceBtn.click();
+                    Logger.info(`已自动选择奇遇第${choiceNumber}项`);
+                } else if (closeBtn && !closeBtn.disabled) {
+                    closeBtn.click();
+                    Logger.info('已自动结束/关闭奇遇');
+                } else {
+                    Logger.warn('奇遇面板中未找到可点击选项，等待手动处理');
+                    return;
+                }
+
+                this.postInteractionResumeUntil = Date.now() + 60000;
+                this.lastDecisionKey = '';
+                this.refreshGameData();
+                setTimeout(() => this.tick(true), 1200);
+            } catch (e) {
+                Logger.warn(`自动处理奇遇失败: ${e.message || e}`);
+            }
+        },
+
+        findAdventureChoiceButtons(root) {
+            const explicitChoices = Array.from(root.querySelectorAll('.adventure-choice-btn'));
+            const choices = explicitChoices.length > 0
+                ? explicitChoices
+                : Array.from(root.querySelectorAll('#adventureChoices button')).filter(button => !button.classList.contains('adventure-close-btn'));
+            return choices.filter(button => !button.classList.contains('hidden'));
+        },
+
+        findAdventureCloseButton(root) {
+            const explicit = root.querySelector('.adventure-close-btn');
+            if (explicit) return explicit;
+            const labels = ['结束奇遇', '关闭', '完成'];
+            return Array.from(root.querySelectorAll('button')).find(button => {
+                const text = String(button.textContent || '').trim();
+                return labels.some(label => text.indexOf(label) >= 0);
+            }) || null;
+        },
+
         async handlePlayerEncounter(cfg) {
             if (!cfg.autoDeclinePlayerEncounter) return;
             try {
@@ -2063,6 +2155,7 @@
                 'merchant-active': '云游商人处理中',
                 'encounter-active': '遭遇或战斗处理中',
                 'adventure-active': '奇遇链等待处理',
+                'adventure-auto-choice': '奇遇链固定选择',
                 'player-encounter-active': '陌生道友邂逅等待处理',
                 'player-encounter-auto-decline': '自动婉拒陌生道友',
                 'immortal-prison': '混天典狱状态，挂机暂停',

@@ -47,6 +47,8 @@
   - `showEncounterTalismanDialog()`
   - `useSelectedEncounterTalismans()`
   - `buyMerchantItem(index)`
+  - `showAdventureStep(step)`
+  - `handleAdventureChoice(adventureId, choiceIndex, choiceText, currentStep)`
 
 只读冥想状态 API：
 
@@ -113,6 +115,16 @@
 - `handleRevive()` 调用 `POST /api/game/revive`。
 - 复活会花灵石，脚本默认关闭自动复活。
 
+奇遇链：
+
+- 自动探索返回 `data.adventureId` 时，页面调用 `showAdventureStep(data)` 并停止继续探索。
+- 奇遇面板为 `#adventureOverlay`。
+- 奇遇文本在 `#adventureStepInfo`。
+- 选项容器为 `#adventureChoices`。
+- 可点选项按钮为 `.adventure-choice-btn`，按钮点击后调用 `handleAdventureChoice(step.adventureId, index, choice, currentStep)`。
+- 奇遇结束按钮为 `.adventure-close-btn`，常见文本为“结束奇遇”。
+- 当前脚本不解析奇遇含义，只提供“默认暂停”和“固定点击第 N 个选项”两种策略。
+
 ## 当前脚本实现
 
 `lingverse-explore-helper.user.js` v2.8.0 新增：
@@ -145,6 +157,14 @@
 - 邂逅卡优先调用 `PvpModule.dismissEncounter()`。
 - 处理成功后进入 60 秒恢复窗口，让挂机循环按神识状态继续探索或回冥想。
 
+`lingverse-explore-helper.user.js` v2.12.0 新增：
+
+- `adventureMode`：奇遇链处理模式，默认 `pause`。
+- `adventureChoiceIndex`：`fixed` 模式下点击界面第几个奇遇选项，从 1 开始。
+- `decideAfkNextAction` 只有在 `adventureMode: fixed` 时才返回 `handleAdventure`。
+- `AfkLoopManager.handleAdventure()` 优先点击 `.adventure-choice-btn`，没有选项但有 `.adventure-close-btn` 时关闭已完成奇遇。
+- 固定序号超出当前选项数量时等待手动处理，避免自动改点其他分支。
+
 默认配置：
 
 - `enabled: false`
@@ -161,6 +181,8 @@
 - `talismanQuantity: 1`
 - `nirvanaMinRarity: 4`
 - `queueNirvanaPill: false`
+- `adventureMode: "pause"`
+- `adventureChoiceIndex: 1`
 
 测试覆盖：
 
@@ -175,7 +197,7 @@
   - `merchant` -> 自动商人处理器。
   - `encounter` -> 妖兽遭遇 handler 或等待。
   - `player_encounter` -> 默认暂停；开启 `autoDeclinePlayerEncounter` 后自动婉拒/离开。
-  - `adventureId` -> 暂停，默认等待用户处理奇遇链。
+  - `adventureId` -> 默认暂停；开启 `adventureMode: fixed` 后固定选择第 N 项。
   - `immortal_prison/prison_material` -> hard-stop，暂停挂机。
   - `error` 且包含“神识不足” -> 回冥想。
 - 复活后恢复：
@@ -189,4 +211,4 @@
 - 5 类战斗符箓的排序、每类用量、缺货跳过策略。
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的完整状态机。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
-- 奇遇链是否应提供“固定选择第 N 个选项”的配置；该事件含叙事和多分支奖励，不应默认自动操作。
+- 继续收集真实奇遇链样本，后续做 `adventureId -> choiceIndex` 的 per-event 策略表；当前全局固定第 N 项只适合测试者已知自己想怎么选的场景。

@@ -354,6 +354,14 @@
 - `formatAfkReason` / `formatAfkAction` 统一面板、日志和测试里的 AFK 文案，最近一次 `handleEncounter + encounter-auto-guardian-enabled` 会显示为“处理遭遇 · 已开启遭遇前自动护道”。
 - 自动测试覆盖未启动、运行中倒计时和检查中状态，方便后续改面板时避免显示回退。
 
+`lingverse-explore-helper.user.js` v2.33.0 新增：
+
+- `buildAfkIssueReplay(source)` 支持导入字符串 JSON、脱敏摘要或完整快照，输出 `lingverse-afk-issue-replay/v1`。
+- 回放视图包含页面、决策、神识、阻塞、风险开关、护道/用符/用丹尝试摘要和奇遇策略可导入行。
+- 面板新增“摘要回放”输入区，方便把其他测试者发来的摘要直接还原为可读问题视图。
+- 回放仅解析本地文本，不调用游戏 API，不触发购买、探索、战斗、护道、复活、用符或用丹。
+- 只读 Edge 证据（2026-06-08）：LingVerse 标签 `292345702` 仍为旧扩展实例，存在护道函数和面板，但缺少最新面板状态字段；这类版本差异也能通过回放导入摘要来定位。
+
 默认配置：
 
 - `enabled: false`

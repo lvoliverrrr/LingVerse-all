@@ -1564,3 +1564,75 @@ test('buildAfkPanelStatus summarizes current decision and next check timing', ()
         nextCheckInSeconds: 0
     });
 });
+
+test('buildAfkIssueReplay turns copied summaries into a replay view', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkIssueReplay, 'function');
+
+    const replay = hooks.buildAfkIssueReplay(JSON.stringify({
+        schema: 'lingverse-afk-debug-summary/v1',
+        scriptVersion: '2.32.0',
+        capturedAt: '2026-06-08T00:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decision: { action: 'handleEncounter', reason: 'encounter-auto-guardian-enabled' },
+        player: { spirit: 3, maxSpirit: 2758, spiritCost: 4, canExplore: true },
+        blockers: {
+            merchantActive: false,
+            encounterActive: true,
+            combatActive: true,
+            playerEncounterActive: false,
+            adventureActive: true,
+            adventureId: 456,
+            immortalPrisonActive: false
+        },
+        automation: {
+            nirvanaPill: { reason: 'disabled' },
+            talismans: { reason: 'disabled' },
+            guardian: { reason: 'hire-failed', failureMessage: '余额不足' }
+        },
+        adventure: {
+            id: 456,
+            strategyHints: [
+                { choiceIndex: 1, choiceText: '离开', mapLine: '456=1' },
+                { choiceIndex: 2, choiceText: '深入', mapLine: '456=2' }
+            ]
+        },
+        config: {
+            risks: {
+                autoFight: false,
+                autoHireGuardian: true,
+                autoRevive: false,
+                useTalismans: false,
+                useNirvanaPill: false,
+                queueNirvanaPill: false,
+                autoDeclinePlayerEncounter: false
+            }
+        }
+    }));
+
+    assert.deepEqual(toPlain(replay), {
+        schema: 'lingverse-afk-issue-replay/v1',
+        sourceSchema: 'lingverse-afk-debug-summary/v1',
+        scriptVersion: '2.32.0',
+        capturedAt: '2026-06-08T00:00:00.000Z',
+        pageText: '灵界 LingVerse - 修仙世界',
+        headline: '处理遭遇 · 已开启遭遇前自动护道',
+        decisionText: '处理遭遇 · 已开启遭遇前自动护道',
+        spiritText: '3/2758',
+        blockerText: '遭遇/战斗/奇遇#456',
+        riskText: '迎战关 · 护道开 · 复活关 · 用符关 · 用丹关 · 丹药排队关 · 道友婉拒关',
+        automationText: '护道: hire-failed · 余额不足 | 用符: disabled | 用丹: disabled',
+        strategyImportText: '456=1\n456=2',
+        replayLines: [
+            '页面: 灵界 LingVerse - 修仙世界',
+            '决策: 处理遭遇 · 已开启遭遇前自动护道',
+            '神识: 3/2758',
+            '阻塞: 遭遇/战斗/奇遇#456',
+            '风险: 迎战关 · 护道开 · 复活关 · 用符关 · 用丹关 · 丹药排队关 · 道友婉拒关',
+            '自动化: 护道: hire-failed · 余额不足 | 用符: disabled | 用丹: disabled',
+            '奇遇策略: 456=1 / 456=2'
+        ]
+    });
+});

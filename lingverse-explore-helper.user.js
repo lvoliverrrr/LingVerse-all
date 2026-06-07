@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.32.0
+// @version      2.33.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.32.0';
+    const SCRIPT_VERSION = '2.33.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -1297,6 +1297,120 @@
         };
     }
 
+    function parseAfkIssueReplaySource(source) {
+        if (typeof source === 'string') {
+            const text = source.trim();
+            if (!text) throw new Error('摘要为空');
+            return JSON.parse(text);
+        }
+        if (source && typeof source === 'object') return source;
+        throw new Error('摘要格式无效');
+    }
+
+    function buildReplayBlockerLabels(summary) {
+        const player = summary.player && typeof summary.player === 'object' ? summary.player : {};
+        const blockers = summary.blockers && typeof summary.blockers === 'object' ? summary.blockers : {};
+        const labels = [];
+        if (player.isDead) labels.push('死亡');
+        if (blockers.immortalPrisonActive) labels.push('混天典狱');
+        if (blockers.merchantActive) labels.push('云游商人');
+        if (blockers.encounterActive) labels.push('遭遇');
+        if (blockers.combatActive) labels.push('战斗');
+        if (blockers.playerEncounterActive) labels.push('陌生道友');
+        if (blockers.adventureActive) {
+            labels.push(blockers.adventureId ? `奇遇#${blockers.adventureId}` : '奇遇');
+        }
+        return labels.length ? labels : ['无显式阻塞'];
+    }
+
+    function buildReplayRiskText(summary) {
+        const config = summary.config && typeof summary.config === 'object' ? summary.config : {};
+        const risks = config.risks && typeof config.risks === 'object' ? config.risks : config;
+        return [
+            risks.autoFight ? '迎战开' : '迎战关',
+            risks.autoHireGuardian ? '护道开' : '护道关',
+            risks.autoRevive ? '复活开' : '复活关',
+            risks.useTalismans ? '用符开' : '用符关',
+            risks.useNirvanaPill ? '用丹开' : '用丹关',
+            risks.queueNirvanaPill ? '丹药排队开' : '丹药排队关',
+            risks.autoDeclinePlayerEncounter ? '道友婉拒开' : '道友婉拒关'
+        ].join(' · ');
+    }
+
+    function formatReplayAttempt(label, attempt) {
+        const source = attempt && typeof attempt === 'object' ? attempt : {};
+        const reason = String(source.reason || 'unknown');
+        const failure = sanitizeDebugText(source.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        return `${label}: ${reason}${failure ? ` · ${failure}` : ''}`;
+    }
+
+    function buildReplayStrategyImportText(summary) {
+        const adventure = summary.adventure && typeof summary.adventure === 'object' ? summary.adventure : {};
+        const hints = Array.isArray(adventure.strategyHints) ? adventure.strategyHints : [];
+        const lines = [];
+        const seen = new Set();
+        hints.forEach(hint => {
+            const line = sanitizeDebugText(hint && hint.mapLine, 80).trim();
+            if (!line || seen.has(line)) return;
+            seen.add(line);
+            lines.push(line);
+        });
+        return lines.join('\n');
+    }
+
+    function buildAfkIssueReplay(source) {
+        const parsed = parseAfkIssueReplaySource(source);
+        const summary = parsed && parsed.schema === 'lingverse-afk-debug-summary/v1'
+            ? parsed
+            : buildAfkDebugSummary(parsed);
+        const page = summary.page && typeof summary.page === 'object' ? summary.page : {};
+        const player = summary.player && typeof summary.player === 'object' ? summary.player : {};
+        const decision = summary.decision && typeof summary.decision === 'object' ? summary.decision : {};
+        const automation = summary.automation && typeof summary.automation === 'object' ? summary.automation : {};
+        const pageText = sanitizeDebugText(page.title || page.url || '未知页面', 100);
+        const decisionText = `${formatAfkAction(decision.action)} · ${formatAfkReason(decision.reason)}`;
+        const spirit = numberOrNull(player.spirit);
+        const maxSpirit = numberOrNull(player.maxSpirit);
+        const spiritText = spirit === null && maxSpirit === null
+            ? '未知'
+            : `${spirit === null ? '?' : spirit}/${maxSpirit === null ? '?' : maxSpirit}`;
+        const blockerText = buildReplayBlockerLabels(summary).join('/');
+        const riskText = buildReplayRiskText(summary);
+        const automationText = [
+            formatReplayAttempt('护道', automation.guardian),
+            formatReplayAttempt('用符', automation.talismans),
+            formatReplayAttempt('用丹', automation.nirvanaPill)
+        ].join(' | ');
+        const strategyImportText = buildReplayStrategyImportText(summary);
+        const replayLines = [
+            `页面: ${pageText}`,
+            `决策: ${decisionText}`,
+            `神识: ${spiritText}`,
+            `阻塞: ${blockerText}`,
+            `风险: ${riskText}`,
+            `自动化: ${automationText}`
+        ];
+        if (strategyImportText) {
+            replayLines.push(`奇遇策略: ${strategyImportText.split('\n').join(' / ')}`);
+        }
+
+        return {
+            schema: 'lingverse-afk-issue-replay/v1',
+            sourceSchema: String(summary.sourceSchema || summary.schema || ''),
+            scriptVersion: String(summary.scriptVersion || SCRIPT_VERSION),
+            capturedAt: String(summary.capturedAt || ''),
+            pageText,
+            headline: decisionText,
+            decisionText,
+            spiritText,
+            blockerText,
+            riskText,
+            automationText,
+            strategyImportText,
+            replayLines
+        };
+    }
+
     function buildAfkDebugSnapshot(state, config, decision, context) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const snapshot = state || {};
@@ -1421,6 +1535,7 @@
         resolveAdventureChoiceIndex,
         buildAfkDebugSnapshot,
         buildAfkDebugSummary,
+        buildAfkIssueReplay,
         applyAfkPreset
     });
 
@@ -2026,6 +2141,17 @@
                             <button id="am-afk-stop" style="flex:1;padding:8px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">停止挂机</button>
                             <button id="am-afk-copy-debug" style="flex:1;padding:8px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制摘要</button>
                         </div>
+                        <div style="margin-top:8px;padding-top:8px;border-top:1px solid ${border};">
+                            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};font-weight:bold;">摘要回放</div>
+                                <div style="display:flex;gap:6px;">
+                                    <button id="am-afk-replay-run" style="padding:5px 8px;background:#334155;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">回放</button>
+                                    <button id="am-afk-replay-clear" style="padding:5px 8px;background:transparent;color:${isDark?'#94a3b8':'#64748b'};border:1px solid ${border};border-radius:4px;cursor:pointer;font-size:11px;">清空</button>
+                                </div>
+                            </div>
+                            <textarea id="am-afk-replay-input" rows="3" placeholder="JSON" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:11px;resize:vertical;"></textarea>
+                            <pre id="am-afk-replay-output" style="margin:6px 0 0;white-space:pre-wrap;word-break:break-word;max-height:120px;overflow:auto;padding:7px;background:${isDark?'rgba(15,23,42,0.35)':'rgba(241,245,249,0.9)'};border:1px solid ${border};border-radius:4px;color:${text};font-size:11px;line-height:1.45;">未导入</pre>
+                        </div>
                     </div>
 
                     <button id="am-save-config" style="width:100%;margin-top:10px;padding:8px;background:#4dabf7;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">💾 保存配置</button>
@@ -2066,6 +2192,8 @@
             $('#am-afk-copy-debug')?.addEventListener('click', () => AfkLoopManager.copyDebugSnapshot());
             $('#am-afk-preset-steady')?.addEventListener('click', () => AfkLoopManager.applyPreset('steady'));
             $('#am-afk-preset-rich')?.addEventListener('click', () => AfkLoopManager.applyPreset('rich'));
+            $('#am-afk-replay-run')?.addEventListener('click', () => this.renderAfkIssueReplay());
+            $('#am-afk-replay-clear')?.addEventListener('click', () => this.clearAfkIssueReplay());
 
 
 
@@ -2286,6 +2414,31 @@
             if (nextCheckEl) nextCheckEl.textContent = status.nextCheckText;
             const enabledEl = $('#am-afk-enabled');
             if (enabledEl) enabledEl.checked = CONFIG.afkLoop.enabled;
+        },
+
+        renderAfkIssueReplay() {
+            const inputEl = $('#am-afk-replay-input');
+            const outputEl = $('#am-afk-replay-output');
+            if (!inputEl || !outputEl) return;
+            try {
+                const replay = buildAfkIssueReplay(inputEl.value);
+                const lines = replay.replayLines.slice();
+                if (replay.strategyImportText) {
+                    lines.push('', '策略表:', replay.strategyImportText);
+                }
+                outputEl.textContent = lines.join('\n');
+                Logger.success('挂机摘要回放已生成');
+            } catch (e) {
+                outputEl.textContent = `摘要解析失败: ${e.message || e}`;
+                Logger.warn(`挂机摘要回放失败: ${e.message || e}`);
+            }
+        },
+
+        clearAfkIssueReplay() {
+            const inputEl = $('#am-afk-replay-input');
+            const outputEl = $('#am-afk-replay-output');
+            if (inputEl) inputEl.value = '';
+            if (outputEl) outputEl.textContent = '未导入';
         },
 
         /**

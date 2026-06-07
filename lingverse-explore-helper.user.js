@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.33.0
+// @version      2.34.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.33.0';
+    const SCRIPT_VERSION = '2.34.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -368,6 +368,87 @@
             lastActionText,
             nextCheckText: seconds <= 0 ? '即将检查' : `${seconds}秒后`,
             nextCheckInSeconds: seconds
+        };
+    }
+
+    function formatGuardianMode(mode) {
+        return mode === 'alone' ? '独立作战' : '协同作战';
+    }
+
+    function formatRarityThreshold(rarity) {
+        const labels = {
+            1: '任意',
+            2: '优良+',
+            3: '稀有+',
+            4: '史诗+',
+            5: '传说+'
+        };
+        return labels[rarity] || `${rarity}+`;
+    }
+
+    function buildAfkRiskStatus(config, guardianConfig) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const guardian = normalizeGuardianConfig(guardianConfig || {});
+        const adventureAuto = cfg.adventureMode === 'fixed' || cfg.adventureMode === 'strategy';
+        const riskFlags = [
+            cfg.autoFight,
+            cfg.autoHireGuardian,
+            cfg.autoRevive,
+            cfg.useTalismans,
+            cfg.useNirvanaPill,
+            cfg.autoDeclinePlayerEncounter,
+            adventureAuto
+        ];
+        const enabledRiskCount = riskFlags.filter(Boolean).length;
+        let profileText = '自定义挂机模式';
+        if (cfg.exploreMultiplier >= 50 && (cfg.autoFight || cfg.autoRevive || cfg.useTalismans || cfg.useNirvanaPill)) {
+            profileText = '富裕战斗模式';
+        } else if (cfg.exploreMultiplier <= 1 && cfg.autoHireGuardian && !cfg.autoFight && !cfg.autoRevive && !cfg.useTalismans && !cfg.useNirvanaPill) {
+            profileText = '稳妥护道模式';
+        } else if (enabledRiskCount === 0) {
+            profileText = '保守等待模式';
+        }
+
+        const warnings = [];
+        if (cfg.autoHireGuardian && !guardian.enabled) {
+            warnings.push('自动护道已开启，但游戏护道设置关闭');
+        }
+        if (cfg.useNirvanaPill && cfg.nirvanaMinRarity < 4) {
+            warnings.push('涅槃重生丹最低品质低于史诗');
+        }
+        if (cfg.adventureMode === 'strategy' && Object.keys(cfg.adventureChoiceMap || {}).length === 0) {
+            warnings.push('奇遇策略模式已开启，但策略表为空');
+        }
+
+        const guardianDetails = [];
+        if (cfg.autoHireGuardian) {
+            guardianDetails.push(guardian.enabled ? '游戏护道开' : '游戏护道关');
+            guardianDetails.push(formatGuardianMode(guardian.mode));
+            guardianDetails.push(`最高${guardian.maxFee || '不限'}`);
+            if (guardian.minAtk > 0) guardianDetails.push(`攻≥${guardian.minAtk}`);
+            guardianDetails.push(guardian.priority.join('>'));
+        }
+
+        const talismanOrder = parseTalismanFamilyOrder(cfg.talismanFamilyOrder);
+        const itemTexts = [
+            `自动迎战: ${cfg.autoFight ? `开启 · ${cfg.exploreMultiplier}倍探索` : '关闭'}`,
+            `自动护道: ${cfg.autoHireGuardian ? `开启 · ${guardianDetails.join(' · ')}` : '关闭'}`,
+            `自动复活: ${cfg.autoRevive ? '开启' : '关闭'}`,
+            `战斗用符: ${cfg.useTalismans ? `开启 · ${cfg.talismanMaxKinds}种×${cfg.talismanQuantity} · ${talismanOrder.length ? talismanOrder.join('>') : '按品质'}` : '关闭'}`,
+            `涅槃重生丹: ${cfg.useNirvanaPill ? `开启 · ${formatRarityThreshold(cfg.nirvanaMinRarity)} · ${cfg.queueNirvanaPill ? '允许排队' : '不排队'}` : '关闭'}`,
+            `陌生道友婉拒: ${cfg.autoDeclinePlayerEncounter ? '开启' : '关闭'}`,
+            `奇遇自动选择: ${adventureAuto ? `开启 · ${cfg.adventureMode}` : '关闭'}`
+        ];
+
+        return {
+            schema: 'lingverse-afk-risk-status/v1',
+            profileText,
+            enabledRiskCount,
+            totalRiskCount: riskFlags.length,
+            warningCount: warnings.length,
+            summaryText: `${profileText} · 风险开关 ${enabledRiskCount}/${riskFlags.length} · 警告 ${warnings.length}`,
+            itemTexts,
+            warnings
         };
     }
 
@@ -1270,7 +1351,8 @@
                     useNirvanaPill: !!config.useNirvanaPill,
                     queueNirvanaPill: !!config.queueNirvanaPill,
                     autoDeclinePlayerEncounter: !!config.autoDeclinePlayerEncounter
-                }
+                },
+                riskStatus: buildAfkRiskStatus(config, config.guardian)
             },
             history: {
                 decisionTail: tailRecords(history.decisionTail, DEBUG_SUMMARY_HISTORY_LIMIT).map(record => ({
@@ -1519,6 +1601,7 @@
         formatAfkReason,
         formatAfkAction,
         buildAfkPanelStatus,
+        buildAfkRiskStatus,
         selectCombatTalismans,
         buildEncounterKey,
         shouldUseCombatTalismansForEncounter,
@@ -1874,6 +1957,7 @@
             const bg = isDark ? '#252b3a' : '#fafbfc';
             const text = isDark ? '#e2e8f0' : '#1e293b';
             const border = isDark ? 'rgba(148,163,184,0.12)' : 'rgba(148,163,184,0.2)';
+            const initialAfkRisk = buildAfkRiskStatus(CONFIG.afkLoop, getCurrentGuardianConfig());
 
             const panel = document.createElement('div');
             panel.id = 'am-panel';
@@ -2018,6 +2102,10 @@
                             <span id="am-afk-last-action" style="font-size:11px;color:${text};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">暂无</span>
                             <span style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};">下次</span>
                             <span id="am-afk-next-check" style="font-size:11px;color:${text};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${CONFIG.afkLoop.enabled?'等待首次检查':'未启动'}</span>
+                        </div>
+                        <div id="am-afk-risk-status" style="margin-bottom:8px;padding:7px;background:${isDark?'rgba(15,23,42,0.35)':'rgba(241,245,249,0.9)'};border:1px solid ${border};border-radius:6px;">
+                            <div id="am-afk-risk-summary" style="font-size:11px;color:${initialAfkRisk.warningCount?'#f59e0b':text};font-weight:bold;margin-bottom:4px;">${escapeHtmlText(initialAfkRisk.summaryText)}</div>
+                            <pre id="am-afk-risk-lines" style="margin:0;white-space:pre-wrap;word-break:break-word;color:${text};font-size:11px;line-height:1.45;">${escapeHtmlText(initialAfkRisk.itemTexts.concat(initialAfkRisk.warnings.map(item => `! ${item}`)).join('\n'))}</pre>
                         </div>
                         <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
                             <input type="checkbox" id="am-afk-enabled" ${CONFIG.afkLoop.enabled?'checked':''} style="cursor:pointer;">
@@ -2414,6 +2502,21 @@
             if (nextCheckEl) nextCheckEl.textContent = status.nextCheckText;
             const enabledEl = $('#am-afk-enabled');
             if (enabledEl) enabledEl.checked = CONFIG.afkLoop.enabled;
+            this.updateAfkRiskStatus();
+        },
+
+        updateAfkRiskStatus() {
+            const summaryEl = $('#am-afk-risk-summary');
+            const linesEl = $('#am-afk-risk-lines');
+            if (!summaryEl && !linesEl) return;
+            const status = buildAfkRiskStatus(CONFIG.afkLoop, getCurrentGuardianConfig());
+            if (summaryEl) {
+                summaryEl.textContent = status.summaryText;
+                summaryEl.style.color = status.warningCount ? '#f59e0b' : '';
+            }
+            if (linesEl) {
+                linesEl.textContent = status.itemTexts.concat(status.warnings.map(item => `! ${item}`)).join('\n');
+            }
         },
 
         renderAfkIssueReplay() {
@@ -3030,6 +3133,7 @@
             if (nextCheckEl) nextCheckEl.textContent = status.nextCheckText;
             const enabledEl = $('#am-afk-enabled');
             if (enabledEl) enabledEl.checked = CONFIG.afkLoop.enabled;
+            if (UI && typeof UI.updateAfkRiskStatus === 'function') UI.updateAfkRiskStatus();
         },
 
         async buildSnapshot(now, cfg) {

@@ -1324,6 +1324,14 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
                 priority: ['normal', 'incarnation', 'body'],
                 threatLevel: 'warn'
             }
+        },
+        guardianConfig: {
+            enabled: true,
+            maxFee: 5000,
+            minAtk: 888,
+            mode: 'alone',
+            priority: 'normal,incarnation,body',
+            threatLevel: 'warn'
         }
     });
 
@@ -1421,6 +1429,24 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
         useNirvanaPill: true,
         queueNirvanaPill: true,
         autoDeclinePlayerEncounter: true
+    });
+    assert.deepEqual(summary.config.riskStatus, {
+        schema: 'lingverse-afk-risk-status/v1',
+        profileText: '富裕战斗模式',
+        enabledRiskCount: 7,
+        totalRiskCount: 7,
+        warningCount: 0,
+        summaryText: '富裕战斗模式 · 风险开关 7/7 · 警告 0',
+        itemTexts: [
+            '自动迎战: 开启 · 50倍探索',
+            '自动护道: 开启 · 游戏护道开 · 独立作战 · 最高5000 · 攻≥888 · normal>incarnation>body',
+            '自动复活: 开启',
+            '战斗用符: 开启 · 5种×1 · 按品质',
+            '涅槃重生丹: 开启 · 史诗+ · 允许排队',
+            '陌生道友婉拒: 开启',
+            '奇遇自动选择: 开启 · strategy'
+        ],
+        warnings: []
     });
     assert.equal(summary.history.decisionTail.length, 8);
     assert.equal(summary.history.decisionTail[0].spirit, 4);
@@ -1633,6 +1659,91 @@ test('buildAfkIssueReplay turns copied summaries into a replay view', () => {
             '风险: 迎战关 · 护道开 · 复活关 · 用符关 · 用丹关 · 丹药排队关 · 道友婉拒关',
             '自动化: 护道: hire-failed · 余额不足 | 用符: disabled | 用丹: disabled',
             '奇遇策略: 456=1 / 456=2'
+        ]
+    });
+});
+
+test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkRiskStatus, 'function');
+
+    assert.deepEqual(toPlain(hooks.buildAfkRiskStatus({
+        exploreMultiplier: 1,
+        autoFight: false,
+        autoHireGuardian: true,
+        autoRevive: false,
+        useTalismans: false,
+        talismanMaxKinds: 5,
+        talismanQuantity: 1,
+        talismanFamilyOrder: '',
+        useNirvanaPill: false,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: false,
+        autoDeclinePlayerEncounter: false,
+        adventureMode: 'pause',
+        adventureChoiceMap: {}
+    }, {
+        enabled: true,
+        mode: 'alone',
+        maxFee: 51,
+        minAtk: 0,
+        priority: ['normal', 'incarnation', 'body']
+    })), {
+        schema: 'lingverse-afk-risk-status/v1',
+        profileText: '稳妥护道模式',
+        enabledRiskCount: 1,
+        totalRiskCount: 7,
+        warningCount: 0,
+        summaryText: '稳妥护道模式 · 风险开关 1/7 · 警告 0',
+        itemTexts: [
+            '自动迎战: 关闭',
+            '自动护道: 开启 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
+            '自动复活: 关闭',
+            '战斗用符: 关闭',
+            '涅槃重生丹: 关闭',
+            '陌生道友婉拒: 关闭',
+            '奇遇自动选择: 关闭'
+        ],
+        warnings: []
+    });
+
+    assert.deepEqual(toPlain(hooks.buildAfkRiskStatus({
+        exploreMultiplier: 50,
+        autoFight: true,
+        autoHireGuardian: false,
+        autoRevive: true,
+        useTalismans: true,
+        talismanMaxKinds: 5,
+        talismanQuantity: 1,
+        talismanFamilyOrder: 'ghost,fire',
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: false,
+        autoDeclinePlayerEncounter: true,
+        adventureMode: 'strategy',
+        adventureChoiceMap: {}
+    }, {
+        enabled: false
+    })), {
+        schema: 'lingverse-afk-risk-status/v1',
+        profileText: '富裕战斗模式',
+        enabledRiskCount: 6,
+        totalRiskCount: 7,
+        warningCount: 1,
+        summaryText: '富裕战斗模式 · 风险开关 6/7 · 警告 1',
+        itemTexts: [
+            '自动迎战: 开启 · 50倍探索',
+            '自动护道: 关闭',
+            '自动复活: 开启',
+            '战斗用符: 开启 · 5种×1 · ghost>fire',
+            '涅槃重生丹: 开启 · 史诗+ · 不排队',
+            '陌生道友婉拒: 开启',
+            '奇遇自动选择: 开启 · strategy'
+        ],
+        warnings: [
+            '奇遇策略模式已开启，但策略表为空'
         ]
     });
 });

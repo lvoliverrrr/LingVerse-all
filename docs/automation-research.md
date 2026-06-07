@@ -362,6 +362,14 @@
 - 回放仅解析本地文本，不调用游戏 API，不触发购买、探索、战斗、护道、复活、用符或用丹。
 - 只读 Edge 证据（2026-06-08）：LingVerse 标签 `292345702` 仍为旧扩展实例，存在护道函数和面板，但缺少最新面板状态字段；这类版本差异也能通过回放导入摘要来定位。
 
+`lingverse-explore-helper.user.js` v2.34.0 新增：
+
+- `buildAfkRiskStatus(config, guardianConfig)` 生成 `lingverse-afk-risk-status/v1`，统一输出模式、风险开关计数、逐项状态和警告。
+- 风险项固定为 7 个：自动迎战、自动护道、自动复活、战斗用符、涅槃重生丹、陌生道友婉拒、奇遇自动选择。
+- 面板新增风险状态块，读取当前游戏护道设置后显示护道开关、战斗模式、最高费用、最低攻击和优先级。
+- 脱敏摘要 `config.riskStatus` 会随摘要一起输出，测试者回传后可直接看出配置是否处在稳妥护道、富裕战斗或自定义模式。
+- 只读 Edge 证据（2026-06-08）：`getAutoHireConfig()` 返回 `{ enabled: true, mode: "alone", maxFee: 51, priorityKey: "normal,incarnation,body" }`；页面有新版本提示，未执行资源动作。
+
 默认配置：
 
 - `enabled: false`

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.14.0
+// @version      2.15.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,9 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.14.0';
+    const SCRIPT_VERSION = '2.15.0';
+    const DEBUG_DECISION_HISTORY_LIMIT = 20;
+    const DEBUG_LOG_HISTORY_LIMIT = 30;
 
     // 配置对象
     const CONFIG = {
@@ -524,17 +526,49 @@
         return { title, url };
     }
 
+    function tailRecords(records, limit) {
+        return (Array.isArray(records) ? records : []).slice(-limit);
+    }
+
+    function normalizeDecisionHistory(records) {
+        return tailRecords(records, DEBUG_DECISION_HISTORY_LIMIT).map(record => ({
+            at: String(record && record.at || ''),
+            action: String(record && record.action || ''),
+            reason: String(record && record.reason || ''),
+            label: String(record && record.label || ''),
+            spirit: numberOrNull(record && record.spirit),
+            maxSpirit: numberOrNull(record && record.maxSpirit),
+            isMeditating: !!(record && record.isMeditating),
+            autoExploreRunning: !!(record && record.autoExploreRunning),
+            merchantActive: !!(record && record.merchantActive),
+            encounterActive: !!(record && record.encounterActive),
+            playerEncounterActive: !!(record && record.playerEncounterActive),
+            adventureActive: !!(record && record.adventureActive),
+            adventureId: record && record.adventureId ? record.adventureId : null
+        }));
+    }
+
+    function normalizeRecentLogs(records) {
+        return tailRecords(records, DEBUG_LOG_HISTORY_LIMIT).map(record => ({
+            at: String(record && record.at || ''),
+            time: String(record && record.time || ''),
+            type: String(record && record.type || 'info'),
+            message: String(record && record.message || '')
+        }));
+    }
+
     function buildAfkDebugSnapshot(state, config, decision, context) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const snapshot = state || {};
         const currentDecision = decision || decideAfkNextAction(snapshot, cfg, context && context.now);
         const adventureId = snapshot.adventureId || null;
+        const debugContext = context || {};
 
         return {
             schema: 'lingverse-afk-debug-snapshot/v1',
             scriptVersion: SCRIPT_VERSION,
-            capturedAt: (context && context.capturedAt) || new Date().toISOString(),
-            page: resolvePageInfo(context || {}),
+            capturedAt: debugContext.capturedAt || new Date().toISOString(),
+            page: resolvePageInfo(debugContext),
             decision: {
                 action: currentDecision.action || '',
                 reason: currentDecision.reason || ''
@@ -594,6 +628,10 @@
                 adventureMode: cfg.adventureMode,
                 adventureChoiceIndex: cfg.adventureChoiceIndex,
                 adventureChoiceMap: normalizeAdventureChoiceMap(cfg.adventureChoiceMap)
+            },
+            history: {
+                decisionTail: normalizeDecisionHistory(debugContext.decisionHistory),
+                logTail: normalizeRecentLogs(debugContext.recentLogs)
             }
         };
     }
@@ -798,6 +836,7 @@
 
     // 日志管理器
     const Logger = {
+        recentEntries: [],
         /**
          * 记录日志
          * @param {string} msg - 日志消息
@@ -806,14 +845,27 @@
         log(msg, type = 'info') {
             const time = new Date().toLocaleTimeString();
             const prefix = `[自动开图 ${time}]`;
-            console.log(`${prefix} ${msg}`);
-            
+            const message = String(msg || '');
+            console.log(`${prefix} ${message}`);
+            this.recentEntries.push({
+                at: new Date().toISOString(),
+                time,
+                type,
+                message
+            });
+            if (this.recentEntries.length > DEBUG_LOG_HISTORY_LIMIT * 2) {
+                this.recentEntries.splice(0, this.recentEntries.length - DEBUG_LOG_HISTORY_LIMIT * 2);
+            }
+
             const logEl = $('#am-log-content');
             if (logEl) {
                 const color = type === 'error' ? '#ff6b6b' : type === 'success' ? '#3dab97' : type === 'warning' ? '#f59e0b' : '#94a3b8';
-                logEl.innerHTML += `<div style="color:${color};margin:2px 0;font-size:12px;">${msg}</div>`;
+                logEl.innerHTML += `<div style="color:${color};margin:2px 0;font-size:12px;">${escapeHtmlText(message)}</div>`;
                 logEl.scrollTop = logEl.scrollHeight;
             }
+        },
+        getRecentEntries() {
+            return this.recentEntries.slice(-DEBUG_LOG_HISTORY_LIMIT);
         },
         info(msg) { this.log(msg, 'info'); },
         success(msg) { this.log(msg, 'success'); },
@@ -1829,6 +1881,7 @@
         encounterBusy: false,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
+        decisionHistory: [],
 
         init() {
             this.ensureTimer();
@@ -1866,9 +1919,12 @@
                 const now = Date.now();
                 const snapshot = await this.buildSnapshot(now, cfg);
                 const decision = decideAfkNextAction(snapshot, cfg, now);
+                this.recordDecision(decision, snapshot, now);
                 const debugSnapshot = buildAfkDebugSnapshot(snapshot, cfg, decision, {
                     capturedAt: new Date(now).toISOString(),
-                    page: { title: document.title || '', url: location.href || '' }
+                    page: { title: document.title || '', url: location.href || '' },
+                    decisionHistory: this.getDecisionHistory(),
+                    recentLogs: Logger.getRecentEntries()
                 });
                 const text = JSON.stringify(debugSnapshot, null, 2);
                 await this.copyText(text);
@@ -1910,12 +1966,39 @@
             try {
                 const snapshot = await this.buildSnapshot(now, cfg);
                 const decision = decideAfkNextAction(snapshot, cfg, now);
+                this.recordDecision(decision, snapshot, now);
                 await this.executeDecision(decision, snapshot, cfg);
             } catch (e) {
                 Logger.warn(`自动挂机循环检查失败: ${e.message || e}`);
             } finally {
                 this.busy = false;
             }
+        },
+
+        recordDecision(decision, snapshot, now) {
+            const entry = {
+                at: new Date(now || Date.now()).toISOString(),
+                action: decision && decision.action || '',
+                reason: decision && decision.reason || '',
+                label: this.formatReason(decision && decision.reason),
+                spirit: numberOrNull(snapshot && snapshot.spirit),
+                maxSpirit: numberOrNull(snapshot && snapshot.maxSpirit),
+                isMeditating: !!(snapshot && snapshot.isMeditating),
+                autoExploreRunning: !!(snapshot && snapshot.autoExploreRunning),
+                merchantActive: !!(snapshot && snapshot.merchantActive),
+                encounterActive: !!(snapshot && snapshot.encounterActive),
+                playerEncounterActive: !!(snapshot && snapshot.playerEncounterActive),
+                adventureActive: !!(snapshot && snapshot.adventureActive),
+                adventureId: snapshot && snapshot.adventureId ? snapshot.adventureId : null
+            };
+            this.decisionHistory.push(entry);
+            if (this.decisionHistory.length > DEBUG_DECISION_HISTORY_LIMIT * 2) {
+                this.decisionHistory.splice(0, this.decisionHistory.length - DEBUG_DECISION_HISTORY_LIMIT * 2);
+            }
+        },
+
+        getDecisionHistory() {
+            return this.decisionHistory.slice(-DEBUG_DECISION_HISTORY_LIMIT);
         },
 
         async buildSnapshot(now, cfg) {

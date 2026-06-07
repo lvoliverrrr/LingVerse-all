@@ -595,10 +595,24 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         exploreStalled: false
     };
     const decision = hooks.decideAfkNextAction(state, config, 1_000_000);
+    const decisionHistory = Array.from({ length: 25 }, (_, index) => ({
+        at: `2026-06-08T00:${String(index).padStart(2, '0')}:00.000Z`,
+        action: index % 2 === 0 ? 'wait' : 'startAutoExplore',
+        reason: index % 2 === 0 ? 'auto-explore-running' : 'spirit-ready',
+        spirit: index,
+        adventureId: index === 24 ? 456 : null
+    }));
+    const recentLogs = Array.from({ length: 35 }, (_, index) => ({
+        at: `2026-06-08T01:${String(index).padStart(2, '0')}:00.000Z`,
+        type: index % 3 === 0 ? 'warning' : 'info',
+        message: `日志${index}`
+    }));
 
     const snapshot = toPlain(hooks.buildAfkDebugSnapshot(state, config, decision, {
         capturedAt: '2026-06-08T00:00:00.000Z',
-        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decisionHistory,
+        recentLogs
     }));
 
     assert.equal(snapshot.schema, 'lingverse-afk-debug-snapshot/v1');
@@ -637,5 +651,11 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
     });
     assert.equal(snapshot.config.exploreMultiplier, 50);
     assert.equal(snapshot.config.autoFight, true);
+    assert.equal(snapshot.history.decisionTail.length, 20);
+    assert.equal(snapshot.history.decisionTail[0].spirit, 5);
+    assert.equal(snapshot.history.decisionTail[19].adventureId, 456);
+    assert.equal(snapshot.history.logTail.length, 30);
+    assert.equal(snapshot.history.logTail[0].message, '日志5');
+    assert.equal(snapshot.history.logTail[29].message, '日志34');
     assert.equal(snapshot.page.url, 'https://ling.muge.info/game.html');
 });

@@ -370,6 +370,13 @@
 - 脱敏摘要 `config.riskStatus` 会随摘要一起输出，测试者回传后可直接看出配置是否处在稳妥护道、富裕战斗或自定义模式。
 - 只读 Edge 证据（2026-06-08）：`getAutoHireConfig()` 返回 `{ enabled: true, mode: "alone", maxFee: 51, priorityKey: "normal,incarnation,body" }`；页面有新版本提示，未执行资源动作。
 
+`lingverse-explore-helper.user.js` v2.35.0 新增：
+
+- `buildAfkConfigPack(config, guardianConfig, context)` 输出 `lingverse-afk-config-pack/v1`，包含规范化 AFK 配置、游戏护道设置、风险状态、创建时间和脱敏 label。
+- `resolveAfkConfigPackImport(source, options)` 输出 `lingverse-afk-config-import/v1`，默认把导入配置里的 `enabled` 改为 `false` 并添加导入警告。
+- 面板新增“配置包”区：复制当前配置包、导入配置包、清空输入输出。导入不调用游戏 API，不自动启动挂机。
+- 配置包服务测试协作：测试者可以把“低境界护道”“富裕 50 倍”“某个奇遇策略表”等固定组合直接发回，开发侧可复现同一组开关。
+
 默认配置：
 
 - `enabled: false`

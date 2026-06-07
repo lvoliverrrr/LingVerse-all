@@ -1747,3 +1747,109 @@ test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
         ]
     });
 });
+
+test('AFK config packs export normalized settings and import safely', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkConfigPack, 'function');
+    assert.equal(typeof hooks.resolveAfkConfigPackImport, 'function');
+
+    const pack = hooks.buildAfkConfigPack({
+        enabled: true,
+        meditationMinutes: 90,
+        minSpirit: 18,
+        exploreMultiplier: 50,
+        tickInterval: 45000,
+        stallTimeoutSeconds: 120,
+        resumeWindowSeconds: 90,
+        autoFight: true,
+        autoHireGuardian: true,
+        autoRevive: true,
+        useTalismans: true,
+        talismanMaxKinds: 3,
+        talismanQuantity: 2,
+        talismanFamilyOrder: 'ghost,fire',
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: false,
+        autoDeclinePlayerEncounter: true,
+        adventureMode: 'strategy',
+        adventureChoiceMap: '456=2\n789=1'
+    }, {
+        enabled: true,
+        mode: 'alone',
+        maxFee: 51,
+        minAtk: 0,
+        priority: ['normal', 'incarnation', 'body'],
+        threatLevel: 'danger'
+    }, {
+        createdAt: '2026-06-08T04:00:00.000Z',
+        label: '富裕小号测试?token=secret'
+    });
+
+    assert.deepEqual(toPlain(pack), {
+        schema: 'lingverse-afk-config-pack/v1',
+        scriptVersion: '2.35.0',
+        createdAt: '2026-06-08T04:00:00.000Z',
+        label: '富裕小号测试',
+        afkLoop: {
+            enabled: true,
+            meditationMinutes: 90,
+            minSpirit: 18,
+            exploreMultiplier: 50,
+            tickInterval: 45000,
+            stallTimeoutSeconds: 120,
+            resumeWindowSeconds: 90,
+            autoRevive: true,
+            autoFight: true,
+            autoHireGuardian: true,
+            useTalismans: true,
+            talismanMaxKinds: 3,
+            talismanQuantity: 2,
+            talismanFamilyOrder: 'ghost,fire',
+            useNirvanaPill: true,
+            nirvanaMinRarity: 4,
+            queueNirvanaPill: false,
+            autoDeclinePlayerEncounter: true,
+            adventureMode: 'strategy',
+            adventureChoiceIndex: 1,
+            adventureChoiceMap: { 456: 2, 789: 1 }
+        },
+        guardian: {
+            enabled: true,
+            maxFee: 51,
+            minAtk: 0,
+            mode: 'alone',
+            priority: ['normal', 'incarnation', 'body'],
+            priorityKey: 'normal,incarnation,body',
+            threatLevel: 'danger'
+        },
+        riskStatus: {
+            schema: 'lingverse-afk-risk-status/v1',
+            profileText: '富裕战斗模式',
+            enabledRiskCount: 7,
+            totalRiskCount: 7,
+            warningCount: 0,
+            summaryText: '富裕战斗模式 · 风险开关 7/7 · 警告 0',
+            itemTexts: [
+                '自动迎战: 开启 · 50倍探索',
+                '自动护道: 开启 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
+                '自动复活: 开启',
+                '战斗用符: 开启 · 3种×2 · ghost>fire',
+                '涅槃重生丹: 开启 · 史诗+ · 不排队',
+                '陌生道友婉拒: 开启',
+                '奇遇自动选择: 开启 · strategy'
+            ],
+            warnings: []
+        }
+    });
+
+    const imported = toPlain(hooks.resolveAfkConfigPackImport(JSON.stringify(pack)));
+    assert.equal(imported.schema, 'lingverse-afk-config-import/v1');
+    assert.equal(imported.sourceSchema, 'lingverse-afk-config-pack/v1');
+    assert.equal(imported.afkLoop.enabled, false);
+    assert.deepEqual(imported.guardian.priority, ['normal', 'incarnation', 'body']);
+    assert.deepEqual(imported.importWarnings, ['导入时已关闭挂机启动状态']);
+    assert.equal(imported.riskStatus.enabledRiskCount, 7);
+});

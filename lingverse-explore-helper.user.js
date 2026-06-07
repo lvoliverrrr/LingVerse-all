@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.34.0
+// @version      2.35.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.34.0';
+    const SCRIPT_VERSION = '2.35.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -449,6 +449,57 @@
             summaryText: `${profileText} · 风险开关 ${enabledRiskCount}/${riskFlags.length} · 警告 ${warnings.length}`,
             itemTexts,
             warnings
+        };
+    }
+
+    function buildAfkConfigPack(config, guardianConfig, context) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const guardian = normalizeGuardianConfig(guardianConfig || {});
+        const meta = context && typeof context === 'object' ? context : {};
+        return {
+            schema: 'lingverse-afk-config-pack/v1',
+            scriptVersion: SCRIPT_VERSION,
+            createdAt: String(meta.createdAt || new Date().toISOString()),
+            label: sanitizeDebugName(meta.label || '', 80),
+            afkLoop: cfg,
+            guardian: guardian,
+            riskStatus: buildAfkRiskStatus(cfg, guardian)
+        };
+    }
+
+    function parseAfkConfigPackSource(source) {
+        if (typeof source === 'string') {
+            const text = source.trim();
+            if (!text) throw new Error('配置包为空');
+            return JSON.parse(text);
+        }
+        if (source && typeof source === 'object') return source;
+        throw new Error('配置包格式无效');
+    }
+
+    function resolveAfkConfigPackImport(source, options) {
+        const parsed = parseAfkConfigPackSource(source);
+        const pack = parsed && parsed.schema === 'lingverse-afk-config-pack/v1'
+            ? parsed
+            : buildAfkConfigPack(parsed.afkLoop || parsed, parsed.guardian || {}, parsed);
+        const importOptions = options && typeof options === 'object' ? options : {};
+        const cfg = normalizeAfkLoopConfig(pack.afkLoop || {});
+        const importWarnings = [];
+        if (cfg.enabled && !importOptions.allowEnabled) {
+            cfg.enabled = false;
+            importWarnings.push('导入时已关闭挂机启动状态');
+        }
+        const guardian = normalizeGuardianConfig(pack.guardian || {});
+        return {
+            schema: 'lingverse-afk-config-import/v1',
+            sourceSchema: String(pack.schema || ''),
+            scriptVersion: String(pack.scriptVersion || SCRIPT_VERSION),
+            importedAt: String(importOptions.importedAt || new Date().toISOString()),
+            label: sanitizeDebugName(pack.label || '', 80),
+            afkLoop: cfg,
+            guardian: guardian,
+            riskStatus: buildAfkRiskStatus(cfg, guardian),
+            importWarnings
         };
     }
 
@@ -1602,6 +1653,8 @@
         formatAfkAction,
         buildAfkPanelStatus,
         buildAfkRiskStatus,
+        buildAfkConfigPack,
+        resolveAfkConfigPackImport,
         selectCombatTalismans,
         buildEncounterKey,
         shouldUseCombatTalismansForEncounter,
@@ -2231,6 +2284,18 @@
                         </div>
                         <div style="margin-top:8px;padding-top:8px;border-top:1px solid ${border};">
                             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
+                                <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};font-weight:bold;">配置包</div>
+                                <div style="display:flex;gap:6px;">
+                                    <button id="am-afk-config-copy" style="padding:5px 8px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">复制</button>
+                                    <button id="am-afk-config-import" style="padding:5px 8px;background:#334155;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">导入</button>
+                                    <button id="am-afk-config-clear" style="padding:5px 8px;background:transparent;color:${isDark?'#94a3b8':'#64748b'};border:1px solid ${border};border-radius:4px;cursor:pointer;font-size:11px;">清空</button>
+                                </div>
+                            </div>
+                            <textarea id="am-afk-config-pack-input" rows="2" placeholder="JSON" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:11px;resize:vertical;"></textarea>
+                            <pre id="am-afk-config-pack-output" style="margin:6px 0 0;white-space:pre-wrap;word-break:break-word;max-height:90px;overflow:auto;padding:7px;background:${isDark?'rgba(15,23,42,0.35)':'rgba(241,245,249,0.9)'};border:1px solid ${border};border-radius:4px;color:${text};font-size:11px;line-height:1.45;">未导入</pre>
+                        </div>
+                        <div style="margin-top:8px;padding-top:8px;border-top:1px solid ${border};">
+                            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
                                 <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};font-weight:bold;">摘要回放</div>
                                 <div style="display:flex;gap:6px;">
                                     <button id="am-afk-replay-run" style="padding:5px 8px;background:#334155;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">回放</button>
@@ -2280,6 +2345,9 @@
             $('#am-afk-copy-debug')?.addEventListener('click', () => AfkLoopManager.copyDebugSnapshot());
             $('#am-afk-preset-steady')?.addEventListener('click', () => AfkLoopManager.applyPreset('steady'));
             $('#am-afk-preset-rich')?.addEventListener('click', () => AfkLoopManager.applyPreset('rich'));
+            $('#am-afk-config-copy')?.addEventListener('click', () => this.copyAfkConfigPack());
+            $('#am-afk-config-import')?.addEventListener('click', () => this.importAfkConfigPack());
+            $('#am-afk-config-clear')?.addEventListener('click', () => this.clearAfkConfigPack());
             $('#am-afk-replay-run')?.addEventListener('click', () => this.renderAfkIssueReplay());
             $('#am-afk-replay-clear')?.addEventListener('click', () => this.clearAfkIssueReplay());
 
@@ -2517,6 +2585,59 @@
             if (linesEl) {
                 linesEl.textContent = status.itemTexts.concat(status.warnings.map(item => `! ${item}`)).join('\n');
             }
+        },
+
+        async copyAfkConfigPack() {
+            try {
+                const cfg = readAfkLoopConfigFromUI();
+                const pack = buildAfkConfigPack(cfg, getCurrentGuardianConfig(), {
+                    label: document.title || 'LingVerse AFK'
+                });
+                const text = JSON.stringify(pack, null, 2);
+                await AfkLoopManager.copyText(text);
+                const outputEl = $('#am-afk-config-pack-output');
+                if (outputEl) outputEl.textContent = pack.riskStatus.summaryText;
+                Logger.success('已复制挂机配置包');
+            } catch (e) {
+                Logger.warn(`复制挂机配置包失败: ${e.message || e}`);
+            }
+        },
+
+        importAfkConfigPack() {
+            const inputEl = $('#am-afk-config-pack-input');
+            const outputEl = $('#am-afk-config-pack-output');
+            if (!inputEl) return;
+            try {
+                const imported = resolveAfkConfigPackImport(inputEl.value);
+                CONFIG.afkLoop = imported.afkLoop;
+                CONFIG.guardian = {
+                    enabled: imported.guardian.enabled,
+                    maxFee: imported.guardian.maxFee,
+                    minAtk: imported.guardian.minAtk,
+                    mode: imported.guardian.mode,
+                    priority: imported.guardian.priorityKey || imported.guardian.priority.join(','),
+                    threatLevel: imported.guardian.threatLevel
+                };
+                saveConfig();
+                this.updatePanelFromConfig();
+                if (outputEl) {
+                    outputEl.textContent = [
+                        imported.riskStatus.summaryText,
+                        ...imported.importWarnings.map(item => `! ${item}`)
+                    ].join('\n');
+                }
+                Logger.success('已导入挂机配置包，未自动启动挂机');
+            } catch (e) {
+                if (outputEl) outputEl.textContent = `配置包导入失败: ${e.message || e}`;
+                Logger.warn(`挂机配置包导入失败: ${e.message || e}`);
+            }
+        },
+
+        clearAfkConfigPack() {
+            const inputEl = $('#am-afk-config-pack-input');
+            const outputEl = $('#am-afk-config-pack-output');
+            if (inputEl) inputEl.value = '';
+            if (outputEl) outputEl.textContent = '未导入';
         },
 
         renderAfkIssueReplay() {

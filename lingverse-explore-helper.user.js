@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.45.0
+// @version      2.46.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.45.0';
+    const SCRIPT_VERSION = '2.46.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -2210,6 +2210,27 @@
         return lines.join('\n');
     }
 
+    function buildAfkAdventureStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const adventure = source.adventure && typeof source.adventure === 'object' ? source.adventure : {};
+        const id = adventure.id || (source.blockers && source.blockers.adventureId) || '';
+        const choices = Array.isArray(adventure.choices) ? adventure.choices : [];
+        if (!id && choices.length === 0) return '';
+        let heading = id ? `#${sanitizeDebugText(id, 60)}` : '未知';
+        const step = numberOrNull(adventure.step);
+        const totalSteps = numberOrNull(adventure.totalSteps);
+        if (step !== null || totalSteps !== null) {
+            heading += ` 第${step === null ? '?' : step}/${totalSteps === null ? '?' : totalSteps}步`;
+        }
+        const parts = [`奇遇: ${heading}`];
+        const choiceText = choices
+            .map((choice, index) => `${index + 1}.${sanitizeDebugText(choice, 48)}`)
+            .filter(Boolean)
+            .join(' / ');
+        if (choiceText) parts.push(choiceText);
+        return parts.join(' · ');
+    }
+
     function extractAdventureStrategyImportText(source) {
         let parsed = source;
         if (typeof source === 'string') {
@@ -2427,6 +2448,10 @@
                 .forEach(item => lines.push(`! ${item}`));
         }
         lines.push(`自动化: 护道 ${sanitizeDebugText(automation.guardian && automation.guardian.reason || 'unknown', 60)} · 用符 ${sanitizeDebugText(automation.talismans && automation.talismans.reason || 'unknown', 60)} · 迎战 ${sanitizeDebugText(automation.fight && automation.fight.reason || 'unknown', 60)} · 用丹 ${sanitizeDebugText(automation.nirvanaPill && automation.nirvanaPill.reason || 'unknown', 60)}`);
+        const adventureStatusLine = buildAfkAdventureStatusLine(summary);
+        if (adventureStatusLine) {
+            lines.push(adventureStatusLine);
+        }
         if (strategyImportText) {
             lines.push(`奇遇策略: ${strategyImportText.split('\n').join(' / ')}`);
         }
@@ -2601,6 +2626,7 @@
         buildAfkDebugSummary,
         buildAfkIssueReplay,
         buildAfkEnvironmentStatusLine,
+        buildAfkAdventureStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset

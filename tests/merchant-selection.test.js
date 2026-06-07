@@ -206,3 +206,81 @@ test('decideAfkNextAction waits while merchant or encounter blocks the page', ()
         reason: 'encounter-active'
     });
 });
+
+test('selectCombatTalismans picks up to five unlocked combat talisman families', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const selected = hooks.selectCombatTalismans([
+        { id: 1, templateId: 'talisman_fire_1', name: '普通烈火符', type: 'misc', rarity: 1, quantity: 2 },
+        { id: 2, templateId: 'talisman_fire_3', name: '稀有烈火符', type: 'misc', rarity: 3, quantity: 1 },
+        { id: 3, templateId: 'talisman_stealth_4', name: '史诗隐匿符', type: 'misc', rarity: 4, quantity: 1 },
+        { id: 4, templateId: 'shenxing_talisman', name: '神行符', type: 'misc', rarity: 2, quantity: 99 },
+        { id: 5, templateId: 'bp_talisman_ghost_2', name: '优良冥鬼诅咒符', type: 'misc', rarity: 2, quantity: 1 },
+        { id: 6, templateId: 'talisman_shield_1', name: '普通金刚符', type: 'misc', rarity: 1, quantity: 3 },
+        { id: 7, templateId: 'talisman_thunder_1', name: '普通天雷符', type: 'misc', rarity: 1, quantity: 1, isLocked: true },
+        { id: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', type: 'misc', rarity: 4, quantity: 1 }
+    ], { maxKinds: 5, quantityPerKind: 1 });
+
+    assert.deepEqual(toPlain(selected), [
+        { itemId: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 },
+        { itemId: 2, templateId: 'talisman_fire_3', name: '稀有烈火符', family: 'fire', rarity: 3, quantity: 1 },
+        { itemId: 5, templateId: 'bp_talisman_ghost_2', name: '优良冥鬼诅咒符', family: 'ghost', rarity: 2, quantity: 1 },
+        { itemId: 6, templateId: 'talisman_shield_1', name: '普通金刚符', family: 'shield', rarity: 1, quantity: 1 }
+    ]);
+});
+
+test('selectNirvanaRebirthPill only selects configured five-root rebirth pills', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const selected = hooks.selectNirvanaRebirthPill([
+        { id: 1, templateId: 'pill_nirvana_4', name: '史诗九转还魂丹', type: 'pill', rarity: 4, quantity: 1 },
+        { id: 2, templateId: 'bp_pill_rebirth_3', name: '稀有涅槃重生丹', type: 'pill', rarity: 3, quantity: 1 },
+        { id: 3, templateId: 'bp_pill_rebirth_4', name: '史诗涅槃重生丹', type: 'pill', rarity: 4, quantity: 2 },
+        { id: 4, templateId: 'bp_pill_rebirth_5', name: '传说涅槃重生丹', type: 'pill', rarity: 5, quantity: 0 }
+    ], { minRarity: 4 });
+
+    assert.deepEqual(toPlain(selected), {
+        itemId: 3,
+        templateId: 'bp_pill_rebirth_4',
+        name: '史诗涅槃重生丹',
+        rarity: 4,
+        quantity: 1
+    });
+});
+
+test('decideAfkNextAction handles encounters only when auto fight is enabled', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 200,
+        encounterActive: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        autoFight: false,
+        useTalismans: false
+    }, 1_000_000)), {
+        action: 'wait',
+        reason: 'encounter-active'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 200,
+        encounterActive: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        autoFight: true,
+        useTalismans: true
+    }, 1_000_000)), {
+        action: 'handleEncounter',
+        reason: 'encounter-auto-fight-enabled'
+    });
+});

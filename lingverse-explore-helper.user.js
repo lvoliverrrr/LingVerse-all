@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.8.0
+// @version      2.9.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -49,8 +49,13 @@
             tickInterval: 30000,     // 循环检查间隔
             stallTimeoutSeconds: 90, // 自动探索超过该时间无进展则回冥想
             autoRevive: false,       // 复活会花资源，默认关闭
+            autoFight: false,        // 自动迎战会触发战斗，默认关闭
             useTalismans: false,     // 战斗符箓消耗品，默认关闭
-            useNirvanaPill: false    // 涅槃重生丹消耗品，默认关闭
+            talismanMaxKinds: 5,      // 最多使用几种符
+            talismanQuantity: 1,      // 每种符默认使用数量
+            useNirvanaPill: false,   // 涅槃重生丹消耗品，默认关闭
+            nirvanaMinRarity: 4,      // 默认只吃史诗及以上五行通灵丹
+            queueNirvanaPill: false  // 已有五行通灵时是否继续排队
         }
     };
 
@@ -95,8 +100,13 @@
         tickInterval: 30000,
         stallTimeoutSeconds: 90,
         autoRevive: false,
+        autoFight: false,
         useTalismans: false,
-        useNirvanaPill: false
+        talismanMaxKinds: 5,
+        talismanQuantity: 1,
+        useNirvanaPill: false,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: false
     }, CONFIG.afkLoop || {});
 
     function saveConfig() {
@@ -161,9 +171,100 @@
         cfg.tickInterval = clampNumber(cfg.tickInterval, 5000, 300000, 30000);
         cfg.stallTimeoutSeconds = clampNumber(cfg.stallTimeoutSeconds, 0, 3600, 90);
         cfg.autoRevive = !!cfg.autoRevive;
+        cfg.autoFight = !!cfg.autoFight;
         cfg.useTalismans = !!cfg.useTalismans;
+        cfg.talismanMaxKinds = clampNumber(cfg.talismanMaxKinds, 1, 5, 5);
+        cfg.talismanQuantity = clampNumber(cfg.talismanQuantity, 1, 20, 1);
         cfg.useNirvanaPill = !!cfg.useNirvanaPill;
+        cfg.nirvanaMinRarity = clampNumber(cfg.nirvanaMinRarity, 1, 5, 4);
+        cfg.queueNirvanaPill = !!cfg.queueNirvanaPill;
         return cfg;
+    }
+
+    function getItemId(item) {
+        const id = item && (item.id ?? item.itemId);
+        const parsed = parseInt(id, 10);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    }
+
+    function getItemRarity(item) {
+        const explicit = parseInt(item && item.rarity, 10);
+        if (Number.isFinite(explicit) && explicit > 0) return explicit;
+        const match = String(item && item.templateId || '').match(/_(\d+)$/);
+        const fromTemplate = match ? parseInt(match[1], 10) : 0;
+        return Number.isFinite(fromTemplate) ? fromTemplate : 0;
+    }
+
+    function isUsableInventoryItem(item) {
+        return !!item && getItemId(item) > 0 && !item.isLocked && (parseInt(item.quantity, 10) || 0) > 0;
+    }
+
+    function getCombatTalismanFamily(item) {
+        const templateId = String(item && item.templateId || '');
+        if (templateId === 'shenxing_talisman') return '';
+        if (templateId.indexOf('talisman_stealth_') === 0) return '';
+        const match = templateId.match(/^(?:bp_)?talisman_(.+)_\d+$/);
+        return match ? match[1] : '';
+    }
+
+    function selectCombatTalismans(items, options) {
+        const maxKinds = clampNumber(options && options.maxKinds, 1, 5, 5);
+        const quantityPerKind = clampNumber(options && options.quantityPerKind, 1, 20, 1);
+        const bestByFamily = new Map();
+
+        (Array.isArray(items) ? items : []).forEach(item => {
+            if (!isUsableInventoryItem(item)) return;
+            if (item.type !== 'misc' && item.type !== 'talisman') return;
+            const family = getCombatTalismanFamily(item);
+            if (!family) return;
+            const rarity = getItemRarity(item);
+            const quantity = parseInt(item.quantity, 10) || 0;
+            const candidate = {
+                itemId: getItemId(item),
+                templateId: item.templateId,
+                name: item.name || '',
+                family,
+                rarity,
+                quantity: Math.min(quantityPerKind, quantity)
+            };
+            const current = bestByFamily.get(family);
+            if (!current || candidate.rarity > current.rarity || (candidate.rarity === current.rarity && candidate.quantity > current.quantity)) {
+                bestByFamily.set(family, candidate);
+            }
+        });
+
+        return Array.from(bestByFamily.values())
+            .sort((a, b) => (b.rarity - a.rarity) || a.family.localeCompare(b.family))
+            .slice(0, maxKinds);
+    }
+
+    function isNirvanaRebirthPill(item) {
+        const templateId = String(item && item.templateId || '');
+        if (templateId.indexOf('bp_pill_rebirth_') === 0) return true;
+        const text = `${item && item.name || ''} ${item && item.description || ''}`;
+        return /涅槃重生丹|五行通灵丹/.test(text);
+    }
+
+    function selectNirvanaRebirthPill(items, options) {
+        const minRarity = clampNumber(options && options.minRarity, 1, 5, 4);
+        const candidates = (Array.isArray(items) ? items : [])
+            .filter(item => isUsableInventoryItem(item) && item.type === 'pill' && isNirvanaRebirthPill(item))
+            .map(item => ({
+                itemId: getItemId(item),
+                templateId: item.templateId,
+                name: item.name || '',
+                rarity: getItemRarity(item),
+                quantity: 1
+            }))
+            .filter(item => item.rarity >= minRarity)
+            .sort((a, b) => (b.rarity - a.rarity) || String(a.name).localeCompare(String(b.name)));
+        return candidates[0] || null;
+    }
+
+    function hasActiveFiveRootBuff(player) {
+        const expire = Number(player && player.fiveRootBuffExpire);
+        const grade = Number(player && player.fiveRootBuffGrade);
+        return Number.isFinite(expire) && Number.isFinite(grade) && grade > 0 && expire > Date.now();
     }
 
     function getMeditationElapsedMs(state, now) {
@@ -191,6 +292,9 @@
             return { action: 'wait', reason: 'merchant-active' };
         }
         if (snapshot.encounterActive || snapshot.combatActive) {
+            if (cfg.autoFight) {
+                return { action: 'handleEncounter', reason: 'encounter-auto-fight-enabled' };
+            }
             return { action: 'wait', reason: 'encounter-active' };
         }
         if (snapshot.isDead) {
@@ -245,7 +349,9 @@
         selectMerchantItem,
         resolveApiObject,
         normalizeAfkLoopConfig,
-        decideAfkNextAction
+        decideAfkNextAction,
+        selectCombatTalismans,
+        selectNirvanaRebirthPill
     });
 
     // 状态对象
@@ -363,6 +469,16 @@
         },
 
         /**
+         * 通用使用物品
+         */
+        async useItem(itemId, quantity = 1) {
+            const apiObj = this.getApiObj();
+            const body = { itemId };
+            if (quantity > 1) body.quantity = quantity;
+            return await apiObj.post('/api/game/use-item', body);
+        },
+
+        /**
          * 获取护道者列表
          */
         async getGuardianList() {
@@ -455,8 +571,13 @@
         cfg.tickInterval = clampNumber($('#am-afk-tick-interval')?.value, 5000, 300000, cfg.tickInterval || 30000);
         cfg.stallTimeoutSeconds = clampNumber($('#am-afk-stall-timeout')?.value, 0, 3600, cfg.stallTimeoutSeconds || 90);
         cfg.autoRevive = $('#am-afk-auto-revive')?.checked ?? cfg.autoRevive;
+        cfg.autoFight = $('#am-afk-auto-fight')?.checked ?? cfg.autoFight;
         cfg.useTalismans = $('#am-afk-use-talismans')?.checked ?? cfg.useTalismans;
+        cfg.talismanMaxKinds = clampNumber($('#am-afk-talisman-max-kinds')?.value, 1, 5, cfg.talismanMaxKinds || 5);
+        cfg.talismanQuantity = clampNumber($('#am-afk-talisman-qty')?.value, 1, 20, cfg.talismanQuantity || 1);
         cfg.useNirvanaPill = $('#am-afk-use-nirvana')?.checked ?? cfg.useNirvanaPill;
+        cfg.nirvanaMinRarity = clampNumber($('#am-afk-nirvana-min-rarity')?.value, 1, 5, cfg.nirvanaMinRarity || 4);
+        cfg.queueNirvanaPill = $('#am-afk-queue-nirvana')?.checked ?? cfg.queueNirvanaPill;
         CONFIG.afkLoop = normalizeAfkLoopConfig(cfg);
         return CONFIG.afkLoop;
     }
@@ -720,17 +841,46 @@
                         </div>
                         <div style="display:grid;grid-template-columns:1fr;gap:6px;margin-bottom:8px;">
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="checkbox" id="am-afk-auto-fight" ${CONFIG.afkLoop.autoFight?'checked':''} style="cursor:pointer;">
+                                <span style="font-size:12px;color:${text};">遭遇妖兽后自动迎战</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-auto-revive" ${CONFIG.afkLoop.autoRevive?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">死亡后自动灵石复活</span>
                             </label>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-use-talismans" ${CONFIG.afkLoop.useTalismans?'checked':''} style="cursor:pointer;">
-                                <span style="font-size:12px;color:${text};">战斗前自动使用已选符箓策略（预留）</span>
+                                <span style="font-size:12px;color:${text};">战斗前自动使用战斗符箓</span>
                             </label>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                                <div>
+                                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">最多符种</div>
+                                    <input type="number" id="am-afk-talisman-max-kinds" value="${CONFIG.afkLoop.talismanMaxKinds}" min="1" max="5" step="1" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                                </div>
+                                <div>
+                                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">每种数量</div>
+                                    <input type="number" id="am-afk-talisman-qty" value="${CONFIG.afkLoop.talismanQuantity}" min="1" max="20" step="1" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
+                                </div>
+                            </div>
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-use-nirvana" ${CONFIG.afkLoop.useNirvanaPill?'checked':''} style="cursor:pointer;">
-                                <span style="font-size:12px;color:${text};">富裕模式使用涅槃重生丹（预留）</span>
+                                <span style="font-size:12px;color:${text};">探索前使用涅槃重生丹</span>
                             </label>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                                <div>
+                                    <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">最低品质</div>
+                                    <select id="am-afk-nirvana-min-rarity" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;cursor:pointer;">
+                                        <option value="4" ${CONFIG.afkLoop.nirvanaMinRarity===4?'selected':''}>史诗+</option>
+                                        <option value="3" ${CONFIG.afkLoop.nirvanaMinRarity===3?'selected':''}>稀有+</option>
+                                        <option value="2" ${CONFIG.afkLoop.nirvanaMinRarity===2?'selected':''}>优良+</option>
+                                        <option value="1" ${CONFIG.afkLoop.nirvanaMinRarity===1?'selected':''}>任意</option>
+                                    </select>
+                                </div>
+                                <label style="display:flex;align-items:center;gap:8px;margin-top:18px;cursor:pointer;">
+                                    <input type="checkbox" id="am-afk-queue-nirvana" ${CONFIG.afkLoop.queueNirvanaPill?'checked':''} style="cursor:pointer;">
+                                    <span style="font-size:12px;color:${text};">允许排队</span>
+                                </label>
+                            </div>
                         </div>
                         <div style="display:flex;gap:8px;">
                             <button id="am-afk-start" style="flex:1;padding:8px;background:#7c3aed;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">启动挂机</button>
@@ -924,8 +1074,13 @@
             const afkTickIntervalEl = $('#am-afk-tick-interval');
             const afkStallTimeoutEl = $('#am-afk-stall-timeout');
             const afkAutoReviveEl = $('#am-afk-auto-revive');
+            const afkAutoFightEl = $('#am-afk-auto-fight');
             const afkUseTalismansEl = $('#am-afk-use-talismans');
+            const afkTalismanMaxKindsEl = $('#am-afk-talisman-max-kinds');
+            const afkTalismanQtyEl = $('#am-afk-talisman-qty');
             const afkUseNirvanaEl = $('#am-afk-use-nirvana');
+            const afkNirvanaMinRarityEl = $('#am-afk-nirvana-min-rarity');
+            const afkQueueNirvanaEl = $('#am-afk-queue-nirvana');
 
             if (enabledEl) enabledEl.checked = CONFIG.guardian.enabled;
             if (maxFeeEl) maxFeeEl.value = CONFIG.guardian.maxFee;
@@ -945,8 +1100,13 @@
             if (afkTickIntervalEl) afkTickIntervalEl.value = CONFIG.afkLoop.tickInterval;
             if (afkStallTimeoutEl) afkStallTimeoutEl.value = CONFIG.afkLoop.stallTimeoutSeconds;
             if (afkAutoReviveEl) afkAutoReviveEl.checked = CONFIG.afkLoop.autoRevive;
+            if (afkAutoFightEl) afkAutoFightEl.checked = CONFIG.afkLoop.autoFight;
             if (afkUseTalismansEl) afkUseTalismansEl.checked = CONFIG.afkLoop.useTalismans;
+            if (afkTalismanMaxKindsEl) afkTalismanMaxKindsEl.value = CONFIG.afkLoop.talismanMaxKinds;
+            if (afkTalismanQtyEl) afkTalismanQtyEl.value = CONFIG.afkLoop.talismanQuantity;
             if (afkUseNirvanaEl) afkUseNirvanaEl.checked = CONFIG.afkLoop.useNirvanaPill;
+            if (afkNirvanaMinRarityEl) afkNirvanaMinRarityEl.value = CONFIG.afkLoop.nirvanaMinRarity;
+            if (afkQueueNirvanaEl) afkQueueNirvanaEl.checked = CONFIG.afkLoop.queueNirvanaPill;
             this.updateAfkState();
         },
 
@@ -1371,6 +1531,7 @@
         lastDecisionKey: '',
         lastAutoExploreCount: null,
         lastExploreProgressAt: 0,
+        encounterBusy: false,
 
         init() {
             this.ensureTimer();
@@ -1506,6 +1667,11 @@
                 await this.startAutoExplore(cfg.exploreMultiplier);
                 return;
             }
+            if (decision.action === 'handleEncounter') {
+                Logger.info(`自动挂机处理遭遇：${this.formatReason(decision.reason)}`);
+                await this.handleEncounter(cfg);
+                return;
+            }
             if (decision.action === 'revive') {
                 Logger.warn('自动挂机尝试灵石复活');
                 await this.revive();
@@ -1548,6 +1714,7 @@
 
         async startAutoExplore(multiplier) {
             try {
+                await this.maybeUseNirvanaRebirthPill(CONFIG.afkLoop);
                 this.setExploreMultiplier(multiplier);
                 const toggle = $('#autoExploreToggle');
                 if (toggle) toggle.checked = true;
@@ -1564,6 +1731,42 @@
                 this.lastExploreProgressAt = Date.now();
             } catch (e) {
                 Logger.warn(`自动探索启动失败: ${e.message || e}`);
+            }
+        },
+
+        async maybeUseNirvanaRebirthPill(cfg) {
+            if (!cfg.useNirvanaPill) return;
+            if (!cfg.queueNirvanaPill && hasActiveFiveRootBuff(_win._lastPlayerData || {})) {
+                Logger.info('已有五行通灵效果，跳过涅槃重生丹');
+                return;
+            }
+
+            let items = [];
+            try {
+                const res = await API.getInventory();
+                if (res.code === 200 && res.data) items = res.data.items || res.data || [];
+            } catch (e) {
+                Logger.warn(`读取涅槃重生丹失败: ${e.message || e}`);
+                return;
+            }
+
+            const pill = selectNirvanaRebirthPill(items, { minRarity: cfg.nirvanaMinRarity });
+            if (!pill) {
+                Logger.info(`未找到品质满足要求的涅槃重生丹（最低${cfg.nirvanaMinRarity}阶），跳过`);
+                return;
+            }
+
+            try {
+                Logger.info(`自动使用涅槃重生丹: ${pill.name || pill.templateId}`);
+                const res = await API.useItem(pill.itemId, 1);
+                if (res.code !== 200) {
+                    Logger.warn(`涅槃重生丹使用失败: ${res.message || '未知错误'}`);
+                    return;
+                }
+                this.refreshGameData();
+                await wait(700);
+            } catch (e) {
+                Logger.warn(`涅槃重生丹使用失败: ${e.message || e}`);
             }
         },
 
@@ -1605,6 +1808,93 @@
             }
         },
 
+        async handleEncounter(cfg) {
+            if (this.encounterBusy) return;
+            this.encounterBusy = true;
+            try {
+                if (cfg.useTalismans) {
+                    await this.useCombatTalismans(cfg);
+                }
+                if (cfg.autoFight) {
+                    await this.fightEncounter();
+                }
+            } finally {
+                this.encounterBusy = false;
+            }
+        },
+
+        async useCombatTalismans(cfg) {
+            let items = [];
+            try {
+                const res = await API.getInventory();
+                if (res.code === 200 && res.data) items = res.data.items || res.data || [];
+            } catch (e) {
+                Logger.warn(`读取战斗符箓失败: ${e.message || e}`);
+                return;
+            }
+
+            const selected = selectCombatTalismans(items, {
+                maxKinds: cfg.talismanMaxKinds,
+                quantityPerKind: cfg.talismanQuantity
+            });
+            if (selected.length === 0) {
+                Logger.info('没有可用战斗符箓，跳过用符');
+                return;
+            }
+
+            try {
+                if (typeof _win.showEncounterTalismanDialog === 'function') {
+                    _win.showEncounterTalismanDialog();
+                    await wait(300);
+                }
+            } catch (e) {}
+
+            let usedKinds = 0;
+            for (const item of selected) {
+                try {
+                    const res = await API.useItem(item.itemId, item.quantity);
+                    if (res.code !== 200) {
+                        Logger.warn(`${item.name || item.templateId} 使用失败: ${res.message || '未知错误'}`);
+                        continue;
+                    }
+                    usedKinds += 1;
+                    Logger.info(`已用战斗符箓: ${item.name || item.templateId} ×${item.quantity}`);
+                    await wait(650);
+                } catch (e) {
+                    Logger.warn(`${item.name || item.templateId} 使用失败: ${e.message || e}`);
+                }
+            }
+
+            try {
+                if (typeof _win.hideEncounterTalismanDialog === 'function') {
+                    _win.hideEncounterTalismanDialog();
+                } else {
+                    const dialog = $('#encounterTalismanDialog');
+                    if (dialog) dialog.classList.add('hidden');
+                }
+            } catch (e) {}
+
+            if (usedKinds > 0) this.refreshGameData();
+        },
+
+        async fightEncounter() {
+            try {
+                const fightBtn = $('#encounterFightBtn');
+                if (fightBtn && !fightBtn.disabled) {
+                    fightBtn.click();
+                    return;
+                }
+                if (typeof _win.handleCombatChoice === 'function') {
+                    await _win.handleCombatChoice('fight');
+                    return;
+                }
+                const res = await API.combatChoice('fight');
+                if (res.code !== 200) Logger.warn(`自动迎战失败: ${res.message || '未知错误'}`);
+            } catch (e) {
+                Logger.warn(`自动迎战失败: ${e.message || e}`);
+            }
+        },
+
         refreshGameData() {
             try {
                 if (_win.loadPlayerInfo) _win.loadPlayerInfo(true);
@@ -1627,7 +1917,8 @@
                 'explore-disabled': '当前区域不可探索',
                 'spirit-below-threshold': '神识低于阈值',
                 'spirit-ready': '神识可探索',
-                'dead-auto-revive-enabled': '已开启自动复活'
+                'dead-auto-revive-enabled': '已开启自动复活',
+                'encounter-auto-fight-enabled': '已开启自动迎战'
             };
             return labels[reason] || reason || '状态变化';
         }

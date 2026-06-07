@@ -56,27 +56,40 @@
 
 - `exploreMultiplier: 50`
 - `useNirvanaPill: true`
+- `nirvanaMinRarity: 4`
+- `queueNirvanaPill: false`
+- `autoFight: true`
 - `useTalismans: true`
+- `talismanMaxKinds: 5`
+- `talismanQuantity: 1`
 - `autoRevive: true`
 
 设计状态机：
 
-1. 探索前检查是否有可用史诗涅槃重生丹。
+1. 探索前检查是否有可用史诗五行通灵类涅槃重生丹。
 2. 有则使用，失败或没有则跳过。
 3. 设置 50 倍探索并启动自动探索。
 4. 遇妖后打开符箓面板。
 5. 选择最多 5 类战斗符箓，每类默认 1 张，缺货跳过。
-6. 调用 `useSelectedEncounterTalismans()`。
+6. 调用 `/api/game/use-item` 使用对应战斗符，保持每种之间节流。
 7. 关闭符箓面板。
 8. 点击迎战。
 9. 若死亡且 `autoRevive` 开启，调用 `handleRevive()`。
 10. 复活后刷新玩家状态，神识足够则继续 50 倍探索，不足则冥想。
+
+v2.9.0 已完成：
+
+- 第 1 步到第 8 步的 opt-in 骨架。
+- 不再把回血丹 `pill_nirvana_*` 当成涅槃重生丹；只选 `bp_pill_rebirth_*` 或明确五行通灵/涅槃重生命名的 pill。
+- 符箓按 family 去重，优先最高品质，最多 5 种。
+- 遭遇默认仍等待，只有 `autoFight` 开启才进入 handler。
 
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
 - 复活和丹药都消耗资源。
 - 符箓使用顺序影响收益，需要更多游戏内资料和玩家实测。
+- 当前账号未读到 `bp_pill_rebirth_*`，所以涅槃重生丹分支只做了选择策略测试，未做真实消耗验证。
 
 ## 第四阶段：脚本体验打磨
 
@@ -96,6 +109,12 @@
 - `for f in *.user.js; do node --check "$f"; done`
 - `git diff --check`
 
+v2.9.0 新增自动测试：
+
+- `selectCombatTalismans` 最多选择 5 种、跳过隐匿/神行/锁定符、同类取最高品质。
+- `selectNirvanaRebirthPill` 只选择五行通灵类涅槃重生丹，默认史诗以上。
+- `decideAfkNextAction` 只有 `autoFight` 开启时才把遭遇交给自动 handler。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -105,6 +124,7 @@
 ## 下一步建议
 
 1. 把 v2.8.0 复制到 Edge 扩展测试目录，用户实测基础循环。
-2. 用真实挂机日志收集“自动探索停住”的事件原因。
-3. 为高阶战斗模式先加符箓选择纯函数测试。
-4. 再实现富裕模式的遭遇处理器。
+2. 把 v2.9.0 复制到 Edge 扩展测试目录，用户实测富裕模式开关但先不要开 `autoRevive`。
+3. 用真实挂机日志收集“自动探索停住”的事件原因。
+4. 补“复活后继续 50 倍探索”的专门测试和节流。
+5. 继续补奇遇/道友邂逅/典狱等非战斗事件 handler。

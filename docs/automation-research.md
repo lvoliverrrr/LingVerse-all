@@ -39,6 +39,7 @@
 - v2.22.0 只读护道状态：`getAutoHireConfig()` 返回当前账号已开启自动护道，模式 `alone`，最高雇佣费 `51`，优先级 `normal,incarnation,body`。
 - v2.22.0 只读函数确认：`handleCombatChoice('fight')` 会直接调用 `/api/game/combat-choice` 迎战；`tryAutoHireProtectorForEncounter()` 会读取 `getAutoHireConfig()` 并调用 `/api/game/encounter-auto-hire`，遇 429 会等待 600ms 重试一次。
 - v2.23.0 只读死亡状态：页面同时暴露 `playerDead` 和 `_lastPlayerData.isDead`；`handleRevive()` 会调用 `/api/game/revive`、隐藏死亡遮罩、刷新玩家信息和地图。
+- v2.24.0 只读恢复挂起逻辑：`_tryResumeAutoExploreAfterMerchant()` 会在 `_autoResumeExplorePending` 时清标记并延迟 1500ms 调 `startAutoExplore()`；若 pending 残留，辅助脚本需要按卡住超时兜底。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -230,7 +231,7 @@
 
 - 自动探索运行或恢复挂起时，如果神识低于 `minSpirit` 或低于 `spiritCost`，决策优先回冥想。
 - 自动探索恢复挂起时，如果页面 `canExplore=false` 且 `exploreDisabledReason` 包含“神识”或“体力”，决策优先回冥想。
-- 保留事件阻塞优先级：商人、遭遇、奇遇、陌生道友、混天典狱和死亡仍先处理或等待。
+- 保留事件阻塞优先级：混天典狱和死亡优先；其后处理奇遇、陌生道友、商人、遭遇等可恢复阻塞。
 - 目的：避免 `_autoResumeExplorePending` 或自动探索运行态残留时，脚本一直等待而不进入下一轮 140 分钟冥想。
 
 `lingverse-explore-helper.user.js` v2.19.0 新增：
@@ -270,6 +271,12 @@
 - 当 `autoRevive=false` 且 `isDead=true` 时，下一步固定为 `wait/dead`，方便测试者从快照判断是复活开关未开。
 - 目的：避免战死后页面残留旧遭遇或战斗 active 状态，导致脚本继续走 `handleEncounter` 而不是复活。
 
+`lingverse-explore-helper.user.js` v2.24.0 新增：
+
+- `isExploreStalledState(state, config, now)`：统一判断自动探索运行态和恢复挂起态是否超过 `stallTimeoutSeconds`。
+- `buildSnapshot` 在 `autoExplorePending=true` 时保留上次进度时间，不再每个 tick 认为“刚刚有进展”。
+- 效果：如果 `_autoResumeExplorePending` 因页面恢复函数没有成功重启探索而残留，挂机循环会按卡住判定回冥想。
+
 默认配置：
 
 - `enabled: false`
@@ -300,6 +307,7 @@
 - 神识可用且空闲 -> `startAutoExplore`
 - 自动探索运行/恢复挂起且神识低于阈值 -> `startMeditation`
 - 自动探索恢复挂起且页面提示神识不足/体力不足 -> `startMeditation`
+- 自动探索运行/恢复挂起超过卡住秒数 -> `startMeditation`
 - 恢复窗口：配置归一化为 0-3600 秒，快照包含 `resumeWindowSeconds`。
 - 商人/遭遇激活 -> `wait`
 - 自动迎战开启且遭遇激活 -> `handleEncounter`

@@ -181,6 +181,12 @@ v2.23.0 已完成：
 - `autoRevive` 未开启时死亡也会返回 `dead` 等待原因，方便快照和日志定位真实卡点。
 - 真实页面只读确认：`playerDead` / `_lastPlayerData.isDead` 是死亡来源，`handleRevive()` 调用 `/api/game/revive` 并清理死亡遮罩。
 
+v2.24.0 已完成：
+
+- 新增 `isExploreStalledState`，把自动探索运行态和恢复挂起态统一纳入卡住判定。
+- `buildSnapshot` 不再因为 `_autoResumeExplorePending=true` 且 `_autoExploreRunning=false` 就每个 tick 重置进度时间。
+- 真实页面只读确认：`_tryResumeAutoExploreAfterMerchant()` 会在 `_autoResumeExplorePending` 时延迟 1.5 秒重启探索；若 pending 残留，脚本现在能按卡住秒数回冥想。
+
 风险：
 
 - 50 倍遇怪失败会损失预扣神识。
@@ -288,6 +294,11 @@ v2.23.0 新增自动测试：
 - `decideAfkNextAction` 在 `isDead=true` 且残留 `encounterActive/combatActive` 时优先返回 `revive`。
 - `decideAfkNextAction` 在 `isDead=true` 且自动复活未开启时优先返回 `dead` 等待，而不是商人/奇遇/陌生道友等旧阻塞。
 
+v2.24.0 新增自动测试：
+
+- `isExploreStalledState` 对 `autoExploreRunning=true` 和 `autoExplorePending=true` 都会按 `stallTimeoutSeconds` 判定卡住。
+- 自动探索未运行且无恢复挂起时，即使进度时间很旧也不会判定卡住。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -296,7 +307,7 @@ v2.23.0 新增自动测试：
 
 ## 下一步建议
 
-1. 用户实测 v2.23.0 低境界 1 倍模式：开启自动迎战和遭遇前自动护道，但不开复活/丹/符。
+1. 用户实测 v2.24.0 低境界 1 倍模式：开启自动迎战和遭遇前自动护道，但不开复活/丹/符。
 2. 继续用真实挂机日志收集“自动探索停住”的事件原因，尤其记录护道失败 message。
 3. 富裕 50 倍模式继续小号测试：用符、复活、用丹都保持 opt-in，观察战斗结算后恢复窗口是否够用。
 4. 用真实奇遇链继续记录每个 adventureId 的选项、奖励和后续步骤。

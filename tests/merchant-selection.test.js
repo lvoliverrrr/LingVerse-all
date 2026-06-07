@@ -237,6 +237,37 @@ test('decideAfkNextAction returns to meditation when pending auto explore cannot
     });
 });
 
+test('isExploreStalledState treats resume pending as stallable auto exploration', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const now = 1_000_000;
+    const config = { stallTimeoutSeconds: 90 };
+
+    assert.equal(hooks.isExploreStalledState({
+        autoExploreRunning: true,
+        autoExplorePending: false,
+        lastExploreProgressAt: now - 90_000
+    }, config, now), true);
+
+    assert.equal(hooks.isExploreStalledState({
+        autoExploreRunning: false,
+        autoExplorePending: true,
+        lastExploreProgressAt: now - 90_000
+    }, config, now), true);
+
+    assert.equal(hooks.isExploreStalledState({
+        autoExploreRunning: false,
+        autoExplorePending: true,
+        lastExploreProgressAt: now - 30_000
+    }, config, now), false);
+
+    assert.equal(hooks.isExploreStalledState({
+        autoExploreRunning: false,
+        autoExplorePending: false,
+        lastExploreProgressAt: now - 90_000
+    }, config, now), false);
+});
+
 test('decideAfkNextAction waits while merchant or encounter blocks the page', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.23.0
+// @version      2.24.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.23.0';
+    const SCRIPT_VERSION = '2.24.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
 
@@ -373,6 +373,17 @@
 
     function getResumeWindowMs(config) {
         return normalizeAfkLoopConfig(config || {}).resumeWindowSeconds * 1000;
+    }
+
+    function isExploreStalledState(state, config, now) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const timeoutMs = cfg.stallTimeoutSeconds * 1000;
+        if (timeoutMs <= 0) return false;
+        const snapshot = state || {};
+        if (!snapshot.autoExploreRunning && !snapshot.autoExplorePending) return false;
+        const currentTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+        const lastProgressAt = toFiniteNumber(snapshot.lastExploreProgressAt, 0);
+        return lastProgressAt > 0 && (currentTime - lastProgressAt) >= timeoutMs;
     }
 
     function resolveAdventureChoiceIndex(adventureId, config) {
@@ -872,6 +883,7 @@
         resolveApiObject,
         normalizeAfkLoopConfig,
         getResumeWindowMs,
+        isExploreStalledState,
         decideAfkNextAction,
         selectCombatTalismans,
         buildEncounterKey,
@@ -2301,8 +2313,9 @@
             const autoExploreRunning = !!(_win._autoExploreRunning || toggle?.checked);
             const autoExplorePending = !!_win._autoResumeExplorePending;
             const autoExploreCount = toFiniteNumber(_win._autoExploreCount, 0);
+            const autoExploreActive = autoExploreRunning || autoExplorePending;
 
-            if (!autoExploreRunning || this.lastAutoExploreCount === null || autoExploreCount !== this.lastAutoExploreCount) {
+            if (!autoExploreActive || this.lastAutoExploreCount === null || autoExploreCount !== this.lastAutoExploreCount) {
                 this.lastExploreProgressAt = now;
                 this.lastAutoExploreCount = autoExploreCount;
             }
@@ -2341,8 +2354,11 @@
                 encounterText
             });
 
-            const stalledMs = cfg.stallTimeoutSeconds * 1000;
-            const exploreStalled = autoExploreRunning && stalledMs > 0 && (now - this.lastExploreProgressAt) >= stalledMs;
+            const exploreStalled = isExploreStalledState({
+                autoExploreRunning,
+                autoExplorePending,
+                lastExploreProgressAt: this.lastExploreProgressAt
+            }, cfg, now);
 
             return {
                 isMeditating: meditationStatus ? !!meditationStatus.isMeditating : !!player.isMeditating,

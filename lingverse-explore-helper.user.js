@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.15.0
+// @version      2.16.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.15.0';
+    const SCRIPT_VERSION = '2.16.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
 
@@ -245,6 +245,50 @@
         cfg.adventureChoiceIndex = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
         cfg.adventureChoiceMap = normalizeAdventureChoiceMap(cfg.adventureChoiceMap);
         return cfg;
+    }
+
+    function applyAfkPreset(config, presetName) {
+        const current = normalizeAfkLoopConfig(config || {});
+        const preserved = {
+            enabled: current.enabled,
+            adventureMode: current.adventureMode,
+            adventureChoiceIndex: current.adventureChoiceIndex,
+            adventureChoiceMap: current.adventureChoiceMap
+        };
+        const common = {
+            meditationMinutes: 140,
+            minSpirit: 20,
+            tickInterval: 30000,
+            stallTimeoutSeconds: 90,
+            talismanMaxKinds: 5,
+            talismanQuantity: 1,
+            nirvanaMinRarity: 4,
+            queueNirvanaPill: false
+        };
+
+        if (presetName === 'steady') {
+            return normalizeAfkLoopConfig(Object.assign({}, current, common, {
+                exploreMultiplier: 1,
+                autoRevive: false,
+                autoFight: false,
+                useTalismans: false,
+                useNirvanaPill: false,
+                autoDeclinePlayerEncounter: false
+            }, preserved));
+        }
+
+        if (presetName === 'rich') {
+            return normalizeAfkLoopConfig(Object.assign({}, current, common, {
+                exploreMultiplier: 50,
+                autoRevive: true,
+                autoFight: true,
+                useTalismans: true,
+                useNirvanaPill: true,
+                autoDeclinePlayerEncounter: true
+            }, preserved));
+        }
+
+        return current;
     }
 
     function resolveAdventureChoiceIndex(adventureId, config) {
@@ -648,7 +692,8 @@
         normalizeAdventureChoiceMap,
         formatAdventureChoiceMap,
         resolveAdventureChoiceIndex,
-        buildAfkDebugSnapshot
+        buildAfkDebugSnapshot,
+        applyAfkPreset
     });
 
     // 状态对象
@@ -1124,6 +1169,10 @@
                             <input type="checkbox" id="am-afk-enabled" ${CONFIG.afkLoop.enabled?'checked':''} style="cursor:pointer;">
                             <span style="font-size:13px;color:${text};">启用冥想-探索循环</span>
                         </label>
+                        <div style="display:flex;gap:8px;margin-bottom:8px;">
+                            <button id="am-afk-preset-steady" style="flex:1;padding:7px;background:#475569;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">套用稳妥1倍</button>
+                            <button id="am-afk-preset-rich" style="flex:1;padding:7px;background:#b45309;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">套用富裕50倍</button>
+                        </div>
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                             <div>
                                 <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">冥想分钟</div>
@@ -1262,6 +1311,8 @@
             $('#am-afk-start')?.addEventListener('click', () => AfkLoopManager.start());
             $('#am-afk-stop')?.addEventListener('click', () => AfkLoopManager.stop());
             $('#am-afk-copy-debug')?.addEventListener('click', () => AfkLoopManager.copyDebugSnapshot());
+            $('#am-afk-preset-steady')?.addEventListener('click', () => AfkLoopManager.applyPreset('steady'));
+            $('#am-afk-preset-rich')?.addEventListener('click', () => AfkLoopManager.applyPreset('rich'));
 
 
 
@@ -1911,6 +1962,15 @@
             UI.updateAfkState();
             this.lastDecisionKey = '';
             Logger.warn('自动挂机循环已停止');
+        },
+
+        applyPreset(name) {
+            readAfkLoopConfigFromUI();
+            CONFIG.afkLoop = applyAfkPreset(CONFIG.afkLoop, name);
+            saveConfig();
+            UI.updatePanelFromConfig();
+            const label = name === 'rich' ? '富裕50倍挂机预设' : '稳妥1倍挂机预设';
+            Logger.success(`已套用${label}，未自动启动挂机`);
         },
 
         async copyDebugSnapshot() {

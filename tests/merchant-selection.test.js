@@ -659,3 +659,68 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
     assert.equal(snapshot.history.logTail[29].message, '日志34');
     assert.equal(snapshot.page.url, 'https://ling.muge.info/game.html');
 });
+
+test('applyAfkPreset configures steady and rich AFK modes without enabling the loop', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const base = {
+        enabled: false,
+        meditationMinutes: 60,
+        minSpirit: 5,
+        exploreMultiplier: 20,
+        autoFight: true,
+        autoRevive: true,
+        useTalismans: true,
+        talismanMaxKinds: 3,
+        talismanQuantity: 2,
+        useNirvanaPill: true,
+        nirvanaMinRarity: 2,
+        queueNirvanaPill: true,
+        autoDeclinePlayerEncounter: true,
+        adventureMode: 'strategy',
+        adventureChoiceMap: { 456: 2 }
+    };
+
+    assert.deepEqual(toPlain(hooks.applyAfkPreset(base, 'steady')), {
+        enabled: false,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 1,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        autoRevive: false,
+        autoFight: false,
+        useTalismans: false,
+        talismanMaxKinds: 5,
+        talismanQuantity: 1,
+        useNirvanaPill: false,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: false,
+        autoDeclinePlayerEncounter: false,
+        adventureMode: 'strategy',
+        adventureChoiceIndex: 1,
+        adventureChoiceMap: { 456: 2 }
+    });
+
+    assert.deepEqual(toPlain(hooks.applyAfkPreset(base, 'rich')), {
+        enabled: false,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 50,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        autoRevive: true,
+        autoFight: true,
+        useTalismans: true,
+        talismanMaxKinds: 5,
+        talismanQuantity: 1,
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: false,
+        autoDeclinePlayerEncounter: true,
+        adventureMode: 'strategy',
+        adventureChoiceIndex: 1,
+        adventureChoiceMap: { 456: 2 }
+    });
+});

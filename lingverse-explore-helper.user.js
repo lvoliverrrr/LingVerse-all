@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.27.0
+// @version      2.28.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.27.0';
+    const SCRIPT_VERSION = '2.28.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -914,6 +914,18 @@
         };
     }
 
+    function buildAdventureStrategyHints(adventure) {
+        const source = adventure && typeof adventure === 'object' ? adventure : {};
+        const id = source.id || null;
+        if (id === null || typeof id === 'undefined' || id === '') return [];
+        const choices = Array.isArray(source.choices) ? source.choices : [];
+        return choices.map((choice, index) => ({
+            choiceIndex: index + 1,
+            choiceText: sanitizeDebugText(choice, DEBUG_SUMMARY_TEXT_LIMIT),
+            mapLine: `${id}=${index + 1}`
+        }));
+    }
+
     function buildAfkDebugSummary(debugSnapshot) {
         const full = debugSnapshot || {};
         const page = full.page && typeof full.page === 'object' ? full.page : {};
@@ -972,7 +984,8 @@
                 mode: String(adventure.mode || ''),
                 resolvedChoiceIndex: numberOrNull(adventure.resolvedChoiceIndex),
                 choices: (Array.isArray(adventure.choices) ? adventure.choices : [])
-                    .map(choice => sanitizeDebugText(choice, DEBUG_SUMMARY_TEXT_LIMIT))
+                    .map(choice => sanitizeDebugText(choice, DEBUG_SUMMARY_TEXT_LIMIT)),
+                strategyHints: buildAdventureStrategyHints(adventure)
             },
             config: {
                 meditationMinutes: numberOrNull(config.meditationMinutes),

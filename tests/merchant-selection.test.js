@@ -1230,6 +1230,11 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
     assert.equal(summary.adventure.id, 999);
     assert.equal(summary.adventure.choices.length, 3);
     assert.equal(summary.adventure.choices[2].endsWith('...'), true);
+    assert.deepEqual(summary.adventure.strategyHints, [
+        { choiceIndex: 1, choiceText: '接受试炼', mapLine: '999=1' },
+        { choiceIndex: 2, choiceText: '绕路离开', mapLine: '999=2' },
+        { choiceIndex: 3, choiceText: summary.adventure.choices[2], mapLine: '999=3' }
+    ]);
     assert.deepEqual(summary.automation.nirvanaPill, {
         shouldUse: true,
         reason: 'pill-ready',

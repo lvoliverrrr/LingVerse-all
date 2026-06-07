@@ -302,6 +302,14 @@
 - `fightEncounter(cfg)` 触发迎战后调用 `schedulePostInteractionResume(cfg)`，按本轮归一化配置中的 `resumeWindowSeconds` 继续调度下一次检查。
 - 目的：富裕 50 倍探索遇怪后，自动用符/迎战/结算完成时能在恢复窗口内主动回到探索，而不是等常规 tick 或被旧状态误判。
 
+`lingverse-explore-helper.user.js` v2.28.0 新增：
+
+- `buildAfkDebugSummary` 在 `adventure.strategyHints` 中输出当前奇遇每个选项的策略候选：
+  - `choiceIndex`：界面选项序号，从 1 开始。
+  - `choiceText`：脱敏/截断后的选项文本。
+  - `mapLine`：可直接填入策略表的 `adventureId=choiceIndex` 行。
+- 目的：测试者遇到未知奇遇时，只要复制摘要，就能快速把可选策略行沉淀到 `adventureChoiceMap`，减少手工整理成本。
+
 默认配置：
 
 - `enabled: false`

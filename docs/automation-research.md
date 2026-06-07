@@ -41,6 +41,7 @@
 - v2.23.0 只读死亡状态：页面同时暴露 `playerDead` 和 `_lastPlayerData.isDead`；`handleRevive()` 会调用 `/api/game/revive`、隐藏死亡遮罩、刷新玩家信息和地图。
 - v2.24.0 只读恢复挂起逻辑：`_tryResumeAutoExploreAfterMerchant()` 会在 `_autoResumeExplorePending` 时清标记并延迟 1500ms 调 `startAutoExplore()`；若 pending 残留，辅助脚本需要按卡住超时兜底。
 - v2.42.0 只读状态：真实页仍显示“灵界已更新新版本，请点此刷新 获取最新内容”；helper 已注入（`window._autoMapInited=true`），但真实页需要刷新/重载扩展后才会加载本地最新版；页面神识 `3/2758`、位置沧澜港、可见“冥想修炼/探索(-4神识)/自动/万物图鉴”等入口。本次只读观察未点击探索、商人、战斗、护道、复活、用符或用丹。
+- v2.43.0 只读库存：`/api/game/inventory` 读到 184 项；当前相关资源包含 5 类战斗符箓 `ancient/ghost/thunder/fire/shield`，以及 `pill_nirvana_*` 九转还魂丹；没有读到 `bp_pill_rebirth_*` 涅槃重生丹。因此富裕模式应报告“用符 5/5类，涅槃丹无史诗+”，并继续避免把回血丹误当作五行通灵丹。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -430,6 +431,14 @@
 - `window.LingVerseAutoMapVersion` 和测试 hook 暴露当前版本，便于用 Agent Browser CLI 只读核对真实页面是否加载最新版。
 - 阶段报告不参与决策，不调用任何游戏 API，不触发资源动作。
 
+`lingverse-explore-helper.user.js` v2.43.0 新增：
+
+- `buildAfkResourcePreflight(items, config, player, now, usage)` 生成 `lingverse-afk-resource-preflight/v1`，只读分析富裕模式资源。
+- 战斗符箓预检复用 `selectCombatTalismans`，按 `talismanMaxKinds`、每类数量和 family 顺序输出可用 family、选中符箓和不足 warning。
+- 涅槃重生丹预检复用 `resolveNirvanaRebirthPillAttempt`，继续只匹配 `bp_pill_rebirth_*` 或明确“五行通灵/涅槃重生丹”的 pill，不匹配 `pill_nirvana_*` 九转还魂丹。
+- 复制状态/复制摘要在开启 `useTalismans` 或 `useNirvanaPill` 时只读一次背包；读取失败只写 warning，不影响复制，不调用 `useItem`。
+- 调试摘要新增 `automation.resourcePreflight`；可读状态报告新增“预检:”行和预检 warning。
+
 默认配置：
 
 - `enabled: false`
@@ -491,7 +500,7 @@
   - 恢复窗口内神识足够 -> `startAutoExplore`；神识不足 -> `startMeditation`。
 - 调试摘要：
   - `buildAfkDebugSummary` 去掉页面 URL 的 query/hash，脱敏常见 token/session/key 参数。
-  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞、阶段/剩余时间、高风险开关、用丹尝试、用符尝试、迎战尝试和护道尝试。
+  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞、阶段/剩余时间、高风险开关、富裕资源预检、用丹尝试、用符尝试、迎战尝试和护道尝试。
 
 ## 待继续研究
 

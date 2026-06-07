@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.42.0
+// @version      2.43.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.42.0';
+    const SCRIPT_VERSION = '2.43.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -1082,6 +1082,167 @@
             .slice(0, maxKinds);
     }
 
+    function normalizeAfkResourcePreflight(preflight) {
+        const raw = preflight && typeof preflight === 'object' ? preflight : {};
+        const talismans = raw.talismans && typeof raw.talismans === 'object' ? raw.talismans : {};
+        const nirvanaPill = raw.nirvanaPill && typeof raw.nirvanaPill === 'object' ? raw.nirvanaPill : {};
+        const selectedTalismans = Array.isArray(talismans.selectedTalismans)
+            ? talismans.selectedTalismans.map(normalizeCombatTalismanItem)
+            : [];
+        const pill = nirvanaPill.pill && typeof nirvanaPill.pill === 'object' ? nirvanaPill.pill : null;
+        const warnings = Array.isArray(raw.warnings) ? raw.warnings.map(item => String(item || '')).filter(Boolean) : [];
+        return {
+            schema: 'lingverse-afk-resource-preflight/v1',
+            inventoryKnown: !!raw.inventoryKnown,
+            enabled: !!raw.enabled,
+            summaryText: String(raw.summaryText || ''),
+            warningCount: warnings.length,
+            warnings,
+            talismans: {
+                enabled: !!talismans.enabled,
+                desiredKinds: optionalNumberOrNull(talismans.desiredKinds),
+                availableKinds: optionalNumberOrNull(talismans.availableKinds),
+                ready: !!talismans.ready,
+                reason: String(talismans.reason || ''),
+                selectedFamilies: Array.isArray(talismans.selectedFamilies)
+                    ? talismans.selectedFamilies.map(item => String(item || '')).filter(Boolean)
+                    : selectedTalismans.map(item => item.family).filter(Boolean),
+                selectedTalismans
+            },
+            nirvanaPill: {
+                enabled: !!nirvanaPill.enabled,
+                ready: !!nirvanaPill.ready,
+                reason: String(nirvanaPill.reason || ''),
+                minRarity: optionalNumberOrNull(nirvanaPill.minRarity),
+                pill: pill ? {
+                    itemId: pill.itemId ?? pill.id ?? null,
+                    templateId: String(pill.templateId || ''),
+                    name: String(pill.name || ''),
+                    rarity: optionalNumberOrNull(pill.rarity),
+                    quantity: optionalNumberOrNull(pill.quantity)
+                } : null,
+                activeBuffGrade: optionalNumberOrNull(nirvanaPill.activeBuffGrade),
+                activeBuffExpire: optionalNumberOrNull(nirvanaPill.activeBuffExpire)
+            }
+        };
+    }
+
+    function formatNirvanaPreflightStatus(attempt, cfg) {
+        if (!cfg.useNirvanaPill) return '关闭';
+        if (!attempt) return '未读取';
+        if (attempt.reason === 'active-five-root-buff') return '已有五行通灵';
+        if (attempt.reason === 'pill-ready' && attempt.pill) return `${formatRarityThreshold(attempt.pill.rarity)}可用`;
+        if (attempt.reason === 'budget-exhausted') return '上限已到';
+        if (attempt.reason === 'no-matching-pill') return `无${formatRarityThreshold(cfg.nirvanaMinRarity)}`;
+        return attempt.reason || '未知';
+    }
+
+    function buildAfkResourcePreflight(items, config, player, now, usage) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const inventoryKnown = Array.isArray(items);
+        const enabled = !!(cfg.useTalismans || cfg.useNirvanaPill);
+        if (!enabled) {
+            return normalizeAfkResourcePreflight({
+                inventoryKnown,
+                enabled: false,
+                summaryText: '资源预检: 富裕资源关闭',
+                talismans: {
+                    enabled: false,
+                    desiredKinds: cfg.talismanMaxKinds,
+                    availableKinds: 0,
+                    ready: true,
+                    reason: 'disabled',
+                    selectedTalismans: []
+                },
+                nirvanaPill: {
+                    enabled: false,
+                    ready: true,
+                    reason: 'disabled',
+                    minRarity: cfg.nirvanaMinRarity,
+                    pill: null
+                }
+            });
+        }
+
+        if (!inventoryKnown) {
+            return normalizeAfkResourcePreflight({
+                inventoryKnown: false,
+                enabled: true,
+                summaryText: '资源预检: 未读取背包',
+                warnings: ['未读取背包，无法预检富裕模式资源'],
+                talismans: {
+                    enabled: cfg.useTalismans,
+                    desiredKinds: cfg.talismanMaxKinds,
+                    availableKinds: null,
+                    ready: false,
+                    reason: 'inventory-unavailable',
+                    selectedTalismans: []
+                },
+                nirvanaPill: {
+                    enabled: cfg.useNirvanaPill,
+                    ready: false,
+                    reason: 'inventory-unavailable',
+                    minRarity: cfg.nirvanaMinRarity,
+                    pill: null
+                }
+            });
+        }
+
+        const selectedTalismans = selectCombatTalismans(items, {
+            maxKinds: cfg.talismanMaxKinds,
+            quantityPerKind: cfg.talismanQuantity,
+            familyOrder: cfg.talismanFamilyOrder
+        });
+        const talismanReason = !cfg.useTalismans
+            ? 'disabled'
+            : selectedTalismans.length > 0 ? 'talismans-ready' : 'no-usable-talismans';
+        const currentTime = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+        const pillAttempt = resolveNirvanaRebirthPillAttempt(player || {}, items, cfg, currentTime, usage || {});
+        const warnings = [];
+        if (cfg.useTalismans && selectedTalismans.length === 0) {
+            warnings.push('未找到可用战斗符箓，会跳过用符');
+        } else if (cfg.useTalismans && selectedTalismans.length < cfg.talismanMaxKinds) {
+            warnings.push(`战斗符箓不足${cfg.talismanMaxKinds}类，会按现有${selectedTalismans.length}类用符`);
+        }
+        if (cfg.useNirvanaPill && pillAttempt.reason === 'no-matching-pill') {
+            warnings.push(`未找到${formatRarityThreshold(cfg.nirvanaMinRarity)}涅槃重生丹，会跳过用丹`);
+        }
+        if (cfg.useNirvanaPill && pillAttempt.reason === 'budget-exhausted') {
+            warnings.push('涅槃重生丹次数已到本轮上限');
+        }
+
+        const summaryText = `资源预检: 用符 ${cfg.useTalismans ? `${selectedTalismans.length}/${cfg.talismanMaxKinds}类` : '关闭'} · 涅槃丹 ${formatNirvanaPreflightStatus(pillAttempt, cfg)}`;
+        return normalizeAfkResourcePreflight({
+            inventoryKnown: true,
+            enabled: true,
+            summaryText,
+            warnings,
+            talismans: {
+                enabled: cfg.useTalismans,
+                desiredKinds: cfg.talismanMaxKinds,
+                availableKinds: selectedTalismans.length,
+                ready: !cfg.useTalismans || selectedTalismans.length > 0,
+                reason: talismanReason,
+                selectedFamilies: selectedTalismans.map(item => item.family),
+                selectedTalismans
+            },
+            nirvanaPill: {
+                enabled: cfg.useNirvanaPill,
+                ready: !cfg.useNirvanaPill || pillAttempt.reason === 'pill-ready' || pillAttempt.reason === 'active-five-root-buff',
+                reason: pillAttempt.reason,
+                minRarity: pillAttempt.minRarity,
+                pill: pillAttempt.pill,
+                activeBuffGrade: pillAttempt.activeBuffGrade,
+                activeBuffExpire: pillAttempt.activeBuffExpire
+            }
+        });
+    }
+
+    function shouldReadAfkInventoryPreflight(config) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        return !!(cfg.useTalismans || cfg.useNirvanaPill);
+    }
+
     function normalizeEncounterText(value) {
         return String(value || '')
             .split(/\n+/)
@@ -1731,6 +1892,44 @@
         };
     }
 
+    function summarizeAfkResourcePreflight(preflight) {
+        const normalized = normalizeAfkResourcePreflight(preflight);
+        return {
+            schema: 'lingverse-afk-resource-preflight/v1',
+            inventoryKnown: !!normalized.inventoryKnown,
+            enabled: !!normalized.enabled,
+            summaryText: sanitizeDebugText(normalized.summaryText, DEBUG_SUMMARY_TEXT_LIMIT),
+            warningCount: normalized.warningCount,
+            warnings: normalized.warnings.map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT)),
+            talismans: {
+                enabled: !!normalized.talismans.enabled,
+                desiredKinds: optionalNumberOrNull(normalized.talismans.desiredKinds),
+                availableKinds: optionalNumberOrNull(normalized.talismans.availableKinds),
+                ready: !!normalized.talismans.ready,
+                reason: sanitizeDebugText(normalized.talismans.reason, 60),
+                selectedFamilies: normalized.talismans.selectedFamilies.map(item => sanitizeDebugText(item, 40)),
+                selectedTalismans: normalized.talismans.selectedTalismans.map(item => ({
+                    templateId: sanitizeDebugText(item.templateId, 80),
+                    name: sanitizeDebugName(item.name, 80),
+                    family: sanitizeDebugText(item.family, 40),
+                    rarity: optionalNumberOrNull(item.rarity),
+                    quantity: optionalNumberOrNull(item.quantity)
+                }))
+            },
+            nirvanaPill: {
+                enabled: !!normalized.nirvanaPill.enabled,
+                ready: !!normalized.nirvanaPill.ready,
+                reason: sanitizeDebugText(normalized.nirvanaPill.reason, 60),
+                minRarity: optionalNumberOrNull(normalized.nirvanaPill.minRarity),
+                pillName: sanitizeDebugName(normalized.nirvanaPill.pill && normalized.nirvanaPill.pill.name, 80),
+                pillTemplateId: sanitizeDebugText(normalized.nirvanaPill.pill && normalized.nirvanaPill.pill.templateId, 80),
+                pillRarity: optionalNumberOrNull(normalized.nirvanaPill.pill && normalized.nirvanaPill.pill.rarity),
+                activeBuffGrade: optionalNumberOrNull(normalized.nirvanaPill.activeBuffGrade),
+                activeBuffExpire: optionalNumberOrNull(normalized.nirvanaPill.activeBuffExpire)
+            }
+        };
+    }
+
     function summarizeGuardianAttempt(attempt) {
         const normalized = normalizeGuardianAttempt(attempt);
         const guardian = normalized.guardian || normalizeGuardianConfig({});
@@ -1829,6 +2028,7 @@
                 fight: summarizeEncounterFightAttempt(automation.fight),
                 guardian: summarizeGuardianAttempt(automation.guardian),
                 waitDiagnosis: summarizeAfkWaitingDiagnosis(automation.waitDiagnosis),
+                resourcePreflight: summarizeAfkResourcePreflight(automation.resourcePreflight),
                 resourceUsage: normalizeAfkResourceUsage(automation.resourceUsage)
             },
             adventure: {
@@ -2150,6 +2350,16 @@
         if (automation.waitDiagnosis && automation.waitDiagnosis.active && automation.waitDiagnosis.message) {
             lines.push(`诊断: ${sanitizeDebugText(automation.waitDiagnosis.message, DEBUG_SUMMARY_TEXT_LIMIT)}`);
         }
+        const preflight = automation.resourcePreflight && typeof automation.resourcePreflight === 'object'
+            ? automation.resourcePreflight
+            : null;
+        if (preflight && (preflight.inventoryKnown || preflight.warningCount > 0)) {
+            lines.push(`预检: ${sanitizeDebugText(preflight.summaryText || '', DEBUG_SUMMARY_TEXT_LIMIT)}`);
+            (Array.isArray(preflight.warnings) ? preflight.warnings : [])
+                .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
+                .filter(Boolean)
+                .forEach(item => lines.push(`! ${item}`));
+        }
         lines.push(`自动化: 护道 ${sanitizeDebugText(automation.guardian && automation.guardian.reason || 'unknown', 60)} · 用符 ${sanitizeDebugText(automation.talismans && automation.talismans.reason || 'unknown', 60)} · 迎战 ${sanitizeDebugText(automation.fight && automation.fight.reason || 'unknown', 60)} · 用丹 ${sanitizeDebugText(automation.nirvanaPill && automation.nirvanaPill.reason || 'unknown', 60)}`);
         if (strategyImportText) {
             lines.push(`奇遇策略: ${strategyImportText.split('\n').join(' / ')}`);
@@ -2222,6 +2432,13 @@
                     debugContext.decisionHistory,
                     cfg,
                     resolveAfkDiagnosisNow(debugContext.now, debugContext.capturedAt)
+                ),
+                resourcePreflight: buildAfkResourcePreflight(
+                    debugContext.inventoryItems,
+                    cfg,
+                    snapshot,
+                    debugContext.now,
+                    snapshot.resourceUsage
                 ),
                 resourceUsage: normalizeAfkResourceUsage(snapshot.resourceUsage)
             },
@@ -2298,6 +2515,8 @@
         buildAfkConfigPack,
         resolveAfkConfigPackImport,
         selectCombatTalismans,
+        buildAfkResourcePreflight,
+        shouldReadAfkInventoryPreflight,
         buildEncounterKey,
         shouldUseCombatTalismansForEncounter,
         resolveCombatTalismanAttempt,
@@ -3860,11 +4079,13 @@
                 const snapshot = await this.buildSnapshot(now, cfg);
                 const decision = decideAfkNextAction(snapshot, cfg, now);
                 this.recordDecision(decision, snapshot, now);
+                const inventoryItems = await this.readInventoryForPreflight(cfg);
                 const debugSnapshot = buildAfkDebugSnapshot(snapshot, cfg, decision, {
                     capturedAt: new Date(now).toISOString(),
                     page: { title: document.title || '', url: location.href || '' },
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
+                    inventoryItems,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
                     fightAttempt: this.lastFightAttempt,
@@ -3886,11 +4107,13 @@
                 const snapshot = await this.buildSnapshot(now, cfg);
                 const decision = decideAfkNextAction(snapshot, cfg, now);
                 this.recordDecision(decision, snapshot, now);
+                const inventoryItems = await this.readInventoryForPreflight(cfg);
                 const debugSnapshot = buildAfkDebugSnapshot(snapshot, cfg, decision, {
                     capturedAt: new Date(now).toISOString(),
                     page: { title: document.title || '', url: location.href || '' },
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
+                    inventoryItems,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
                     fightAttempt: this.lastFightAttempt,
@@ -3902,6 +4125,20 @@
             } catch (e) {
                 Logger.warn(`复制挂机状态报告失败: ${e.message || e}`);
             }
+        },
+
+        async readInventoryForPreflight(cfg) {
+            if (!shouldReadAfkInventoryPreflight(cfg)) return null;
+            try {
+                const res = await API.getInventory();
+                if (res && res.code === 200 && res.data) {
+                    return res.data.items || res.data || [];
+                }
+                Logger.warn(`读取富裕资源预检失败: ${res && res.message || '未知错误'}`);
+            } catch (e) {
+                Logger.warn(`读取富裕资源预检失败: ${e.message || e}`);
+            }
+            return null;
         },
 
         async copyText(text) {

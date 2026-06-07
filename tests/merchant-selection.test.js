@@ -666,6 +666,73 @@ test('resolveNirvanaRebirthPillAttempt explains rich-mode pill use decisions', (
     });
 });
 
+test('buildAfkResourcePreflight reports rich-mode inventory readiness', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkResourcePreflight, 'function');
+
+    const realLikeInventory = [
+        { id: 1, templateId: 'pill_nirvana_4', name: '史诗九转还魂丹', type: 'pill', rarity: 4, quantity: 3 },
+        { id: 2, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', type: 'misc', rarity: 4, quantity: 1 },
+        { id: 3, templateId: 'bp_talisman_ghost_2', name: '优良冥鬼诅咒符', type: 'misc', rarity: 2, quantity: 1 },
+        { id: 4, templateId: 'talisman_thunder_1', name: '普通天雷符', type: 'misc', rarity: 1, quantity: 1 },
+        { id: 5, templateId: 'talisman_fire_1', name: '普通烈火符', type: 'misc', rarity: 1, quantity: 2 },
+        { id: 6, templateId: 'talisman_shield_1', name: '普通金刚符', type: 'misc', rarity: 1, quantity: 3 },
+        { id: 7, templateId: 'shenxing_talisman', name: '神行符', type: 'misc', rarity: 2, quantity: 99 }
+    ];
+
+    const preflight = toPlain(hooks.buildAfkResourcePreflight(realLikeInventory, {
+        useTalismans: true,
+        talismanMaxKinds: 5,
+        talismanQuantity: 1,
+        talismanFamilyOrder: 'ancient,ghost,thunder,fire,shield',
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4
+    }, {}, 1_000_000));
+
+    assert.deepEqual(preflight, {
+        schema: 'lingverse-afk-resource-preflight/v1',
+        inventoryKnown: true,
+        enabled: true,
+        summaryText: '资源预检: 用符 5/5类 · 涅槃丹 无史诗+',
+        warningCount: 1,
+        warnings: ['未找到史诗+涅槃重生丹，会跳过用丹'],
+        talismans: {
+            enabled: true,
+            desiredKinds: 5,
+            availableKinds: 5,
+            ready: true,
+            reason: 'talismans-ready',
+            selectedFamilies: ['ancient', 'ghost', 'thunder', 'fire', 'shield'],
+            selectedTalismans: [
+                { itemId: 2, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 },
+                { itemId: 3, templateId: 'bp_talisman_ghost_2', name: '优良冥鬼诅咒符', family: 'ghost', rarity: 2, quantity: 1 },
+                { itemId: 4, templateId: 'talisman_thunder_1', name: '普通天雷符', family: 'thunder', rarity: 1, quantity: 1 },
+                { itemId: 5, templateId: 'talisman_fire_1', name: '普通烈火符', family: 'fire', rarity: 1, quantity: 1 },
+                { itemId: 6, templateId: 'talisman_shield_1', name: '普通金刚符', family: 'shield', rarity: 1, quantity: 1 }
+            ]
+        },
+        nirvanaPill: {
+            enabled: true,
+            ready: false,
+            reason: 'no-matching-pill',
+            minRarity: 4,
+            pill: null,
+            activeBuffGrade: null,
+            activeBuffExpire: null
+        }
+    });
+
+    const missingInventory = toPlain(hooks.buildAfkResourcePreflight(null, {
+        useTalismans: true,
+        useNirvanaPill: true
+    }, {}, 1_000_000));
+    assert.equal(missingInventory.inventoryKnown, false);
+    assert.equal(missingInventory.summaryText, '资源预检: 未读取背包');
+    assert.equal(missingInventory.warningCount, 1);
+});
+
 test('decideAfkNextAction handles encounters when auto fight or guardian hire is enabled', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -1828,7 +1895,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.42.0',
+        scriptVersion: '2.43.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         page: {
             title: '灵界 LingVerse - 修仙世界',
@@ -1869,7 +1936,14 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             guardian: { reason: 'hire-failed', failureMessage: '余额不足' },
             talismans: { reason: 'completed', selectedCount: 3, usedKinds: 3, failedKinds: 0 },
             fight: { reason: 'not-attempted', source: '', failureMessage: '' },
-            nirvanaPill: { reason: 'budget-exhausted', minRarity: 4 }
+            nirvanaPill: { reason: 'budget-exhausted', minRarity: 4 },
+            resourcePreflight: {
+                inventoryKnown: true,
+                enabled: true,
+                summaryText: '资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
+                warningCount: 2,
+                warnings: ['战斗符箓不足5类，会按现有3类用符', '未找到史诗+涅槃重生丹，会跳过用丹']
+            }
         },
         adventure: {
             id: 456,
@@ -1895,12 +1969,12 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
     assert.deepEqual(toPlain(report), {
         schema: 'lingverse-afk-status-report/v1',
         sourceSchema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.42.0',
+        scriptVersion: '2.43.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         headline: '挂机状态 · 等待 · 复活次数已到本轮上限',
         text: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.42.0',
+            '版本: 2.43.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -1910,12 +1984,15 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
             '! 自动复活已到本轮上限',
+            '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
+            '! 战斗符箓不足5类，会按现有3类用符',
+            '! 未找到史诗+涅槃重生丹，会跳过用丹',
             '自动化: 护道 hire-failed · 用符 completed · 迎战 not-attempted · 用丹 budget-exhausted',
             '奇遇策略: 456=1 / 456=2'
         ].join('\n'),
         lines: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.42.0',
+            '版本: 2.43.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -1925,6 +2002,9 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
             '! 自动复活已到本轮上限',
+            '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
+            '! 战斗符箓不足5类，会按现有3类用符',
+            '! 未找到史诗+涅槃重生丹，会跳过用丹',
             '自动化: 护道 hire-failed · 用符 completed · 迎战 not-attempted · 用丹 budget-exhausted',
             '奇遇策略: 456=1 / 456=2'
         ]
@@ -2210,7 +2290,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.42.0',
+        scriptVersion: '2.43.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

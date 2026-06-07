@@ -1790,7 +1790,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.35.0',
+        scriptVersion: '2.36.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {
@@ -1852,4 +1852,61 @@ test('AFK config packs export normalized settings and import safely', () => {
     assert.deepEqual(imported.guardian.priority, ['normal', 'incarnation', 'body']);
     assert.deepEqual(imported.importWarnings, ['导入时已关闭挂机启动状态']);
     assert.equal(imported.riskStatus.enabledRiskCount, 7);
+});
+
+test('mergeAdventureStrategyImport adds replay hints without enabling AFK', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.mergeAdventureStrategyImport, 'function');
+
+    const merged = hooks.mergeAdventureStrategyImport({
+        enabled: true,
+        adventureMode: 'pause',
+        adventureChoiceMap: { 111: 1, 456: 1 }
+    }, {
+        schema: 'lingverse-afk-issue-replay/v1',
+        strategyImportText: '456=2\n789=1\ninvalid=x'
+    });
+
+    assert.deepEqual(toPlain(merged), {
+        schema: 'lingverse-afk-adventure-strategy-import/v1',
+        afkLoop: {
+            enabled: false,
+            meditationMinutes: 140,
+            minSpirit: 20,
+            exploreMultiplier: 1,
+            tickInterval: 30000,
+            stallTimeoutSeconds: 90,
+            resumeWindowSeconds: 60,
+            autoRevive: false,
+            autoFight: false,
+            autoHireGuardian: false,
+            useTalismans: false,
+            talismanMaxKinds: 5,
+            talismanQuantity: 1,
+            talismanFamilyOrder: '',
+            useNirvanaPill: false,
+            nirvanaMinRarity: 4,
+            queueNirvanaPill: false,
+            autoDeclinePlayerEncounter: false,
+            adventureMode: 'strategy',
+            adventureChoiceIndex: 1,
+            adventureChoiceMap: { 111: 1, 456: 2, 789: 1 }
+        },
+        importedCount: 2,
+        overwrittenCount: 1,
+        importLines: ['456=2', '789=1'],
+        warnings: ['导入策略时已关闭挂机启动状态']
+    });
+
+    const fromSummary = hooks.mergeAdventureStrategyImport({}, {
+        schema: 'lingverse-afk-debug-summary/v1',
+        adventure: {
+            strategyHints: [
+                { mapLine: '999=3' }
+            ]
+        }
+    });
+    assert.deepEqual(toPlain(fromSummary.afkLoop.adventureChoiceMap), { 999: 3 });
 });

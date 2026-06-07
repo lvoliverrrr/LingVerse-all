@@ -377,6 +377,12 @@
 - 面板新增“配置包”区：复制当前配置包、导入配置包、清空输入输出。导入不调用游戏 API，不自动启动挂机。
 - 配置包服务测试协作：测试者可以把“低境界护道”“富裕 50 倍”“某个奇遇策略表”等固定组合直接发回，开发侧可复现同一组开关。
 
+`lingverse-explore-helper.user.js` v2.36.0 新增：
+
+- `mergeAdventureStrategyImport(config, source)` 从摘要回放、调试摘要或纯文本里提取奇遇策略行，合并进 `adventureChoiceMap`。
+- 面板“摘要回放”区新增“导入策略”，测试者粘贴反馈后可以把未知奇遇的 `strategyHints.mapLine` 直接沉淀为策略表。
+- 导入策略时会关闭 `enabled`，仅保存本地配置，不调用游戏 API，不触发购买、探索、战斗、护道、复活、用符或用丹。
+
 默认配置：
 
 - `enabled: false`

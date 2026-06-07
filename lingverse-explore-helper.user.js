@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.35.0
+// @version      2.36.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.35.0';
+    const SCRIPT_VERSION = '2.36.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -1491,6 +1491,65 @@
         return lines.join('\n');
     }
 
+    function extractAdventureStrategyImportText(source) {
+        let parsed = source;
+        if (typeof source === 'string') {
+            const text = source.trim();
+            if (!text) return '';
+            try {
+                parsed = JSON.parse(text);
+            } catch (e) {
+                return text;
+            }
+        }
+        if (!parsed || typeof parsed !== 'object') return '';
+        if (parsed.strategyImportText) return String(parsed.strategyImportText || '');
+        if (parsed.adventure && Array.isArray(parsed.adventure.strategyHints)) {
+            return buildReplayStrategyImportText(parsed);
+        }
+        if (parsed.schema && parsed.schema !== 'lingverse-afk-debug-summary/v1') {
+            try {
+                return buildReplayStrategyImportText(buildAfkDebugSummary(parsed));
+            } catch (e) {}
+        }
+        return '';
+    }
+
+    function mergeAdventureStrategyImport(config, source) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const importedMap = normalizeAdventureChoiceMap(extractAdventureStrategyImportText(source));
+        const currentMap = normalizeAdventureChoiceMap(cfg.adventureChoiceMap);
+        const importLines = [];
+        let overwrittenCount = 0;
+
+        Object.keys(importedMap).forEach(key => {
+            if (Object.prototype.hasOwnProperty.call(currentMap, key) && currentMap[key] !== importedMap[key]) {
+                overwrittenCount += 1;
+            }
+            currentMap[key] = importedMap[key];
+            importLines.push(`${key}=${importedMap[key]}`);
+        });
+
+        const warnings = [];
+        if (cfg.enabled) {
+            cfg.enabled = false;
+            warnings.push('导入策略时已关闭挂机启动状态');
+        }
+        if (importLines.length > 0) {
+            cfg.adventureMode = 'strategy';
+        }
+        cfg.adventureChoiceMap = currentMap;
+
+        return {
+            schema: 'lingverse-afk-adventure-strategy-import/v1',
+            afkLoop: cfg,
+            importedCount: importLines.length,
+            overwrittenCount,
+            importLines,
+            warnings
+        };
+    }
+
     function buildAfkIssueReplay(source) {
         const parsed = parseAfkIssueReplaySource(source);
         const summary = parsed && parsed.schema === 'lingverse-afk-debug-summary/v1'
@@ -1672,6 +1731,7 @@
         buildAfkDebugSnapshot,
         buildAfkDebugSummary,
         buildAfkIssueReplay,
+        mergeAdventureStrategyImport,
         applyAfkPreset
     });
 
@@ -2299,6 +2359,7 @@
                                 <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};font-weight:bold;">摘要回放</div>
                                 <div style="display:flex;gap:6px;">
                                     <button id="am-afk-replay-run" style="padding:5px 8px;background:#334155;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">回放</button>
+                                    <button id="am-afk-replay-import-strategy" style="padding:5px 8px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;">导入策略</button>
                                     <button id="am-afk-replay-clear" style="padding:5px 8px;background:transparent;color:${isDark?'#94a3b8':'#64748b'};border:1px solid ${border};border-radius:4px;cursor:pointer;font-size:11px;">清空</button>
                                 </div>
                             </div>
@@ -2349,6 +2410,7 @@
             $('#am-afk-config-import')?.addEventListener('click', () => this.importAfkConfigPack());
             $('#am-afk-config-clear')?.addEventListener('click', () => this.clearAfkConfigPack());
             $('#am-afk-replay-run')?.addEventListener('click', () => this.renderAfkIssueReplay());
+            $('#am-afk-replay-import-strategy')?.addEventListener('click', () => this.importAdventureStrategyFromReplay());
             $('#am-afk-replay-clear')?.addEventListener('click', () => this.clearAfkIssueReplay());
 
 
@@ -2655,6 +2717,29 @@
             } catch (e) {
                 outputEl.textContent = `摘要解析失败: ${e.message || e}`;
                 Logger.warn(`挂机摘要回放失败: ${e.message || e}`);
+            }
+        },
+
+        importAdventureStrategyFromReplay() {
+            const inputEl = $('#am-afk-replay-input');
+            const outputEl = $('#am-afk-replay-output');
+            if (!inputEl) return;
+            try {
+                const merged = mergeAdventureStrategyImport(CONFIG.afkLoop, inputEl.value);
+                CONFIG.afkLoop = merged.afkLoop;
+                saveConfig();
+                this.updatePanelFromConfig();
+                if (outputEl) {
+                    outputEl.textContent = [
+                        `已导入奇遇策略 ${merged.importedCount} 条，覆盖 ${merged.overwrittenCount} 条`,
+                        ...merged.importLines,
+                        ...merged.warnings.map(item => `! ${item}`)
+                    ].join('\n');
+                }
+                Logger.success(`已导入奇遇策略 ${merged.importedCount} 条`);
+            } catch (e) {
+                if (outputEl) outputEl.textContent = `奇遇策略导入失败: ${e.message || e}`;
+                Logger.warn(`奇遇策略导入失败: ${e.message || e}`);
             }
         },
 

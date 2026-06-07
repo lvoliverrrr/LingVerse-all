@@ -411,6 +411,14 @@
 - 决策优先级：配置未启用后先检查游戏更新提示。默认 `autoReloadOnUpdate=false` 时等待；显式开启后才返回 `reloadPage`。
 - `reloadPage` 执行器只调用页面刷新，不调用探索、购买、战斗、护道、复活、用符或用丹。
 
+`lingverse-explore-helper.user.js` v2.41.0 新增：
+
+- `automation.fight` 记录自动迎战尝试，包含 `shouldAttempt`、`reason`、`encounterKey`、`source` 和 `failureMessage`。
+- `source` 区分按钮点击、页面函数、后备 API 和异常路径，方便判断 50 倍模式在用符后是否真的触发迎战。
+- `failureMessage` 和 `encounterKey` 进入摘要前会走同一套脱敏/截断逻辑，避免 token、session、query/hash 泄露。
+- `buildAfkStatusReport` 的“自动化”行新增“迎战 reason”，测试者复制状态即可反馈迎战是否触发或失败。
+- 该字段是报告层补充；不开 `autoFight` 时只记录 `disabled`，不会触发战斗。
+
 默认配置：
 
 - `enabled: false`
@@ -472,7 +480,7 @@
   - 恢复窗口内神识足够 -> `startAutoExplore`；神识不足 -> `startMeditation`。
 - 调试摘要：
   - `buildAfkDebugSummary` 去掉页面 URL 的 query/hash，脱敏常见 token/session/key 参数。
-  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞、高风险开关、用丹尝试、用符尝试和护道尝试。
+  - 历史压缩为最近 8 条决策/日志，长文本截断，保留关键阻塞、高风险开关、用丹尝试、用符尝试、迎战尝试和护道尝试。
 
 ## 待继续研究
 

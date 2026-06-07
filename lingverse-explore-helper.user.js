@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.40.0
+// @version      2.41.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.40.0';
+    const SCRIPT_VERSION = '2.41.0';
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
@@ -1151,6 +1151,17 @@
         };
     }
 
+    function normalizeEncounterFightAttempt(attempt) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        return {
+            shouldAttempt: !!raw.shouldAttempt,
+            reason: String(raw.reason || ''),
+            encounterKey: String(raw.encounterKey || ''),
+            source: String(raw.source || ''),
+            failureMessage: String(raw.failureMessage || '')
+        };
+    }
+
     function normalizeGuardianAttempt(attempt, fallbackGuardianConfig) {
         const raw = attempt && typeof attempt === 'object' ? attempt : {};
         const guardian = normalizeGuardianConfig(raw.guardian || fallbackGuardianConfig || {});
@@ -1235,6 +1246,38 @@
             });
         }
         return normalizeCombatTalismanAttempt({
+            shouldAttempt: true,
+            reason: 'not-attempted',
+            encounterKey
+        });
+    }
+
+    function buildEncounterFightDebugAttempt(attempt, snapshot, config) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const encounterKey = buildEncounterKey(snapshot || {});
+        if (!cfg.autoFight) {
+            return normalizeEncounterFightAttempt({
+                shouldAttempt: false,
+                reason: 'disabled',
+                encounterKey
+            });
+        }
+        if (attempt && typeof attempt === 'object' && (
+            attempt.reason ||
+            attempt.encounterKey ||
+            attempt.source ||
+            typeof attempt.shouldAttempt !== 'undefined'
+        )) {
+            return normalizeEncounterFightAttempt(attempt);
+        }
+        if (!encounterKey) {
+            return normalizeEncounterFightAttempt({
+                shouldAttempt: false,
+                reason: 'no-encounter',
+                encounterKey: ''
+            });
+        }
+        return normalizeEncounterFightAttempt({
             shouldAttempt: true,
             reason: 'not-attempted',
             encounterKey
@@ -1574,6 +1617,17 @@
         };
     }
 
+    function summarizeEncounterFightAttempt(attempt) {
+        const normalized = normalizeEncounterFightAttempt(attempt);
+        return {
+            shouldAttempt: normalized.shouldAttempt,
+            reason: normalized.reason,
+            encounterKey: sanitizeDebugName(normalized.encounterKey, 120),
+            source: sanitizeDebugText(normalized.source, 40),
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
+        };
+    }
+
     function summarizeGuardianAttempt(attempt) {
         const normalized = normalizeGuardianAttempt(attempt);
         const guardian = normalized.guardian || normalizeGuardianConfig({});
@@ -1659,6 +1713,7 @@
                 postInteractionResume: !!automation.postInteractionResume,
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
                 talismans: summarizeCombatTalismanAttempt(automation.talismans),
+                fight: summarizeEncounterFightAttempt(automation.fight),
                 guardian: summarizeGuardianAttempt(automation.guardian),
                 waitDiagnosis: summarizeAfkWaitingDiagnosis(automation.waitDiagnosis),
                 resourceUsage: normalizeAfkResourceUsage(automation.resourceUsage)
@@ -1960,7 +2015,7 @@
         if (automation.waitDiagnosis && automation.waitDiagnosis.active && automation.waitDiagnosis.message) {
             lines.push(`诊断: ${sanitizeDebugText(automation.waitDiagnosis.message, DEBUG_SUMMARY_TEXT_LIMIT)}`);
         }
-        lines.push(`自动化: 护道 ${sanitizeDebugText(automation.guardian && automation.guardian.reason || 'unknown', 60)} · 用符 ${sanitizeDebugText(automation.talismans && automation.talismans.reason || 'unknown', 60)} · 用丹 ${sanitizeDebugText(automation.nirvanaPill && automation.nirvanaPill.reason || 'unknown', 60)}`);
+        lines.push(`自动化: 护道 ${sanitizeDebugText(automation.guardian && automation.guardian.reason || 'unknown', 60)} · 用符 ${sanitizeDebugText(automation.talismans && automation.talismans.reason || 'unknown', 60)} · 迎战 ${sanitizeDebugText(automation.fight && automation.fight.reason || 'unknown', 60)} · 用丹 ${sanitizeDebugText(automation.nirvanaPill && automation.nirvanaPill.reason || 'unknown', 60)}`);
         if (strategyImportText) {
             lines.push(`奇遇策略: ${strategyImportText.split('\n').join(' / ')}`);
         }
@@ -2024,6 +2079,7 @@
                 postInteractionResume: !!snapshot.postInteractionResume,
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
                 talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
+                fight: buildEncounterFightDebugAttempt(debugContext.fightAttempt, snapshot, cfg),
                 guardian: buildGuardianDebugAttempt(debugContext.guardianAttempt, snapshot, cfg, guardianCfg),
                 waitDiagnosis: buildAfkWaitingDiagnosis(
                     debugContext.decisionHistory,
@@ -2106,6 +2162,7 @@
         buildEncounterKey,
         shouldUseCombatTalismansForEncounter,
         resolveCombatTalismanAttempt,
+        normalizeEncounterFightAttempt,
         normalizeGuardianConfig,
         buildGuardianHirePayload,
         resolveEncounterGuardianAttempt,
@@ -3590,6 +3647,7 @@
         lastGuardianEncounterKey: '',
         lastTalismanAttempt: null,
         lastGuardianAttempt: null,
+        lastFightAttempt: null,
         lastNirvanaPillAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
@@ -3670,6 +3728,7 @@
                     recentLogs: Logger.getRecentEntries(),
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
+                    fightAttempt: this.lastFightAttempt,
                     guardianAttempt: this.lastGuardianAttempt
                 });
                 const debugSummary = buildAfkDebugSummary(debugSnapshot);
@@ -3695,6 +3754,7 @@
                     recentLogs: Logger.getRecentEntries(),
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
+                    fightAttempt: this.lastFightAttempt,
                     guardianAttempt: this.lastGuardianAttempt
                 });
                 const report = buildAfkStatusReport(buildAfkDebugSummary(debugSnapshot));
@@ -4148,7 +4208,7 @@
                     return;
                 }
                 if (cfg.autoFight) {
-                    await this.fightEncounter(cfg);
+                    await this.fightEncounter(cfg, snapshot);
                 }
             } finally {
                 this.encounterBusy = false;
@@ -4365,26 +4425,64 @@
             }
         },
 
-        async fightEncounter(cfg) {
+        async fightEncounter(cfg, snapshot) {
+            const encounterKey = buildEncounterKey(snapshot || {});
+            this.lastFightAttempt = normalizeEncounterFightAttempt({
+                shouldAttempt: true,
+                reason: 'not-attempted',
+                encounterKey
+            });
             try {
                 const fightBtn = $('#encounterFightBtn');
                 if (fightBtn && !fightBtn.disabled) {
                     fightBtn.click();
+                    this.lastFightAttempt = normalizeEncounterFightAttempt({
+                        shouldAttempt: true,
+                        reason: 'fight-triggered',
+                        encounterKey,
+                        source: 'button'
+                    });
                     this.schedulePostInteractionResume(cfg);
                     return;
                 }
                 if (typeof _win.handleCombatChoice === 'function') {
                     await _win.handleCombatChoice('fight');
+                    this.lastFightAttempt = normalizeEncounterFightAttempt({
+                        shouldAttempt: true,
+                        reason: 'fight-triggered',
+                        encounterKey,
+                        source: 'page-function'
+                    });
                     this.schedulePostInteractionResume(cfg);
                     return;
                 }
                 const res = await API.combatChoice('fight');
                 if (res.code !== 200) {
+                    this.lastFightAttempt = normalizeEncounterFightAttempt({
+                        shouldAttempt: true,
+                        reason: 'fight-failed',
+                        encounterKey,
+                        source: 'api',
+                        failureMessage: res.message || '未知错误'
+                    });
                     Logger.warn(`自动迎战失败: ${res.message || '未知错误'}`);
                     return;
                 }
+                this.lastFightAttempt = normalizeEncounterFightAttempt({
+                    shouldAttempt: true,
+                    reason: 'fight-triggered',
+                    encounterKey,
+                    source: 'api'
+                });
                 this.schedulePostInteractionResume(cfg);
             } catch (e) {
+                this.lastFightAttempt = normalizeEncounterFightAttempt({
+                    shouldAttempt: true,
+                    reason: 'fight-failed',
+                    encounterKey,
+                    source: 'exception',
+                    failureMessage: e.message || String(e)
+                });
                 Logger.warn(`自动迎战失败: ${e.message || e}`);
             }
         },

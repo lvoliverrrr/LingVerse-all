@@ -1747,7 +1747,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.40.0',
+        scriptVersion: '2.41.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         page: {
             title: '灵界 LingVerse - 修仙世界',
@@ -1787,6 +1787,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             },
             guardian: { reason: 'hire-failed', failureMessage: '余额不足' },
             talismans: { reason: 'completed', selectedCount: 3, usedKinds: 3, failedKinds: 0 },
+            fight: { reason: 'not-attempted', source: '', failureMessage: '' },
             nirvanaPill: { reason: 'budget-exhausted', minRarity: 4 }
         },
         adventure: {
@@ -1813,12 +1814,12 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
     assert.deepEqual(toPlain(report), {
         schema: 'lingverse-afk-status-report/v1',
         sourceSchema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.40.0',
+        scriptVersion: '2.41.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         headline: '挂机状态 · 等待 · 复活次数已到本轮上限',
         text: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.40.0',
+            '版本: 2.41.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -1827,12 +1828,12 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
             '! 自动复活已到本轮上限',
-            '自动化: 护道 hire-failed · 用符 completed · 用丹 budget-exhausted',
+            '自动化: 护道 hire-failed · 用符 completed · 迎战 not-attempted · 用丹 budget-exhausted',
             '奇遇策略: 456=1 / 456=2'
         ].join('\n'),
         lines: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.40.0',
+            '版本: 2.41.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -1841,10 +1842,55 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
             '! 自动复活已到本轮上限',
-            '自动化: 护道 hire-failed · 用符 completed · 用丹 budget-exhausted',
+            '自动化: 护道 hire-failed · 用符 completed · 迎战 not-attempted · 用丹 budget-exhausted',
             '奇遇策略: 456=1 / 456=2'
         ]
     });
+});
+
+test('buildAfkDebugSummary reports encounter fight attempts', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.normalizeEncounterFightAttempt, 'function');
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        spirit: 120,
+        maxSpirit: 2758,
+        spiritCost: 50
+    }, {
+        enabled: true,
+        autoFight: true,
+        useTalismans: true
+    }, {
+        action: 'handleEncounter',
+        reason: 'encounter-auto-fight-enabled'
+    }, {
+        capturedAt: '2026-06-08T08:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        fightAttempt: {
+            shouldAttempt: true,
+            reason: 'fight-failed',
+            encounterKey: 'monster:port_bandit:3:7?token=fight-secret',
+            source: 'page-function',
+            failureMessage: 'combat-choice failed token=fight-secret'
+        }
+    })));
+
+    assert.deepEqual(summary.automation.fight, {
+        shouldAttempt: true,
+        reason: 'fight-failed',
+        encounterKey: 'monster:port_bandit:3:7',
+        source: 'page-function',
+        failureMessage: 'combat-choice failed token=<redacted>'
+    });
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.some(line => line.includes('迎战 fight-failed')), true);
 });
 
 test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
@@ -2081,7 +2127,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.40.0',
+        scriptVersion: '2.41.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

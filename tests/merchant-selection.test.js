@@ -1269,7 +1269,8 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         pill: null,
         minRarity: 4,
         activeBuffGrade: 4,
-        activeBuffExpire: 1_234_567
+        activeBuffExpire: 1_234_567,
+        failureMessage: ''
     });
     assert.deepEqual(snapshot.automation.talismans, {
         shouldAttempt: true,
@@ -1473,7 +1474,8 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
         pillRarity: 4,
         minRarity: 4,
         activeBuffGrade: null,
-        activeBuffExpire: null
+        activeBuffExpire: null,
+        failureMessage: ''
     });
     assert.deepEqual(summary.automation.talismans, {
         shouldAttempt: true,
@@ -2031,6 +2033,8 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '护道建议: 自动护道失败 · 检查灵石、最高费用51、最低攻击力0，必要时调整游戏护道设置后手动处理当前遭遇',
             '用符: 已完成战斗用符 · 成功3/3类',
             '用符建议: 已完成战斗用符 · 等待自动迎战或战斗结算',
+            '用丹: 涅槃重生丹次数已到本轮上限 · 史诗+',
+            '用丹建议: 本轮用丹次数已到上限 · 可重启挂机或调高用丹上限',
             '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
             '! 战斗符箓不足5类，会按现有3类用符',
             '! 未找到史诗+涅槃重生丹，会跳过用丹',
@@ -2054,6 +2058,8 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '护道建议: 自动护道失败 · 检查灵石、最高费用51、最低攻击力0，必要时调整游戏护道设置后手动处理当前遭遇',
             '用符: 已完成战斗用符 · 成功3/3类',
             '用符建议: 已完成战斗用符 · 等待自动迎战或战斗结算',
+            '用丹: 涅槃重生丹次数已到本轮上限 · 史诗+',
+            '用丹建议: 本轮用丹次数已到上限 · 可重启挂机或调高用丹上限',
             '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
             '! 战斗符箓不足5类，会按现有3类用符',
             '! 未找到史诗+涅槃重生丹，会跳过用丹',
@@ -2318,6 +2324,51 @@ test('buildAfkStatusReport explains combat talisman attempts', () => {
     assert.equal(report.lines.includes('用符建议: 部分符箓使用失败 · 检查失败消息或库存，必要时手动迎战后复制摘要'), true);
 });
 
+test('buildAfkStatusReport explains failed nirvana pill attempts', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 1200,
+        maxSpirit: 2758,
+        spiritCost: 50,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, {
+        enabled: true,
+        autoFight: true,
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4,
+        exploreMultiplier: 50
+    }, {
+        action: 'startAutoExplore',
+        reason: 'spirit-ready'
+    }, {
+        capturedAt: '2026-06-08T10:25:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        nirvanaPillAttempt: {
+            shouldUse: true,
+            reason: 'use-failed',
+            pill: {
+                itemId: 9,
+                templateId: 'bp_pill_rebirth_4',
+                name: '史诗涅槃重生丹?token=pill-secret',
+                rarity: 4,
+                quantity: 1
+            },
+            minRarity: 4,
+            failureMessage: 'use-item failed token=pill-secret'
+        }
+    })));
+
+    assert.equal(summary.automation.nirvanaPill.failureMessage, 'use-item failed token=<redacted>');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('用丹: 涅槃重生丹使用失败 · 史诗+ · 史诗涅槃重生丹 · use-item failed token=<redacted>'), true);
+    assert.equal(report.lines.includes('用丹建议: 涅槃重生丹使用失败 · 检查丹药库存和页面用丹接口，必要时关闭自动用丹后继续挂机'), true);
+});
+
 test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2423,7 +2474,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.51.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.52.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2553,7 +2604,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.51.0',
+        scriptVersion: '2.52.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

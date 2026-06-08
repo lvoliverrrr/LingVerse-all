@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.51.0
+// @version      2.52.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.51.0';
+    const SCRIPT_VERSION = '2.52.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -919,6 +919,77 @@
         return '';
     }
 
+    function formatNirvanaAttemptReason(reason) {
+        const labels = {
+            disabled: '自动用丹关闭',
+            'active-five-root-buff': '已有五行通灵效果',
+            'budget-exhausted': '涅槃重生丹次数已到本轮上限',
+            'inventory-read-failed': '背包读取失败',
+            'no-matching-pill': '未找到涅槃重生丹',
+            'pill-ready': '找到可用涅槃重生丹',
+            used: '已使用涅槃重生丹',
+            'use-failed': '涅槃重生丹使用失败'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function formatNirvanaPillName(pillName, pillTemplateId) {
+        return sanitizeDebugName(pillName || pillTemplateId || '', 80);
+    }
+
+    function buildAfkNirvanaPillStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const source = attempt && typeof attempt === 'object' ? attempt : {};
+        const normalized = normalizeNirvanaPillAttempt(attempt);
+        const reason = normalized.reason;
+        if (!reason || reason === 'disabled') return '';
+        const parts = [formatNirvanaAttemptReason(reason)];
+        const minRarity = optionalNumberOrNull(normalized.minRarity);
+        const pill = normalized.pill || {};
+        const pillRarity = optionalNumberOrNull(pill.rarity !== null && typeof pill.rarity !== 'undefined' ? pill.rarity : source.pillRarity);
+        const rarity = pillRarity !== null ? pillRarity : minRarity;
+        if (rarity !== null) parts.push(formatRarityThreshold(rarity));
+        const pillName = formatNirvanaPillName(pill.name || source.pillName, pill.templateId || source.pillTemplateId);
+        if (pillName) parts.push(pillName);
+        const activeBuffGrade = optionalNumberOrNull(normalized.activeBuffGrade);
+        if (reason === 'active-five-root-buff' && activeBuffGrade !== null) {
+            parts.push(`当前${formatRarityThreshold(activeBuffGrade)}`);
+        }
+        const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        return `用丹: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkNirvanaPillAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeNirvanaPillAttempt(attempt);
+        const reason = normalized.reason;
+        const minRarity = optionalNumberOrNull(normalized.minRarity);
+        const threshold = minRarity === null ? '配置品质' : formatRarityThreshold(minRarity);
+        if (reason === 'active-five-root-buff') {
+            return '用丹建议: 已有五行通灵效果 · 当前配置不排队，会跳过用丹继续探索';
+        }
+        if (reason === 'budget-exhausted') {
+            return '用丹建议: 本轮用丹次数已到上限 · 可重启挂机或调高用丹上限';
+        }
+        if (reason === 'inventory-read-failed') {
+            return '用丹建议: 背包读取失败 · 检查页面背包/API，必要时关闭自动用丹后继续挂机';
+        }
+        if (reason === 'no-matching-pill') {
+            return `用丹建议: 未找到${threshold}涅槃重生丹 · 会跳过用丹继续探索，避免误吃九转还魂丹`;
+        }
+        if (reason === 'pill-ready') {
+            return '用丹建议: 已找到可用涅槃重生丹 · 将尝试用丹后再启动自动探索';
+        }
+        if (reason === 'used') {
+            return '用丹建议: 已使用涅槃重生丹 · 等待状态刷新后继续自动探索';
+        }
+        if (reason === 'use-failed') {
+            return '用丹建议: 涅槃重生丹使用失败 · 检查丹药库存和页面用丹接口，必要时关闭自动用丹后继续挂机';
+        }
+        return '';
+    }
+
     function formatRarityThreshold(rarity) {
         const labels = {
             1: '任意',
@@ -1593,7 +1664,8 @@
             } : null,
             minRarity: optionalNumberOrNull(raw.minRarity),
             activeBuffGrade: optionalNumberOrNull(raw.activeBuffGrade),
-            activeBuffExpire: optionalNumberOrNull(raw.activeBuffExpire)
+            activeBuffExpire: optionalNumberOrNull(raw.activeBuffExpire),
+            failureMessage: String(raw.failureMessage || '')
         };
     }
 
@@ -2065,7 +2137,8 @@
             pillRarity: optionalNumberOrNull(pill.rarity),
             minRarity: optionalNumberOrNull(normalized.minRarity),
             activeBuffGrade: optionalNumberOrNull(normalized.activeBuffGrade),
-            activeBuffExpire: optionalNumberOrNull(normalized.activeBuffExpire)
+            activeBuffExpire: optionalNumberOrNull(normalized.activeBuffExpire),
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
         };
     }
 
@@ -2670,6 +2743,14 @@
         if (fightAdviceStatusLine) {
             lines.push(fightAdviceStatusLine);
         }
+        const nirvanaPillStatusLine = buildAfkNirvanaPillStatusLine(automation.nirvanaPill);
+        if (nirvanaPillStatusLine) {
+            lines.push(nirvanaPillStatusLine);
+        }
+        const nirvanaPillAdviceStatusLine = buildAfkNirvanaPillAdviceStatusLine(automation.nirvanaPill);
+        if (nirvanaPillAdviceStatusLine) {
+            lines.push(nirvanaPillAdviceStatusLine);
+        }
         const resumeStatusLine = buildAfkResumeStatusLine(summary);
         if (resumeStatusLine) {
             lines.push(resumeStatusLine);
@@ -2878,6 +2959,8 @@
         buildAfkTalismanAdviceStatusLine,
         buildAfkFightStatusLine,
         buildAfkFightAdviceStatusLine,
+        buildAfkNirvanaPillStatusLine,
+        buildAfkNirvanaPillAdviceStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset
@@ -4853,7 +4936,15 @@
                 const res = await API.getInventory();
                 if (res.code === 200 && res.data) items = res.data.items || res.data || [];
             } catch (e) {
-                Logger.warn(`读取涅槃重生丹失败: ${e.message || e}`);
+                const failureMessage = e.message || String(e);
+                this.lastNirvanaPillAttempt = normalizeNirvanaPillAttempt({
+                    shouldUse: false,
+                    reason: 'inventory-read-failed',
+                    pill: null,
+                    minRarity: normalizedCfg.nirvanaMinRarity,
+                    failureMessage
+                });
+                Logger.warn(`读取涅槃重生丹失败: ${failureMessage}`);
                 return;
             }
 
@@ -4873,14 +4964,30 @@
                 Logger.info(`自动使用涅槃重生丹: ${pill.name || pill.templateId}`);
                 const res = await API.useItem(pill.itemId, 1);
                 if (res.code !== 200) {
-                    Logger.warn(`涅槃重生丹使用失败: ${res.message || '未知错误'}`);
+                    const failureMessage = res.message || '未知错误';
+                    this.lastNirvanaPillAttempt = normalizeNirvanaPillAttempt(Object.assign({}, attempt, {
+                        shouldUse: false,
+                        reason: 'use-failed',
+                        failureMessage
+                    }));
+                    Logger.warn(`涅槃重生丹使用失败: ${failureMessage}`);
                     return;
                 }
+                this.lastNirvanaPillAttempt = normalizeNirvanaPillAttempt(Object.assign({}, attempt, {
+                    shouldUse: false,
+                    reason: 'used'
+                }));
                 this.incrementResourceUsage('nirvanaPills');
                 this.refreshGameData();
                 await wait(700);
             } catch (e) {
-                Logger.warn(`涅槃重生丹使用失败: ${e.message || e}`);
+                const failureMessage = e.message || String(e);
+                this.lastNirvanaPillAttempt = normalizeNirvanaPillAttempt(Object.assign({}, attempt, {
+                    shouldUse: false,
+                    reason: 'use-failed',
+                    failureMessage
+                }));
+                Logger.warn(`涅槃重生丹使用失败: ${failureMessage}`);
             }
         },
 

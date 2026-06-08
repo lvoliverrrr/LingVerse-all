@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.67.0
+// @version      2.68.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.67.0';
+    const SCRIPT_VERSION = '2.68.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -1174,6 +1174,59 @@
         return '';
     }
 
+    function formatPlayerEncounterAttemptReason(reason) {
+        const labels = {
+            disabled: '自动婉拒关闭',
+            'no-player-encounter': '等待陌生道友',
+            'decline-ready': '准备自动婉拒',
+            'decline-triggered': '已触发自动婉拒',
+            'decline-failed': '自动婉拒失败'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function formatPlayerEncounterAttemptSource(source) {
+        const labels = {
+            'pvp-dismiss': '邂逅卡关闭',
+            'invite-decline': '邀约婉拒',
+            'session-leave': '会话离开',
+            button: '弹窗按钮',
+            'missing-entry': '婉拒入口',
+            exception: '异常'
+        };
+        return labels[source] || source || '';
+    }
+
+    function buildAfkPlayerEncounterStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizePlayerEncounterAttempt(attempt);
+        const reason = normalized.reason;
+        if (!reason || reason === 'disabled' || reason === 'no-player-encounter') return '';
+        if (reason === 'decline-ready' && !normalized.shouldAttempt) return '';
+        const parts = [formatPlayerEncounterAttemptReason(reason)];
+        const source = formatPlayerEncounterAttemptSource(normalized.source);
+        if (source) parts.push(source);
+        const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        return `陌生道友: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkPlayerEncounterAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizePlayerEncounterAttempt(attempt);
+        const reason = normalized.reason;
+        if (reason === 'decline-ready') {
+            return '陌生道友建议: 已开启自动婉拒 · 将尝试关闭邂逅入口，避免自动探索停住';
+        }
+        if (reason === 'decline-triggered') {
+            return '陌生道友建议: 已触发自动婉拒 · 等待邂逅关闭和自动探索恢复';
+        }
+        if (reason === 'decline-failed') {
+            return '陌生道友建议: 自动婉拒失败 · 检查邂逅弹窗/按钮，必要时手动处理或复制摘要';
+        }
+        return '';
+    }
+
     function formatExploreStartAttemptReason(reason) {
         const labels = {
             disabled: '自动挂机关闭',
@@ -2309,6 +2362,16 @@
         };
     }
 
+    function normalizePlayerEncounterAttempt(attempt) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        return {
+            shouldAttempt: !!raw.shouldAttempt,
+            reason: String(raw.reason || ''),
+            source: String(raw.source || ''),
+            failureMessage: String(raw.failureMessage || '')
+        };
+    }
+
     function normalizeExploreStartAttempt(attempt) {
         const raw = attempt && typeof attempt === 'object' ? attempt : {};
         return {
@@ -2549,6 +2612,41 @@
         return normalizeMerchantAttempt({
             shouldAttempt: false,
             reason: 'no-merchant'
+        });
+    }
+
+    function buildPlayerEncounterDebugAttempt(attempt, snapshot, config, decision) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const state = snapshot || {};
+        const currentDecision = decision || {};
+        if (attempt && typeof attempt === 'object' && (
+            attempt.reason ||
+            attempt.source ||
+            typeof attempt.shouldAttempt !== 'undefined'
+        )) {
+            return normalizePlayerEncounterAttempt(attempt);
+        }
+        if (!cfg.autoDeclinePlayerEncounter) {
+            return normalizePlayerEncounterAttempt({
+                shouldAttempt: false,
+                reason: 'disabled'
+            });
+        }
+        if (!state.playerEncounterActive) {
+            return normalizePlayerEncounterAttempt({
+                shouldAttempt: false,
+                reason: 'no-player-encounter'
+            });
+        }
+        if (currentDecision.action === 'handlePlayerEncounter') {
+            return normalizePlayerEncounterAttempt({
+                shouldAttempt: true,
+                reason: 'decline-ready'
+            });
+        }
+        return normalizePlayerEncounterAttempt({
+            shouldAttempt: false,
+            reason: 'no-player-encounter'
         });
     }
 
@@ -2978,6 +3076,16 @@
         };
     }
 
+    function summarizePlayerEncounterAttempt(attempt) {
+        const normalized = normalizePlayerEncounterAttempt(attempt);
+        return {
+            shouldAttempt: normalized.shouldAttempt,
+            reason: normalized.reason,
+            source: sanitizeDebugText(normalized.source, 40),
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
+        };
+    }
+
     function summarizeExploreStartAttempt(attempt) {
         const normalized = normalizeExploreStartAttempt(attempt);
         return {
@@ -3137,6 +3245,7 @@
                 postInteractionResume: !!automation.postInteractionResume,
                 meditation: summarizeMeditationAttempt(automation.meditation),
                 merchant: summarizeMerchantAttempt(automation.merchant),
+                playerEncounter: summarizePlayerEncounterAttempt(automation.playerEncounter),
                 exploreStart: summarizeExploreStartAttempt(automation.exploreStart),
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
                 talismans: summarizeCombatTalismanAttempt(automation.talismans),
@@ -3263,6 +3372,12 @@
         const reason = String(source.reason || 'unknown');
         const failure = sanitizeDebugText(source.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
         return `${label}: ${reason}${failure ? ` · ${failure}` : ''}`;
+    }
+
+    function isReportablePlayerEncounterAttempt(attempt) {
+        const source = attempt && typeof attempt === 'object' ? attempt : {};
+        const reason = String(source.reason || '');
+        return !!reason && reason !== 'disabled' && reason !== 'no-player-encounter';
     }
 
     function buildReplayStrategyImportText(summary) {
@@ -3417,11 +3532,15 @@
             : `${spirit === null ? '?' : spirit}/${maxSpirit === null ? '?' : maxSpirit}`;
         const blockerText = buildReplayBlockerLabels(summary).join('/');
         const riskText = buildReplayRiskText(summary);
-        const automationText = [
+        const automationAttempts = [
             formatReplayAttempt('护道', automation.guardian),
             formatReplayAttempt('用符', automation.talismans),
             formatReplayAttempt('用丹', automation.nirvanaPill)
-        ].join(' | ');
+        ];
+        if (isReportablePlayerEncounterAttempt(automation.playerEncounter)) {
+            automationAttempts.unshift(formatReplayAttempt('道友', automation.playerEncounter));
+        }
+        const automationText = automationAttempts.join(' | ');
         const strategyImportText = buildReplayStrategyImportText(summary);
         const replayLines = [
             `页面: ${pageText}`,
@@ -3561,6 +3680,14 @@
         if (merchantAdviceStatusLine) {
             lines.push(merchantAdviceStatusLine);
         }
+        const playerEncounterStatusLine = buildAfkPlayerEncounterStatusLine(automation.playerEncounter);
+        if (playerEncounterStatusLine) {
+            lines.push(playerEncounterStatusLine);
+        }
+        const playerEncounterAdviceStatusLine = buildAfkPlayerEncounterAdviceStatusLine(automation.playerEncounter);
+        if (playerEncounterAdviceStatusLine) {
+            lines.push(playerEncounterAdviceStatusLine);
+        }
         const exploreStartStatusLine = buildAfkExploreStartStatusLine(automation.exploreStart);
         if (exploreStartStatusLine) {
             lines.push(exploreStartStatusLine);
@@ -3633,7 +3760,16 @@
                 .filter(Boolean)
                 .forEach(item => lines.push(`! ${item}`));
         }
-        lines.push(`自动化: 护道 ${sanitizeDebugText(automation.guardian && automation.guardian.reason || 'unknown', 60)} · 用符 ${sanitizeDebugText(automation.talismans && automation.talismans.reason || 'unknown', 60)} · 迎战 ${sanitizeDebugText(automation.fight && automation.fight.reason || 'unknown', 60)} · 用丹 ${sanitizeDebugText(automation.nirvanaPill && automation.nirvanaPill.reason || 'unknown', 60)}`);
+        const automationSummaryParts = [
+            `护道 ${sanitizeDebugText(automation.guardian && automation.guardian.reason || 'unknown', 60)}`,
+            `用符 ${sanitizeDebugText(automation.talismans && automation.talismans.reason || 'unknown', 60)}`,
+            `迎战 ${sanitizeDebugText(automation.fight && automation.fight.reason || 'unknown', 60)}`,
+            `用丹 ${sanitizeDebugText(automation.nirvanaPill && automation.nirvanaPill.reason || 'unknown', 60)}`
+        ];
+        if (isReportablePlayerEncounterAttempt(automation.playerEncounter)) {
+            automationSummaryParts.unshift(`道友 ${sanitizeDebugText(automation.playerEncounter.reason, 60)}`);
+        }
+        lines.push(`自动化: ${automationSummaryParts.join(' · ')}`);
         const adventureStatusLine = buildAfkAdventureStatusLine(summary);
         if (adventureStatusLine) {
             lines.push(adventureStatusLine);
@@ -3704,6 +3840,7 @@
                 postInteractionResume: !!snapshot.postInteractionResume,
                 meditation: buildMeditationDebugAttempt(debugContext.meditationAttempt, snapshot, cfg, currentDecision),
                 merchant: buildMerchantDebugAttempt(debugContext.merchantAttempt, snapshot),
+                playerEncounter: buildPlayerEncounterDebugAttempt(debugContext.playerEncounterAttempt, snapshot, cfg, currentDecision),
                 exploreStart: buildExploreStartDebugAttempt(debugContext.exploreStartAttempt, snapshot, cfg, currentDecision),
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
                 talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
@@ -3822,6 +3959,7 @@
         normalizeReviveAttempt,
         normalizeMeditationAttempt,
         normalizeMerchantAttempt,
+        normalizePlayerEncounterAttempt,
         normalizeExploreStartAttempt,
         normalizeGuardianConfig,
         buildGuardianHirePayload,
@@ -3853,6 +3991,8 @@
         buildAfkMeditationAdviceStatusLine,
         buildAfkMerchantStatusLine,
         buildAfkMerchantAdviceStatusLine,
+        buildAfkPlayerEncounterStatusLine,
+        buildAfkPlayerEncounterAdviceStatusLine,
         buildAfkExploreStartStatusLine,
         buildAfkExploreStartAdviceStatusLine,
         buildAfkStatusReport,
@@ -5393,6 +5533,7 @@
         lastNirvanaPillAttempt: null,
         lastMeditationAttempt: null,
         lastExploreStartAttempt: null,
+        lastPlayerEncounterAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
         resourceUsage: normalizeAfkResourceUsage({}),
@@ -5479,6 +5620,7 @@
                     inventoryItems,
                     meditationAttempt: this.lastMeditationAttempt,
                     merchantAttempt: MerchantAutoBuyer.lastAttempt,
+                    playerEncounterAttempt: this.lastPlayerEncounterAttempt,
                     exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
@@ -5511,6 +5653,7 @@
                     inventoryItems,
                     meditationAttempt: this.lastMeditationAttempt,
                     merchantAttempt: MerchantAutoBuyer.lastAttempt,
+                    playerEncounterAttempt: this.lastPlayerEncounterAttempt,
                     exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
@@ -6517,36 +6660,62 @@
         },
 
         async handlePlayerEncounter(cfg) {
-            if (!cfg.autoDeclinePlayerEncounter) return;
+            if (!cfg.autoDeclinePlayerEncounter) {
+                this.lastPlayerEncounterAttempt = normalizePlayerEncounterAttempt({
+                    shouldAttempt: false,
+                    reason: 'disabled'
+                });
+                return;
+            }
+            this.lastPlayerEncounterAttempt = normalizePlayerEncounterAttempt({
+                shouldAttempt: true,
+                reason: 'decline-ready'
+            });
+            let source = '';
             try {
                 let handled = false;
                 const pvpModal = $('#pvpEncounterModal');
                 if (pvpModal && typeof _win.PvpModule?.dismissEncounter === 'function') {
+                    source = 'pvp-dismiss';
                     _win.PvpModule.dismissEncounter();
                     handled = true;
                 }
 
                 const inviteModal = $('#encounterInviteModal');
                 if (!handled && inviteModal && typeof _win.EncounterModule?.respondInvite === 'function') {
+                    source = 'invite-decline';
                     await _win.EncounterModule.respondInvite(false);
                     handled = true;
                 }
 
                 const sessionModal = $('#encounterSessionModal');
                 if (!handled && sessionModal && typeof _win.EncounterModule?.leave === 'function') {
+                    source = 'session-leave';
                     await _win.EncounterModule.leave();
                     handled = true;
                 }
 
                 if (!handled) {
+                    source = 'button';
                     handled = this.clickPlayerEncounterDeclineButton();
                 }
 
                 if (!handled) {
+                    this.lastPlayerEncounterAttempt = normalizePlayerEncounterAttempt({
+                        shouldAttempt: true,
+                        reason: 'decline-failed',
+                        source: 'missing-entry',
+                        failureMessage: '未找到可自动婉拒的入口'
+                    });
                     Logger.warn('未找到可自动婉拒的陌生道友邂逅入口，已暂停等待手动处理');
                     return;
                 }
 
+                this.lastPlayerEncounterAttempt = normalizePlayerEncounterAttempt({
+                    shouldAttempt: false,
+                    reason: 'decline-triggered',
+                    source
+                });
                 Logger.info('已自动婉拒/离开陌生道友邂逅');
                 const windowMs = getResumeWindowMs(cfg);
                 this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
@@ -6554,7 +6723,14 @@
                 this.refreshGameData();
                 setTimeout(() => this.tick(true), 1200);
             } catch (e) {
-                Logger.warn(`自动婉拒陌生道友失败: ${e.message || e}`);
+                const failureMessage = e.message || String(e);
+                this.lastPlayerEncounterAttempt = normalizePlayerEncounterAttempt({
+                    shouldAttempt: true,
+                    reason: 'decline-failed',
+                    source: source || 'exception',
+                    failureMessage
+                });
+                Logger.warn(`自动婉拒陌生道友失败: ${failureMessage}`);
             }
         },
 

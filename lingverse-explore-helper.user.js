@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.84.0
+// @version      2.85.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.84.0';
+    const SCRIPT_VERSION = '2.85.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -4006,6 +4006,12 @@
         return `冥想兜底: 冥想条恢复${formatAfkReportNumber(recoveredSpirit)}识 · 缓存${formatAfkReportNumber(spirit)}/${maxText} · 估算${formatAfkReportNumber(shownEffectiveSpirit)}/${maxText}`;
     }
 
+    function buildAfkMeditationSyncStatusLine(player) {
+        const source = player && typeof player === 'object' ? player : {};
+        if (!source.meditationSpiritFromBar) return '';
+        return '冥想同步: 玩家缓存未标记冥想 · 已按可见冥想条估算';
+    }
+
     function buildAfkStatusReport(source) {
         const parsed = source && typeof source === 'object' ? source : parseAfkIssueReplaySource(source);
         const summary = parsed && parsed.schema === 'lingverse-afk-debug-summary/v1'
@@ -4073,6 +4079,10 @@
         const meditationFallbackStatusLine = buildAfkMeditationFallbackStatusLine(player);
         if (meditationFallbackStatusLine) {
             lines.push(meditationFallbackStatusLine);
+        }
+        const meditationSyncStatusLine = buildAfkMeditationSyncStatusLine(player);
+        if (meditationSyncStatusLine) {
+            lines.push(meditationSyncStatusLine);
         }
         const meditationAdviceStatusLine = buildAfkMeditationAdviceStatusLine(automation.meditation);
         if (meditationAdviceStatusLine) {
@@ -4425,6 +4435,7 @@
         buildAfkReviveAdviceStatusLine,
         buildAfkMeditationStatusLine,
         buildAfkMeditationAdviceStatusLine,
+        buildAfkMeditationSyncStatusLine,
         buildAfkMerchantStatusLine,
         buildAfkMerchantAdviceStatusLine,
         buildAfkPlayerEncounterStatusLine,

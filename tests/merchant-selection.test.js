@@ -3222,6 +3222,7 @@ test('buildAfkStatusReport explains meditation bar spirit fallback', () => {
 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('冥想兜底: 冥想条恢复97识 · 缓存3/100 · 估算100/100'), true);
+    assert.equal(report.lines.includes('冥想同步: 玩家缓存未标记冥想 · 已按可见冥想条估算'), true);
 });
 
 test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
@@ -3789,7 +3790,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.84.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.85.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -3950,7 +3951,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.84.0',
+        scriptVersion: '2.85.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

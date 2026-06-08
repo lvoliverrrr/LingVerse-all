@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.55.0
+// @version      2.56.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.55.0';
+    const SCRIPT_VERSION = '2.56.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -872,6 +872,69 @@
         }
         if (reason === 'revive-failed') {
             return '复活建议: 自动复活失败 · 检查灵石和页面复活入口，必要时手动复活或调高本轮上限';
+        }
+        return '';
+    }
+
+    function formatMeditationAttemptReason(reason) {
+        const labels = {
+            'no-need': '暂无冥想动作',
+            meditating: '冥想中',
+            'start-ready': '准备进入冥想',
+            'start-triggered': '已触发进入冥想',
+            'start-failed': '进入冥想失败',
+            'stop-ready': '准备结束冥想',
+            'stop-triggered': '已触发结束冥想',
+            'stop-failed': '结束冥想失败'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function formatMeditationAttemptSource(source) {
+        const labels = {
+            api: '接口',
+            'page-function': '页面函数',
+            exception: '异常'
+        };
+        return labels[source] || source || '';
+    }
+
+    function buildAfkMeditationStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeMeditationAttempt(attempt);
+        const reason = normalized.reason;
+        if (!reason || reason === 'no-need' || reason === 'meditating') return '';
+        const parts = [formatMeditationAttemptReason(reason)];
+        const source = formatMeditationAttemptSource(normalized.source);
+        if (source) parts.push(source);
+        if (normalized.elapsedSeconds !== null) parts.push(`已冥想${formatAfkElapsedDuration(normalized.elapsedSeconds)}`);
+        if (normalized.targetMinutes !== null) parts.push(`计划${normalized.targetMinutes}分钟`);
+        const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        return `冥想: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkMeditationAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeMeditationAttempt(attempt);
+        const reason = normalized.reason;
+        if (reason === 'start-ready') {
+            return '冥想建议: 神识不足，准备进入冥想 · 等待页面进入冥想状态';
+        }
+        if (reason === 'start-triggered') {
+            return '冥想建议: 已触发进入冥想 · 等待冥想状态刷新';
+        }
+        if (reason === 'start-failed') {
+            return '冥想建议: 进入冥想失败 · 检查冥想按钮/API，必要时手动冥想或刷新页面';
+        }
+        if (reason === 'stop-ready') {
+            return '冥想建议: 冥想目标已达到 · 将尝试收功后继续探索';
+        }
+        if (reason === 'stop-triggered') {
+            return '冥想建议: 已触发结束冥想 · 等待神识刷新后启动探索';
+        }
+        if (reason === 'stop-failed') {
+            return '冥想建议: 结束冥想失败 · 检查冥想按钮/API，必要时手动收功或刷新页面';
         }
         return '';
     }
@@ -1883,6 +1946,19 @@
         };
     }
 
+    function normalizeMeditationAttempt(attempt) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        return {
+            shouldAttempt: !!raw.shouldAttempt,
+            action: String(raw.action || ''),
+            reason: String(raw.reason || ''),
+            source: String(raw.source || ''),
+            targetMinutes: optionalNumberOrNull(raw.targetMinutes),
+            elapsedSeconds: optionalNumberOrNull(raw.elapsedSeconds),
+            failureMessage: String(raw.failureMessage || '')
+        };
+    }
+
     function normalizeMerchantItem(item) {
         const raw = item && typeof item === 'object' ? item : null;
         if (!raw) return null;
@@ -2074,6 +2150,51 @@
         return normalizeReviveAttempt({
             shouldAttempt: true,
             reason: 'revive-ready'
+        });
+    }
+
+    function buildMeditationDebugAttempt(attempt, snapshot, config, decision) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const state = snapshot || {};
+        const currentDecision = decision || {};
+        if (attempt && typeof attempt === 'object' && (
+            attempt.reason ||
+            attempt.action ||
+            attempt.source ||
+            typeof attempt.shouldAttempt !== 'undefined'
+        )) {
+            return normalizeMeditationAttempt(attempt);
+        }
+        if (currentDecision.action === 'startMeditation') {
+            return normalizeMeditationAttempt({
+                shouldAttempt: true,
+                action: 'start',
+                reason: 'start-ready',
+                targetMinutes: cfg.meditationMinutes
+            });
+        }
+        if (currentDecision.action === 'stopMeditation') {
+            return normalizeMeditationAttempt({
+                shouldAttempt: true,
+                action: 'stop',
+                reason: 'stop-ready',
+                targetMinutes: cfg.meditationMinutes,
+                elapsedSeconds: state.meditationDurationSeconds
+            });
+        }
+        if (state.isMeditating) {
+            return normalizeMeditationAttempt({
+                shouldAttempt: false,
+                action: 'wait',
+                reason: 'meditating',
+                targetMinutes: cfg.meditationMinutes,
+                elapsedSeconds: state.meditationDurationSeconds
+            });
+        }
+        return normalizeMeditationAttempt({
+            shouldAttempt: false,
+            reason: 'no-need',
+            targetMinutes: cfg.meditationMinutes
         });
     }
 
@@ -2494,6 +2615,19 @@
         };
     }
 
+    function summarizeMeditationAttempt(attempt) {
+        const normalized = normalizeMeditationAttempt(attempt);
+        return {
+            shouldAttempt: normalized.shouldAttempt,
+            action: sanitizeDebugText(normalized.action, 40),
+            reason: normalized.reason,
+            source: sanitizeDebugText(normalized.source, 40),
+            targetMinutes: optionalNumberOrNull(normalized.targetMinutes),
+            elapsedSeconds: optionalNumberOrNull(normalized.elapsedSeconds),
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
+        };
+    }
+
     function summarizeMerchantAttempt(attempt) {
         const normalized = normalizeMerchantAttempt(attempt);
         const item = normalized.item || {};
@@ -2664,6 +2798,7 @@
                 exploreStalled: !!automation.exploreStalled,
                 postReviveResume: !!automation.postReviveResume,
                 postInteractionResume: !!automation.postInteractionResume,
+                meditation: summarizeMeditationAttempt(automation.meditation),
                 merchant: summarizeMerchantAttempt(automation.merchant),
                 exploreStart: summarizeExploreStartAttempt(automation.exploreStart),
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
@@ -3066,6 +3201,14 @@
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
             .filter(Boolean)
             .forEach(item => lines.push(`! ${item}`));
+        const meditationStatusLine = buildAfkMeditationStatusLine(automation.meditation);
+        if (meditationStatusLine) {
+            lines.push(meditationStatusLine);
+        }
+        const meditationAdviceStatusLine = buildAfkMeditationAdviceStatusLine(automation.meditation);
+        if (meditationAdviceStatusLine) {
+            lines.push(meditationAdviceStatusLine);
+        }
         const merchantStatusLine = buildAfkMerchantStatusLine(automation.merchant);
         if (merchantStatusLine) {
             lines.push(merchantStatusLine);
@@ -3211,6 +3354,7 @@
                 exploreStalled: !!snapshot.exploreStalled,
                 postReviveResume: !!snapshot.postReviveResume,
                 postInteractionResume: !!snapshot.postInteractionResume,
+                meditation: buildMeditationDebugAttempt(debugContext.meditationAttempt, snapshot, cfg, currentDecision),
                 merchant: buildMerchantDebugAttempt(debugContext.merchantAttempt, snapshot),
                 exploreStart: buildExploreStartDebugAttempt(debugContext.exploreStartAttempt, snapshot, cfg, currentDecision),
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
@@ -3312,6 +3456,7 @@
         resolveCombatTalismanAttempt,
         normalizeEncounterFightAttempt,
         normalizeReviveAttempt,
+        normalizeMeditationAttempt,
         normalizeMerchantAttempt,
         normalizeExploreStartAttempt,
         normalizeGuardianConfig,
@@ -3340,6 +3485,8 @@
         buildAfkNirvanaPillAdviceStatusLine,
         buildAfkReviveStatusLine,
         buildAfkReviveAdviceStatusLine,
+        buildAfkMeditationStatusLine,
+        buildAfkMeditationAdviceStatusLine,
         buildAfkMerchantStatusLine,
         buildAfkMerchantAdviceStatusLine,
         buildAfkExploreStartStatusLine,
@@ -4879,6 +5026,7 @@
         lastFightAttempt: null,
         lastReviveAttempt: null,
         lastNirvanaPillAttempt: null,
+        lastMeditationAttempt: null,
         lastExploreStartAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
@@ -4964,6 +5112,7 @@
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
                     inventoryItems,
+                    meditationAttempt: this.lastMeditationAttempt,
                     merchantAttempt: MerchantAutoBuyer.lastAttempt,
                     exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
@@ -4995,6 +5144,7 @@
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
                     inventoryItems,
+                    meditationAttempt: this.lastMeditationAttempt,
                     merchantAttempt: MerchantAutoBuyer.lastAttempt,
                     exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
@@ -5264,12 +5414,12 @@
             }
             if (decision.action === 'startMeditation') {
                 Logger.info(`自动挂机进入冥想：${this.formatReason(decision.reason)}`);
-                await this.startMeditation();
+                await this.startMeditation(snapshot, cfg);
                 return;
             }
             if (decision.action === 'stopMeditation') {
                 Logger.info(`自动挂机结束冥想：${this.formatReason(decision.reason)}`);
-                await this.stopMeditation();
+                await this.stopMeditation(snapshot, cfg);
                 return;
             }
             if (decision.action === 'startAutoExplore') {
@@ -5310,37 +5460,94 @@
             }
         },
 
-        async startMeditation() {
+        async startMeditation(snapshot, cfg) {
+            const normalizedCfg = normalizeAfkLoopConfig(cfg || CONFIG.afkLoop);
+            let source = '';
+            this.lastMeditationAttempt = normalizeMeditationAttempt({
+                shouldAttempt: true,
+                action: 'start',
+                reason: 'start-ready',
+                targetMinutes: normalizedCfg.meditationMinutes,
+                elapsedSeconds: snapshot && snapshot.meditationDurationSeconds
+            });
             try {
                 if (_win._autoExploreRunning && typeof _win.stopAutoExplore === 'function') {
                     _win.stopAutoExplore('挂机循环回冥想', false);
                     await wait(500);
                 }
                 if (typeof _win.handleMeditate === 'function') {
+                    source = 'page-function';
                     await _win.handleMeditate();
                 } else {
+                    source = 'api';
                     const res = await API.startMeditation();
                     if (res.code !== 200) throw new Error(res.message || '开始冥想失败');
                     if (typeof _win.startMeditationUI === 'function') _win.startMeditationUI();
                 }
+                this.lastMeditationAttempt = normalizeMeditationAttempt({
+                    shouldAttempt: false,
+                    action: 'start',
+                    reason: 'start-triggered',
+                    source,
+                    targetMinutes: normalizedCfg.meditationMinutes
+                });
                 this.refreshGameData();
             } catch (e) {
-                Logger.warn(`自动冥想失败: ${e.message || e}`);
+                const failureMessage = e.message || String(e);
+                this.lastMeditationAttempt = normalizeMeditationAttempt({
+                    shouldAttempt: true,
+                    action: 'start',
+                    reason: 'start-failed',
+                    source: source || 'exception',
+                    targetMinutes: normalizedCfg.meditationMinutes,
+                    failureMessage
+                });
+                Logger.warn(`自动冥想失败: ${failureMessage}`);
             }
         },
 
-        async stopMeditation() {
+        async stopMeditation(snapshot, cfg) {
+            const normalizedCfg = normalizeAfkLoopConfig(cfg || CONFIG.afkLoop);
+            const elapsedSeconds = snapshot && snapshot.meditationDurationSeconds;
+            let source = '';
+            this.lastMeditationAttempt = normalizeMeditationAttempt({
+                shouldAttempt: true,
+                action: 'stop',
+                reason: 'stop-ready',
+                targetMinutes: normalizedCfg.meditationMinutes,
+                elapsedSeconds
+            });
             try {
                 if (typeof _win.handleStopMeditate === 'function') {
+                    source = 'page-function';
                     await _win.handleStopMeditate();
                 } else {
+                    source = 'api';
                     const res = await API.stopMeditation();
                     if (typeof _win.stopMeditationUI === 'function') _win.stopMeditationUI();
                     if (res.code !== 200) throw new Error(res.message || '结束冥想失败');
                 }
+                this.lastMeditationAttempt = normalizeMeditationAttempt({
+                    shouldAttempt: false,
+                    action: 'stop',
+                    reason: 'stop-triggered',
+                    source,
+                    targetMinutes: normalizedCfg.meditationMinutes,
+                    elapsedSeconds
+                });
                 this.refreshGameData();
             } catch (e) {
-                Logger.warn(`自动结束冥想失败: ${e.message || e}`);
+                const failureMessage = e.message || String(e);
+                this.lastMeditationAttempt = normalizeMeditationAttempt({
+                    shouldAttempt: true,
+                    action: 'stop',
+                    reason: 'stop-failed',
+                    source: source || 'exception',
+                    targetMinutes: normalizedCfg.meditationMinutes,
+                    elapsedSeconds,
+                    failureMessage
+                });
+                Logger.warn(`自动结束冥想失败: ${failureMessage}`);
             }
         },
 

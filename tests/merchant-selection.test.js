@@ -2485,6 +2485,46 @@ test('buildAfkStatusReport explains failed merchant purchase attempts', () => {
     assert.equal(report.lines.includes('商人建议: 自动购买失败 · 检查灵石、商人窗口和购买接口，必要时手动处理或复制摘要'), true);
 });
 
+test('buildAfkStatusReport explains failed meditation stop attempts', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 2758,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: true,
+        meditationDurationSeconds: 8400
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        exploreMultiplier: 1
+    }, {
+        action: 'stopMeditation',
+        reason: 'meditation-duration-reached'
+    }, {
+        capturedAt: '2026-06-08T11:15:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        meditationAttempt: {
+            shouldAttempt: true,
+            action: 'stop',
+            reason: 'stop-failed',
+            source: 'page-function',
+            targetMinutes: 140,
+            elapsedSeconds: 8400,
+            failureMessage: 'stop meditation failed token=meditation-secret'
+        }
+    })));
+
+    assert.equal(summary.automation.meditation.failureMessage, 'stop meditation failed token=<redacted>');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('冥想: 结束冥想失败 · 页面函数 · 已冥想2小时20分钟 · 计划140分钟 · stop meditation failed token=<redacted>'), true);
+    assert.equal(report.lines.includes('冥想建议: 结束冥想失败 · 检查冥想按钮/API，必要时手动收功或刷新页面'), true);
+});
+
 test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2590,7 +2630,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.55.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.56.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2720,7 +2760,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.55.0',
+        scriptVersion: '2.56.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.79.0
+// @version      2.80.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.79.0';
+    const SCRIPT_VERSION = '2.80.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -539,9 +539,38 @@
         };
     }
 
+    function isElementVisibleForAutomation(el) {
+        if (!el) return false;
+        if (el.hidden) return false;
+        if (el.classList && typeof el.classList.contains === 'function' && el.classList.contains('hidden')) return false;
+        if (typeof el.getAttribute === 'function' && el.getAttribute('aria-hidden') === 'true') return false;
+        let style = null;
+        if (typeof _win.getComputedStyle === 'function') {
+            try {
+                style = _win.getComputedStyle(el);
+            } catch (e) {
+                style = null;
+            }
+        }
+        style = style || el.style || null;
+        if (style) {
+            if (style.display === 'none') return false;
+            if (style.visibility === 'hidden' || style.visibility === 'collapse') return false;
+            const opacity = Number(style.opacity);
+            if (Number.isFinite(opacity) && opacity <= 0) return false;
+        }
+        if (typeof el.getBoundingClientRect === 'function') {
+            try {
+                const rect = el.getBoundingClientRect();
+                if (rect && Number(rect.width) <= 0 && Number(rect.height) <= 0) return false;
+            } catch (e) {}
+        }
+        return true;
+    }
+
     function readMeditationBarState() {
         const bar = $('#meditationBar');
-        if (!bar || bar.classList.contains('hidden')) {
+        if (!isElementVisibleForAutomation(bar)) {
             return { isMeditating: false, durationSeconds: null, recoveredSpirit: null };
         }
         return parseMeditationBarState(bar.innerText || bar.textContent || '');
@@ -4290,6 +4319,7 @@
         selectMerchantItem,
         detectGameUpdateNotice,
         resolveApiObject,
+        isElementVisibleForAutomation,
         parseMeditationBarState,
         normalizeAfkLoopConfig,
         normalizeAfkResourceUsage,
@@ -5721,7 +5751,7 @@
 
         isMerchantActive() {
             const overlay = $('#merchantOverlay');
-            return !!_win._merchantActive || !!(overlay && !overlay.classList.contains('hidden'));
+            return !!_win._merchantActive || isElementVisibleForAutomation(overlay);
         },
 
         isAutoExplorePending() {
@@ -6216,18 +6246,19 @@
                 '#encounterRespondPickerModal'
             ].some(selector => {
                 const el = $(selector);
-                return !!(el && !el.classList.contains('hidden'));
+                return isElementVisibleForAutomation(el);
             });
             const combatActive = !!(combatPanel && combatPanel.classList.contains('active'));
-            const talismanDialogActive = !!(talismanDialog && !talismanDialog.classList.contains('hidden'));
+            const talismanDialogActive = isElementVisibleForAutomation(talismanDialog);
+            const encounterOverlayVisible = isElementVisibleForAutomation(encounterOverlay);
             const encounterActive = !!(
                 _win._encounterActive ||
-                (encounterOverlay && !encounterOverlay.classList.contains('hidden')) ||
+                encounterOverlayVisible ||
                 combatActive ||
                 talismanDialogActive
             );
-            const adventureActive = !!(_win._companionAdventureActive || (adventureOverlay && !adventureOverlay.classList.contains('hidden')));
-            const encounterText = encounterOverlay && !encounterOverlay.classList.contains('hidden') ? encounterOverlay.innerText : '';
+            const adventureActive = !!(_win._companionAdventureActive || isElementVisibleForAutomation(adventureOverlay));
+            const encounterText = encounterOverlayVisible ? encounterOverlay.innerText : '';
             const encounterKey = buildEncounterKey({
                 encounterActive,
                 combatActive,
@@ -7003,7 +7034,7 @@
             try {
                 installAdventureStepHook();
                 const overlay = $('#adventureOverlay');
-                if (!overlay || overlay.classList.contains('hidden')) {
+                if (!isElementVisibleForAutomation(overlay)) {
                     this.lastAdventureAttempt = normalizeAdventureAttempt({
                         shouldAttempt: true,
                         reason: 'choice-failed',
@@ -7119,7 +7150,7 @@
             const choices = explicitChoices.length > 0
                 ? explicitChoices
                 : Array.from(root.querySelectorAll('#adventureChoices button')).filter(button => !button.classList.contains('adventure-close-btn'));
-            return choices.filter(button => !button.classList.contains('hidden'));
+            return choices.filter(button => isElementVisibleForAutomation(button));
         },
 
         findAdventureCloseButton(root) {
@@ -7863,7 +7894,7 @@
             if (_win._encounterActive) return true;
             const encounterPanel = $('#encounterOverlay');
             const combatPanel = $('#combatPanel');
-            if (encounterPanel && !encounterPanel.classList.contains('hidden')) return true;
+            if (isElementVisibleForAutomation(encounterPanel)) return true;
             if (combatPanel && combatPanel.classList.contains('active')) return true;
             return false;
         },

@@ -185,6 +185,53 @@ test('parseMeditationBarState reads visible meditation bar duration safely', () 
     });
 });
 
+test('isElementVisibleForAutomation ignores hidden DOM leftovers', () => {
+    const sandbox = loadUserScript({
+        getComputedStyle(el) {
+            return el.computedStyle || {};
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.isElementVisibleForAutomation, 'function');
+    assert.equal(hooks.isElementVisibleForAutomation(null), false);
+
+    assert.equal(hooks.isElementVisibleForAutomation({
+        classList: { contains(name) { return name === 'hidden'; } },
+        computedStyle: { display: 'block', visibility: 'visible', opacity: '1' },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 300, height: 200 }; }
+    }), false);
+
+    assert.equal(hooks.isElementVisibleForAutomation({
+        classList: { contains() { return false; } },
+        computedStyle: { display: 'none', visibility: 'visible', opacity: '1' },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 300, height: 200 }; }
+    }), false);
+
+    assert.equal(hooks.isElementVisibleForAutomation({
+        classList: { contains() { return false; } },
+        computedStyle: { display: 'block', visibility: 'hidden', opacity: '1' },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 300, height: 200 }; }
+    }), false);
+
+    assert.equal(hooks.isElementVisibleForAutomation({
+        classList: { contains() { return false; } },
+        computedStyle: { display: 'block', visibility: 'visible', opacity: '1' },
+        getAttribute(name) { return name === 'aria-hidden' ? 'true' : null; },
+        getBoundingClientRect() { return { width: 300, height: 200 }; }
+    }), false);
+
+    assert.equal(hooks.isElementVisibleForAutomation({
+        classList: { contains() { return false; } },
+        computedStyle: { display: 'block', visibility: 'visible', opacity: '1' },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 300, height: 200 }; }
+    }), true);
+});
+
 test('decideAfkNextAction can stop meditation when bar recovery fills stale spirit', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -3643,7 +3690,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.79.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.80.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -3804,7 +3851,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.79.0',
+        scriptVersion: '2.80.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

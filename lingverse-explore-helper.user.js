@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.66.0
+// @version      2.67.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.66.0';
+    const SCRIPT_VERSION = '2.67.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -609,6 +609,15 @@
             return `奇遇${idText} 自动选择${choiceText}后仍未前进`;
         }
 
+        const playerEncounterFlow = actionText === 'handlePlayerEncounter' ||
+            reasonText === 'player-encounter-auto-decline' ||
+            reasonText === 'player-encounter-active';
+        if (playerEncounterFlow && snapshot.playerEncounterActive) {
+            return reasonText === 'player-encounter-auto-decline'
+                ? '陌生道友自动婉拒后仍未关闭'
+                : '陌生道友邂逅仍在等待处理';
+        }
+
         const encounterFlow = actionText === 'handleEncounter' ||
             reasonText.indexOf('encounter') >= 0 ||
             !!snapshot.encounterActive ||
@@ -699,6 +708,10 @@
             'player-encounter-active': {
                 category: 'manual-action',
                 suggestion: '处理陌生道友邂逅，或开启自动婉拒后再启动挂机'
+            },
+            'player-encounter-auto-decline': {
+                category: 'auto-action',
+                suggestion: '陌生道友自动婉拒重复未前进，检查邂逅弹窗/按钮，必要时手动处理并复制摘要'
             },
             'adventure-active': {
                 category: 'manual-action',

@@ -2029,6 +2029,8 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '! 自动复活已到本轮上限',
             '护道: 自动护道失败 · 余额不足 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
             '护道建议: 自动护道失败 · 检查灵石、最高费用51、最低攻击力0，必要时调整游戏护道设置后手动处理当前遭遇',
+            '用符: 已完成战斗用符 · 成功3/3类',
+            '用符建议: 已完成战斗用符 · 等待自动迎战或战斗结算',
             '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
             '! 战斗符箓不足5类，会按现有3类用符',
             '! 未找到史诗+涅槃重生丹，会跳过用丹',
@@ -2050,6 +2052,8 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '! 自动复活已到本轮上限',
             '护道: 自动护道失败 · 余额不足 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
             '护道建议: 自动护道失败 · 检查灵石、最高费用51、最低攻击力0，必要时调整游戏护道设置后手动处理当前遭遇',
+            '用符: 已完成战斗用符 · 成功3/3类',
+            '用符建议: 已完成战斗用符 · 等待自动迎战或战斗结算',
             '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
             '! 战斗符箓不足5类，会按现有3类用符',
             '! 未找到史诗+涅槃重生丹，会跳过用丹',
@@ -2269,6 +2273,51 @@ test('buildAfkStatusReport explains failed fight attempts', () => {
     assert.equal(report.lines.includes('迎战建议: 自动迎战失败 · 检查遭遇面板和页面函数迎战入口，必要时手动迎战或复制摘要'), true);
 });
 
+test('buildAfkStatusReport explains combat talisman attempts', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        spirit: 120,
+        maxSpirit: 2758,
+        spiritCost: 4
+    }, {
+        enabled: true,
+        autoFight: true,
+        useTalismans: true,
+        exploreMultiplier: 50
+    }, {
+        action: 'handleEncounter',
+        reason: 'encounter-auto-fight-enabled'
+    }, {
+        capturedAt: '2026-06-08T10:05:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        talismanAttempt: {
+            shouldAttempt: true,
+            reason: 'completed',
+            encounterKey: 'monster:port_bandit:3:7?token=talisman-secret',
+            markEncounterKey: 'monster:port_bandit:3:7',
+            selectedTalismans: [
+                { itemId: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 },
+                { itemId: 2, templateId: 'talisman_fire_3', name: '稀有烈火符', family: 'fire', rarity: 3, quantity: 1 }
+            ],
+            usedKinds: 1,
+            failedKinds: 1,
+            failureMessage: 'use-item failed token=talisman-secret'
+        }
+    })));
+
+    assert.equal(summary.automation.talismans.failureMessage, 'use-item failed token=<redacted>');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('用符: 已完成战斗用符 · 成功1/2类 · 失败1类 · ancient/fire · use-item failed token=<redacted>'), true);
+    assert.equal(report.lines.includes('用符建议: 部分符箓使用失败 · 检查失败消息或库存，必要时手动迎战后复制摘要'), true);
+});
+
 test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2374,7 +2423,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.50.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.51.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2504,7 +2553,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.50.0',
+        scriptVersion: '2.51.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

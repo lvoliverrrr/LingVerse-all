@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.50.0
+// @version      2.51.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.50.0';
+    const SCRIPT_VERSION = '2.51.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -827,6 +827,94 @@
         }
         if (reason === 'fight-triggered') {
             return '迎战建议: 已触发自动迎战 · 等待战斗结算或恢复窗口继续探索';
+        }
+        return '';
+    }
+
+    function formatTalismanAttemptReason(reason) {
+        const labels = {
+            disabled: '战斗用符关闭',
+            'no-encounter': '等待遭遇',
+            'not-attempted': '尚未用符',
+            'already-handled': '本次遭遇已处理过用符',
+            'budget-exhausted': '战斗用符次数已到本轮上限',
+            'inventory-read-failed': '背包读取失败',
+            'no-usable-talismans': '没有可用战斗符箓',
+            'talismans-selected': '已选中战斗符箓',
+            completed: '已完成战斗用符'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function getTalismanSelectedCount(source, normalized) {
+        const direct = optionalNumberOrNull(source && source.selectedCount);
+        if (direct !== null) return direct;
+        return normalized.selectedTalismans.length;
+    }
+
+    function formatTalismanFamilies(items) {
+        const seen = new Set();
+        const values = [];
+        (Array.isArray(items) ? items : []).forEach(item => {
+            const family = sanitizeDebugText(item && item.family, 40).trim();
+            if (!family || seen.has(family)) return;
+            seen.add(family);
+            values.push(family);
+        });
+        return values.join('/');
+    }
+
+    function buildAfkTalismanStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeCombatTalismanAttempt(attempt);
+        const reason = normalized.reason;
+        if (!reason || reason === 'disabled' || reason === 'no-encounter') return '';
+        if (reason === 'not-attempted' && !normalized.shouldAttempt) return '';
+        const selectedCount = getTalismanSelectedCount(attempt, normalized);
+        const usedKinds = optionalNumberOrNull(normalized.usedKinds);
+        const failedKinds = optionalNumberOrNull(normalized.failedKinds);
+        const parts = [formatTalismanAttemptReason(reason)];
+        if (usedKinds !== null && selectedCount > 0) {
+            parts.push(`成功${usedKinds}/${selectedCount}类`);
+        } else if (selectedCount > 0) {
+            parts.push(`已选${selectedCount}类`);
+        }
+        if (failedKinds !== null && failedKinds > 0) {
+            parts.push(`失败${failedKinds}类`);
+        }
+        const families = formatTalismanFamilies(normalized.selectedTalismans);
+        if (families) parts.push(families);
+        const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        return `用符: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkTalismanAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeCombatTalismanAttempt(attempt);
+        const reason = normalized.reason;
+        const failedKinds = optionalNumberOrNull(normalized.failedKinds);
+        const hasFailure = !!sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (reason === 'inventory-read-failed') {
+            return '用符建议: 背包读取失败 · 检查页面背包/API，必要时手动迎战或复制摘要';
+        }
+        if (reason === 'no-usable-talismans') {
+            return '用符建议: 没有可用战斗符箓 · 会跳过用符继续后续迎战；富裕模式建议补足战斗符箓或关闭自动用符';
+        }
+        if (reason === 'budget-exhausted') {
+            return '用符建议: 战斗用符已到本轮上限 · 本轮不会继续消耗符箓，可重启挂机或调高上限';
+        }
+        if (reason === 'already-handled') {
+            return '用符建议: 本次遭遇已处理过用符 · 不会重复消耗符箓，仍停住请复制摘要';
+        }
+        if (reason === 'talismans-selected' || (reason === 'not-attempted' && normalized.shouldAttempt)) {
+            return '用符建议: 已准备战斗符箓 · 等待页面用符完成，若持续不动请复制摘要';
+        }
+        if (reason === 'completed' && ((failedKinds !== null && failedKinds > 0) || hasFailure)) {
+            return '用符建议: 部分符箓使用失败 · 检查失败消息或库存，必要时手动迎战后复制摘要';
+        }
+        if (reason === 'completed') {
+            return '用符建议: 已完成战斗用符 · 等待自动迎战或战斗结算';
         }
         return '';
     }
@@ -2566,6 +2654,14 @@
         if (guardianAdviceStatusLine) {
             lines.push(guardianAdviceStatusLine);
         }
+        const talismanStatusLine = buildAfkTalismanStatusLine(automation.talismans);
+        if (talismanStatusLine) {
+            lines.push(talismanStatusLine);
+        }
+        const talismanAdviceStatusLine = buildAfkTalismanAdviceStatusLine(automation.talismans);
+        if (talismanAdviceStatusLine) {
+            lines.push(talismanAdviceStatusLine);
+        }
         const fightStatusLine = buildAfkFightStatusLine(automation.fight);
         if (fightStatusLine) {
             lines.push(fightStatusLine);
@@ -2778,6 +2874,8 @@
         buildAfkResumeStatusLine,
         buildAfkMeditationReturnStatusLine,
         buildAfkGuardianAdviceStatusLine,
+        buildAfkTalismanStatusLine,
+        buildAfkTalismanAdviceStatusLine,
         buildAfkFightStatusLine,
         buildAfkFightAdviceStatusLine,
         buildAfkStatusReport,

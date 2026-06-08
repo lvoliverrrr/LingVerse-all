@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.82.0
+// @version      2.83.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.82.0';
+    const SCRIPT_VERSION = '2.83.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -160,6 +160,16 @@
             }
         });
         return selected;
+    }
+
+    function isMerchantAutomationContext(state) {
+        const source = state || {};
+        return !!(
+            source.autoExploreRunning ||
+            source.autoExplorePending ||
+            source.autoExploreToggleChecked ||
+            source.afkLoopEnabled
+        );
     }
 
     function detectGameUpdateNotice(text) {
@@ -4349,6 +4359,7 @@
         SCRIPT_VERSION,
         parseMerchantPrice,
         selectMerchantItem,
+        isMerchantAutomationContext,
         detectGameUpdateNotice,
         resolveApiObject,
         isElementVisibleForAutomation,
@@ -5789,7 +5800,12 @@
 
         isAutoExplorePending() {
             const toggle = $('#autoExploreToggle');
-            return !!(_win._autoResumeExplorePending || _win._autoExploreRunning || toggle?.checked);
+            return isMerchantAutomationContext({
+                autoExplorePending: !!_win._autoResumeExplorePending,
+                autoExploreRunning: !!_win._autoExploreRunning,
+                autoExploreToggleChecked: !!toggle?.checked,
+                afkLoopEnabled: !!(CONFIG.afkLoop && CONFIG.afkLoop.enabled)
+            });
         },
 
         shouldHandle() {

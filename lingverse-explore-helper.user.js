@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.71.0
+// @version      2.72.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.71.0';
+    const SCRIPT_VERSION = '2.72.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -174,14 +174,31 @@
         return String(dataset.lingverseAutoMapExtensionVersion || _win.LingVerseAutoMapExtensionVersion || '');
     }
 
+    function getInitializedHelperVersion() {
+        return String(_win.LingVerseAutoMapInitializedVersion || '');
+    }
+
     function buildAfkEnvironmentInfo(source) {
         const sourceObj = source && typeof source === 'object' ? source : {};
         const env = sourceObj.environment && typeof sourceObj.environment === 'object' ? sourceObj.environment : {};
         const scriptVersion = sanitizeDebugText(sourceObj.scriptVersion || SCRIPT_VERSION, 40);
         const extensionVersion = sanitizeDebugText(env.extensionVersion || sourceObj.extensionVersion || getExtensionVersion(), 40);
+        const initializedVersion = sanitizeDebugText(
+            env.initializedVersion || sourceObj.initializedVersion || getInitializedHelperVersion(),
+            40
+        );
+        const autoMapInited = !!(
+            env.autoMapInited ||
+            sourceObj.autoMapInited ||
+            _win._autoMapInited
+        );
         return {
             extensionVersion,
-            versionMismatch: !!(extensionVersion && scriptVersion && extensionVersion !== scriptVersion)
+            initializedVersion,
+            autoMapInited,
+            versionMismatch: !!(extensionVersion && scriptVersion && extensionVersion !== scriptVersion),
+            initializedVersionMismatch: !!(initializedVersion && scriptVersion && initializedVersion !== scriptVersion),
+            initializedVersionMissing: !!(autoMapInited && !initializedVersion)
         };
     }
 
@@ -3532,6 +3549,12 @@
         if (environment.versionMismatch) {
             return `环境: helper ${version} · 扩展 ${environment.extensionVersion || '未知'} · 版本不一致，重载扩展并刷新页面`;
         }
+        if (environment.initializedVersionMismatch) {
+            return `环境: helper ${version} · 面板 ${environment.initializedVersion || '未知'} · 页面仍是旧初始化，刷新页面`;
+        }
+        if (environment.initializedVersionMissing) {
+            return `环境: helper ${version} · 面板版本未知 · 页面已有旧初始化，刷新页面确认新版面板`;
+        }
         if (blockers.gameUpdateNoticeActive) {
             return `环境: helper ${version} · 游戏更新提示，先刷新页面/重载扩展`;
         }
@@ -4022,7 +4045,9 @@
             scriptVersion: SCRIPT_VERSION,
             environment: buildAfkEnvironmentInfo({
                 scriptVersion: SCRIPT_VERSION,
-                extensionVersion: debugContext.extensionVersion
+                extensionVersion: debugContext.extensionVersion,
+                initializedVersion: debugContext.initializedVersion,
+                autoMapInited: !!_win._autoMapInited
             }),
             capturedAt: debugContext.capturedAt || new Date().toISOString(),
             page: resolvePageInfo(debugContext),
@@ -7722,6 +7747,7 @@
     const init = () => {
         if (_win._autoMapInited) return;
         _win._autoMapInited = true;
+        _win.LingVerseAutoMapInitializedVersion = SCRIPT_VERSION;
 
         installAdventureStepHook();
         UI.init();

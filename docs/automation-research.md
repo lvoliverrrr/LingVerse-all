@@ -58,6 +58,7 @@
 - v2.69.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无奇遇/陌生道友弹窗；测试 `2.69.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮。
 - v2.70.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无商人/遭遇/战斗/奇遇/陌生道友/混天典狱；测试 `2.70.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试跳过混天典狱。
 - v2.71.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，页面尚无 `lingverseAutoMapExtensionVersion` / `lingverseAutoMapInjectedVersion` dataset，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无商人/遭遇/战斗/奇遇/陌生道友/混天典狱；测试 `2.71.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
+- v2.72.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，无 `LingVerseAutoMapInitializedVersion`，页面尚无扩展/注入版本 dataset，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无商人/遭遇/战斗/奇遇/陌生道友/混天典狱；测试 `2.72.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -649,6 +650,13 @@
 - `buildAfkDebugSnapshot` / `buildAfkDebugSummary` 保留 `environment.extensionVersion` 和 `versionMismatch`。
 - `buildAfkEnvironmentStatusLine` 在 helper/扩展版本不一致时输出“环境: helper ... · 扩展 ... · 版本不一致，重载扩展并刷新页面”。
 - 目的：外部测试者安装、重载或刷新步骤不一致时，状态报告能先暴露环境问题；该变更不增加任何探索、购买、战斗、复活或消耗品动作。
+
+`lingverse-explore-helper.user.js` v2.72.0 新增：
+
+- 首次初始化面板时写入 `window.LingVerseAutoMapInitializedVersion`。
+- `buildAfkDebugSnapshot` / `buildAfkDebugSummary` 的 `environment` 保留面板初始化版本、是否已初始化、初始化版本是否落后和已初始化但版本未知状态。
+- `buildAfkEnvironmentStatusLine` 在 helper 顶层版本和面板初始化版本不一致时提示“页面仍是旧初始化，刷新页面”；已初始化但无版本记录时提示“面板版本未知”。
+- 目的：扩展重载后可能只更新了顶层脚本和测试 hook，旧面板事件监听仍在页面中；该提示能阻止测试者把旧面板行为误判为新版挂机逻辑。
 
 默认配置：
 

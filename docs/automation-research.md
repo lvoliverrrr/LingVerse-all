@@ -48,6 +48,7 @@
 - v2.49.0 只读护道配置复核：真实页仍显示游戏更新提示，`getAutoHireConfig()` 返回游戏护道已开启、模式 `alone`、最高雇佣费 `51`、优先级 `normal,incarnation,body`，当前无遭遇/战斗；本次只读观察未点击探索、冥想、护道、战斗、复活、用符或用丹。
 - v2.50.0 只读迎战入口复核：真实页仍显示游戏更新提示，当前无遭遇/战斗；页面存在 `handleCombatChoice`、迎战/对战按钮和 `showEncounterTalismanDialog`，说明富裕模式迎战链路可继续按按钮、页面函数、API 三层来源报告；本次只读观察未点击探索、冥想、护道、战斗、复活、用符或用丹。
 - v2.52.0 只读页面复核：Agent Browser CLI 读取真实 Edge 标签 `292345702`，页面仍为 `LingVerseAutoMapVersion=null`、`_autoMapInited=true`、存在游戏更新提示；页面神识 `3/2758`，未死亡、未冥想，存在 `handleCombatChoice` 和 `showEncounterTalismanDialog`。本次只读观察未点击探索、冥想、护道、战斗、复活、用符或用丹。
+- v2.53.0 只读复活入口复核：真实 Edge 标签 `292345702` 仍为旧注入/游戏更新状态，当前未死亡、页面未显示复活按钮；页面存在 `handleRevive`/复活函数入口。本次只读观察未点击探索、冥想、护道、战斗、复活、用符或用丹。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -506,6 +507,13 @@
 - `normalizeNirvanaPillAttempt` / `summarizeNirvanaPillAttempt` 保留 `failureMessage`；`maybeUseNirvanaRebirthPill` 会在背包读取失败、用丹失败和用丹成功时更新 `lastNirvanaPillAttempt`。
 - 目的：富裕 50 倍“用丹 -> 探索 -> 用符 -> 迎战”链路中，测试者只复制可读状态即可判断是否卡在探索前用丹阶段；报告行只读派生，不额外调用背包、用符、迎战、复活或用丹 API。
 
+`lingverse-explore-helper.user.js` v2.53.0 新增：
+
+- `normalizeReviveAttempt` / `summarizeReviveAttempt` 记录自动复活尝试，包含 `shouldAttempt`、`reason`、`source` 和脱敏 `failureMessage`。
+- `buildReviveDebugAttempt` 从快照/配置推断复活关闭、未死亡、上限耗尽和准备复活；真实执行路径会在上限、成功触发和异常失败时更新 `lastReviveAttempt`。
+- `buildAfkReviveStatusLine(attempt)` / `buildAfkReviveAdviceStatusLine(attempt)` 从脱敏摘要只读生成 `复活:` / `复活建议:` 行。
+- 目的：富裕 50 倍“战斗 -> 死亡 -> 自动复活 -> 恢复窗口”链路中，测试者只复制可读状态即可判断是否卡在复活阶段；报告行只读派生，不额外调用复活 API。
+
 默认配置：
 
 - `enabled: false`
@@ -573,7 +581,7 @@
 
 - 高阶“富裕模式”需要继续真实长跑验证涅槃重生丹使用后的 buff 状态和恢复 50 倍探索稳定性。
 - 5 类战斗符箓的最佳收益顺序、每类用量和不同账号库存下的推荐 preset。
-- 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的真实长跑稳定性；v2.47.0 已能在状态报告中显示恢复窗口剩余秒数和下一步倾向，v2.48.0 可在神识不足时说明回冥想原因，v2.50.0 可显示迎战来源和失败建议，v2.51.0 可显示用符成功/失败和下一步建议，v2.52.0 可显示探索前用丹成功/失败和下一步建议。
+- 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的真实长跑稳定性；v2.47.0 已能在状态报告中显示恢复窗口剩余秒数和下一步倾向，v2.48.0 可在神识不足时说明回冥想原因，v2.50.0 可显示迎战来源和失败建议，v2.51.0 可显示用符成功/失败和下一步建议，v2.52.0 可显示探索前用丹成功/失败和下一步建议，v2.53.0 可显示自动复活成功/失败和下一步建议。
 - 低境界 1 倍护道预设的真实长跑稳定性，尤其是状态报告“护道:”和“护道建议:”行里的失败消息、费用/最低攻击力建议，以及是否需要游戏内自动重试。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本；v2.46.0 可读状态已能回传 `adventureId`、步骤和选项文本，后续仍需记录最终奖励并沉淀成可分享策略。

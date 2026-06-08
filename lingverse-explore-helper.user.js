@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.52.0
+// @version      2.53.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.52.0';
+    const SCRIPT_VERSION = '2.53.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -827,6 +827,51 @@
         }
         if (reason === 'fight-triggered') {
             return '迎战建议: 已触发自动迎战 · 等待战斗结算或恢复窗口继续探索';
+        }
+        return '';
+    }
+
+    function formatReviveAttemptReason(reason) {
+        const labels = {
+            disabled: '自动复活关闭',
+            'no-death': '未处于死亡状态',
+            'budget-exhausted': '复活次数已到本轮上限',
+            'revive-ready': '准备自动复活',
+            'revive-triggered': '已触发自动复活',
+            'revive-failed': '自动复活失败'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function buildAfkReviveStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeReviveAttempt(attempt);
+        const reason = normalized.reason;
+        if (!reason || reason === 'disabled' || reason === 'no-death') return '';
+        if (reason === 'revive-ready' && !normalized.shouldAttempt) return '';
+        const parts = [formatReviveAttemptReason(reason)];
+        const source = formatFightAttemptSource(normalized.source);
+        if (source) parts.push(source);
+        const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        return `复活: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkReviveAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeReviveAttempt(attempt);
+        const reason = normalized.reason;
+        if (reason === 'budget-exhausted') {
+            return '复活建议: 本轮复活次数已到上限 · 检查死亡原因后重启挂机或调高本轮上限';
+        }
+        if (reason === 'revive-ready') {
+            return '复活建议: 已开启自动复活 · 将尝试灵石复活，成功后进入恢复窗口';
+        }
+        if (reason === 'revive-triggered') {
+            return '复活建议: 已触发自动复活 · 等待页面刷新和恢复窗口继续探索';
+        }
+        if (reason === 'revive-failed') {
+            return '复活建议: 自动复活失败 · 检查灵石和页面复活入口，必要时手动复活或调高本轮上限';
         }
         return '';
     }
@@ -1708,6 +1753,16 @@
         };
     }
 
+    function normalizeReviveAttempt(attempt) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        return {
+            shouldAttempt: !!raw.shouldAttempt,
+            reason: String(raw.reason || ''),
+            source: String(raw.source || ''),
+            failureMessage: String(raw.failureMessage || '')
+        };
+    }
+
     function normalizeGuardianAttempt(attempt, fallbackGuardianConfig) {
         const raw = attempt && typeof attempt === 'object' ? attempt : {};
         const guardian = normalizeGuardianConfig(raw.guardian || fallbackGuardianConfig || {});
@@ -1827,6 +1882,41 @@
             shouldAttempt: true,
             reason: 'not-attempted',
             encounterKey
+        });
+    }
+
+    function buildReviveDebugAttempt(attempt, snapshot, config) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const state = snapshot || {};
+        if (attempt && typeof attempt === 'object' && (
+            attempt.reason ||
+            attempt.source ||
+            typeof attempt.shouldAttempt !== 'undefined'
+        )) {
+            return normalizeReviveAttempt(attempt);
+        }
+        if (!cfg.autoRevive) {
+            return normalizeReviveAttempt({
+                shouldAttempt: false,
+                reason: 'disabled'
+            });
+        }
+        if (!state.isDead) {
+            return normalizeReviveAttempt({
+                shouldAttempt: false,
+                reason: 'no-death'
+            });
+        }
+        const reviveBudget = resolveAfkResourceBudget('revive', cfg, state.resourceUsage);
+        if (!reviveBudget.allowed) {
+            return normalizeReviveAttempt({
+                shouldAttempt: false,
+                reason: 'budget-exhausted'
+            });
+        }
+        return normalizeReviveAttempt({
+            shouldAttempt: true,
+            reason: 'revive-ready'
         });
     }
 
@@ -2175,6 +2265,16 @@
         };
     }
 
+    function summarizeReviveAttempt(attempt) {
+        const normalized = normalizeReviveAttempt(attempt);
+        return {
+            shouldAttempt: normalized.shouldAttempt,
+            reason: normalized.reason,
+            source: sanitizeDebugText(normalized.source, 40),
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
+        };
+    }
+
     function summarizeAfkPhaseStatus(status) {
         const normalized = normalizeAfkPhaseStatus(status);
         return {
@@ -2323,6 +2423,7 @@
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
                 talismans: summarizeCombatTalismanAttempt(automation.talismans),
                 fight: summarizeEncounterFightAttempt(automation.fight),
+                revive: summarizeReviveAttempt(automation.revive),
                 guardian: summarizeGuardianAttempt(automation.guardian),
                 waitDiagnosis: summarizeAfkWaitingDiagnosis(automation.waitDiagnosis),
                 resourcePreflight: summarizeAfkResourcePreflight(automation.resourcePreflight),
@@ -2719,6 +2820,14 @@
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
             .filter(Boolean)
             .forEach(item => lines.push(`! ${item}`));
+        const reviveStatusLine = buildAfkReviveStatusLine(automation.revive);
+        if (reviveStatusLine) {
+            lines.push(reviveStatusLine);
+        }
+        const reviveAdviceStatusLine = buildAfkReviveAdviceStatusLine(automation.revive);
+        if (reviveAdviceStatusLine) {
+            lines.push(reviveAdviceStatusLine);
+        }
         const guardianStatusLine = buildAfkGuardianStatusLine(automation.guardian);
         if (guardianStatusLine) {
             lines.push(guardianStatusLine);
@@ -2843,6 +2952,7 @@
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
                 talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
                 fight: buildEncounterFightDebugAttempt(debugContext.fightAttempt, snapshot, cfg),
+                revive: buildReviveDebugAttempt(debugContext.reviveAttempt, snapshot, cfg),
                 guardian: buildGuardianDebugAttempt(debugContext.guardianAttempt, snapshot, cfg, guardianCfg),
                 waitDiagnosis: buildAfkWaitingDiagnosis(
                     debugContext.decisionHistory,
@@ -2937,6 +3047,7 @@
         shouldUseCombatTalismansForEncounter,
         resolveCombatTalismanAttempt,
         normalizeEncounterFightAttempt,
+        normalizeReviveAttempt,
         normalizeGuardianConfig,
         buildGuardianHirePayload,
         resolveEncounterGuardianAttempt,
@@ -2961,6 +3072,8 @@
         buildAfkFightAdviceStatusLine,
         buildAfkNirvanaPillStatusLine,
         buildAfkNirvanaPillAdviceStatusLine,
+        buildAfkReviveStatusLine,
+        buildAfkReviveAdviceStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset
@@ -4435,6 +4548,7 @@
         lastTalismanAttempt: null,
         lastGuardianAttempt: null,
         lastFightAttempt: null,
+        lastReviveAttempt: null,
         lastNirvanaPillAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
@@ -4523,6 +4637,7 @@
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
                     fightAttempt: this.lastFightAttempt,
+                    reviveAttempt: this.lastReviveAttempt,
                     guardianAttempt: this.lastGuardianAttempt
                 });
                 const debugSummary = buildAfkDebugSummary(debugSnapshot);
@@ -4551,6 +4666,7 @@
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
                     fightAttempt: this.lastFightAttempt,
+                    reviveAttempt: this.lastReviveAttempt,
                     guardianAttempt: this.lastGuardianAttempt
                 });
                 const report = buildAfkStatusReport(buildAfkDebugSummary(debugSnapshot));
@@ -5018,23 +5134,41 @@
         async revive(cfg) {
             const reviveBudget = resolveAfkResourceBudget('revive', cfg || CONFIG.afkLoop, this.getResourceUsage());
             if (!reviveBudget.allowed) {
+                this.lastReviveAttempt = normalizeReviveAttempt({
+                    shouldAttempt: false,
+                    reason: 'budget-exhausted'
+                });
                 Logger.warn('自动复活次数已到本轮上限，暂停等待手动处理');
                 return;
             }
             try {
+                let source = 'api';
                 if (typeof _win.handleRevive === 'function') {
+                    source = 'page-function';
                     await _win.handleRevive();
                 } else {
                     const res = await API.revive();
                     if (res.code !== 200) throw new Error(res.message || '复活失败');
                 }
+                this.lastReviveAttempt = normalizeReviveAttempt({
+                    shouldAttempt: false,
+                    reason: 'revive-triggered',
+                    source
+                });
                 this.incrementResourceUsage('revive');
                 const windowMs = getResumeWindowMs(cfg || CONFIG.afkLoop);
                 this.postReviveResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
                 this.lastDecisionKey = '';
                 this.refreshGameData();
             } catch (e) {
-                Logger.warn(`自动复活失败: ${e.message || e}`);
+                const failureMessage = e.message || String(e);
+                this.lastReviveAttempt = normalizeReviveAttempt({
+                    shouldAttempt: false,
+                    reason: 'revive-failed',
+                    source: 'exception',
+                    failureMessage
+                });
+                Logger.warn(`自动复活失败: ${failureMessage}`);
             }
         },
 

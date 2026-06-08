@@ -2233,6 +2233,42 @@ test('buildAfkDebugSummary reports encounter fight attempts', () => {
     assert.equal(report.lines.some(line => line.includes('迎战 fight-failed')), true);
 });
 
+test('buildAfkStatusReport explains failed fight attempts', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        spirit: 120,
+        maxSpirit: 2758,
+        spiritCost: 4
+    }, {
+        enabled: true,
+        autoFight: true,
+        exploreMultiplier: 50
+    }, {
+        action: 'handleEncounter',
+        reason: 'encounter-auto-fight-enabled'
+    }, {
+        capturedAt: '2026-06-08T09:45:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        fightAttempt: {
+            shouldAttempt: true,
+            reason: 'fight-failed',
+            encounterKey: 'monster:port_bandit:3:7?token=fight-secret',
+            source: 'page-function',
+            failureMessage: 'combat-choice failed token=fight-secret'
+        }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('迎战: 自动迎战失败 · 页面函数 · combat-choice failed token=<redacted>'), true);
+    assert.equal(report.lines.includes('迎战建议: 自动迎战失败 · 检查遭遇面板和页面函数迎战入口，必要时手动迎战或复制摘要'), true);
+});
+
 test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2338,7 +2374,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.49.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.50.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2468,7 +2504,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.49.0',
+        scriptVersion: '2.50.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

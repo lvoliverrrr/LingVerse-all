@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.49.0
+// @version      2.50.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.49.0';
+    const SCRIPT_VERSION = '2.50.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -775,6 +775,58 @@
         }
         if (reason === 'guardian-ready' || reason === 'hire-triggered') {
             return `护道建议: 将按当前游戏护道设置处理 · ${formatGuardianMode(guardian.mode)} · 最高${guardian.maxFee || '不限'} · ${formatGuardianPriority(guardian.priority)}`;
+        }
+        return '';
+    }
+
+    function formatFightAttemptReason(reason) {
+        const labels = {
+            disabled: '自动迎战关闭',
+            'no-encounter': '等待遭遇',
+            'not-attempted': '尚未迎战',
+            'fight-triggered': '已触发自动迎战',
+            'fight-failed': '自动迎战失败'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function formatFightAttemptSource(source) {
+        const labels = {
+            button: '遭遇按钮',
+            'page-function': '页面函数',
+            api: '接口',
+            exception: '异常'
+        };
+        return labels[source] || source || '';
+    }
+
+    function buildAfkFightStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeEncounterFightAttempt(attempt);
+        const reason = normalized.reason;
+        if (!reason || reason === 'disabled' || reason === 'no-encounter') return '';
+        if (reason === 'not-attempted' && !normalized.shouldAttempt) return '';
+        const parts = [formatFightAttemptReason(reason)];
+        const source = formatFightAttemptSource(normalized.source);
+        if (source) parts.push(source);
+        const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        return `迎战: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkFightAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeEncounterFightAttempt(attempt);
+        const reason = normalized.reason;
+        const source = formatFightAttemptSource(normalized.source);
+        if (reason === 'fight-failed') {
+            return `迎战建议: 自动迎战失败 · 检查遭遇面板和${source || '当前'}迎战入口，必要时手动迎战或复制摘要`;
+        }
+        if (reason === 'not-attempted' && normalized.shouldAttempt) {
+            return '迎战建议: 尚未迎战 · 等待用符/护道处理结束，若持续不动请复制摘要';
+        }
+        if (reason === 'fight-triggered') {
+            return '迎战建议: 已触发自动迎战 · 等待战斗结算或恢复窗口继续探索';
         }
         return '';
     }
@@ -2514,6 +2566,14 @@
         if (guardianAdviceStatusLine) {
             lines.push(guardianAdviceStatusLine);
         }
+        const fightStatusLine = buildAfkFightStatusLine(automation.fight);
+        if (fightStatusLine) {
+            lines.push(fightStatusLine);
+        }
+        const fightAdviceStatusLine = buildAfkFightAdviceStatusLine(automation.fight);
+        if (fightAdviceStatusLine) {
+            lines.push(fightAdviceStatusLine);
+        }
         const resumeStatusLine = buildAfkResumeStatusLine(summary);
         if (resumeStatusLine) {
             lines.push(resumeStatusLine);
@@ -2718,6 +2778,8 @@
         buildAfkResumeStatusLine,
         buildAfkMeditationReturnStatusLine,
         buildAfkGuardianAdviceStatusLine,
+        buildAfkFightStatusLine,
+        buildAfkFightAdviceStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset

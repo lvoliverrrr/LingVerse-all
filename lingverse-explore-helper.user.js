@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.46.0
+// @version      2.47.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.46.0';
+    const SCRIPT_VERSION = '2.47.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -521,8 +521,24 @@
         }
 
         if (snapshot.postReviveResume || snapshot.postInteractionResume) {
-            const label = snapshot.postReviveResume ? '复活恢复窗口' : '事件恢复窗口';
-            return make('resuming', label, `${label} · 神识足够则继续探索，不足则回冥想`);
+            const isReviveResume = !!snapshot.postReviveResume;
+            const label = isReviveResume ? '复活恢复窗口' : '事件恢复窗口';
+            const rawRemaining = isReviveResume
+                ? snapshot.postReviveResumeRemainingSeconds
+                : snapshot.postInteractionResumeRemainingSeconds;
+            const remainingSeconds = optionalNumberOrNull(rawRemaining);
+            const targetSeconds = Math.max(0, Math.round(cfg.resumeWindowSeconds));
+            const spirit = Math.max(0, toFiniteNumber(snapshot.spirit, 0));
+            const spiritCost = Math.max(1, toFiniteNumber(snapshot.spiritCost, 1));
+            const lowSpirit = spirit < cfg.minSpirit || spirit < spiritCost;
+            const remainingText = remainingSeconds === null ? '' : ` · 剩余${formatAfkElapsedDuration(remainingSeconds)}`;
+            const nextText = lowSpirit
+                ? '神识不足将回冥想'
+                : `神识足够将继续${cfg.exploreMultiplier}倍探索`;
+            return make('resuming', label, `${label}${remainingText} · ${nextText}`, {
+                remainingSeconds,
+                targetSeconds
+            });
         }
 
         if (snapshot.autoExploreRunning || snapshot.autoExplorePending) {
@@ -2231,6 +2247,12 @@
         return parts.join(' · ');
     }
 
+    function buildAfkResumeStatusLine(summary) {
+        const phase = buildAfkPhaseStatusFromSummary(summary);
+        if (!phase || phase.phase !== 'resuming') return '';
+        return `恢复: ${sanitizeDebugText(phase.text || phase.label, DEBUG_SUMMARY_TEXT_LIMIT)}`;
+    }
+
     function extractAdventureStrategyImportText(source) {
         let parsed = source;
         if (typeof source === 'string') {
@@ -2434,6 +2456,10 @@
         if (guardianStatusLine) {
             lines.push(guardianStatusLine);
         }
+        const resumeStatusLine = buildAfkResumeStatusLine(summary);
+        if (resumeStatusLine) {
+            lines.push(resumeStatusLine);
+        }
         if (automation.waitDiagnosis && automation.waitDiagnosis.active && automation.waitDiagnosis.message) {
             lines.push(`诊断: ${sanitizeDebugText(automation.waitDiagnosis.message, DEBUG_SUMMARY_TEXT_LIMIT)}`);
         }
@@ -2627,6 +2653,7 @@
         buildAfkIssueReplay,
         buildAfkEnvironmentStatusLine,
         buildAfkAdventureStatusLine,
+        buildAfkResumeStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset
@@ -4415,6 +4442,13 @@
                 lastExploreProgressAt: this.lastExploreProgressAt
             }, cfg, now);
 
+            const postReviveResumeRemainingSeconds = this.postReviveResumeUntil > now
+                ? Math.max(0, Math.ceil((this.postReviveResumeUntil - now) / 1000))
+                : 0;
+            const postInteractionResumeRemainingSeconds = this.postInteractionResumeUntil > now
+                ? Math.max(0, Math.ceil((this.postInteractionResumeUntil - now) / 1000))
+                : 0;
+
             return {
                 isMeditating: meditationStatus ? !!meditationStatus.isMeditating : !!player.isMeditating,
                 meditationDurationSeconds: meditationStatus ? meditationStatus.durationSeconds : undefined,
@@ -4445,6 +4479,8 @@
                 autoExplorePending,
                 postReviveResume: this.postReviveResumeUntil > now,
                 postInteractionResume: this.postInteractionResumeUntil > now,
+                postReviveResumeRemainingSeconds,
+                postInteractionResumeRemainingSeconds,
                 exploreStalled
             };
         },

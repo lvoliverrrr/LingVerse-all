@@ -1923,7 +1923,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.46.0',
+        scriptVersion: '2.47.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         page: {
             title: '灵界 LingVerse - 修仙世界',
@@ -2012,12 +2012,12 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
     assert.deepEqual(toPlain(report), {
         schema: 'lingverse-afk-status-report/v1',
         sourceSchema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.46.0',
+        scriptVersion: '2.47.0',
         capturedAt: '2026-06-08T06:00:00.000Z',
         headline: '挂机状态 · 等待 · 复活次数已到本轮上限',
         text: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.46.0',
+            '版本: 2.47.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -2037,7 +2037,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
         ].join('\n'),
         lines: [
             '挂机状态 · 等待 · 复活次数已到本轮上限',
-            '版本: 2.46.0',
+            '版本: 2.47.0',
             '页面: 灵界 LingVerse - 修仙世界',
             '神识: 3/2758 · 单次消耗4',
             '阻塞: 死亡/奇遇#456',
@@ -2056,6 +2056,48 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '奇遇策略: 456=1 / 456=2'
         ]
     });
+});
+
+test('buildAfkStatusReport explains post-interaction resume windows', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        postInteractionResume: true,
+        postInteractionResumeRemainingSeconds: 45,
+        spirit: 160,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 50,
+        resumeWindowSeconds: 60
+    }, {
+        action: 'startAutoExplore',
+        reason: 'post-interaction-ready'
+    }, {
+        capturedAt: '2026-06-08T08:30:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    assert.deepEqual(summary.phase, {
+        schema: 'lingverse-afk-phase-status/v1',
+        phase: 'resuming',
+        label: '事件恢复窗口',
+        text: '事件恢复窗口 · 剩余45秒 · 神识足够将继续50倍探索',
+        reason: 'post-interaction-ready',
+        elapsedSeconds: null,
+        remainingSeconds: 45,
+        targetSeconds: 60
+    });
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('恢复: 事件恢复窗口 · 剩余45秒 · 神识足够将继续50倍探索'), true);
 });
 
 test('buildAfkDebugSummary reports encounter fight attempts', () => {
@@ -2208,7 +2250,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.46.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.47.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2338,7 +2380,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.46.0',
+        scriptVersion: '2.47.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.68.0
+// @version      2.69.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.68.0';
+    const SCRIPT_VERSION = '2.69.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -1227,6 +1227,85 @@
         return '';
     }
 
+    function formatAdventureAttemptReason(reason) {
+        const labels = {
+            disabled: '自动奇遇关闭',
+            'no-adventure': '等待奇遇',
+            'choice-ready': '准备自动选择',
+            'choice-triggered': '已触发自动选择',
+            'choice-failed': '自动选择失败',
+            'close-ready': '准备关闭奇遇',
+            'close-triggered': '已触发关闭奇遇',
+            'close-failed': '自动关闭失败'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function formatAdventureAttemptSource(source) {
+        const labels = {
+            'choice-button': '选项按钮',
+            'close-button': '关闭按钮',
+            'missing-overlay': '奇遇面板',
+            'strategy-miss': '策略未命中',
+            'disabled-choice': '选项不可点',
+            'missing-entry': '可点入口',
+            exception: '异常'
+        };
+        return labels[source] || source || '';
+    }
+
+    function formatAdventureAttemptChoice(attempt) {
+        const normalized = normalizeAdventureAttempt(attempt);
+        const index = optionalNumberOrNull(normalized.choiceIndex);
+        const text = sanitizeDebugText(normalized.choiceText || '', 80);
+        if (index === null && !text) return '';
+        if (index === null) return `选项「${text}」`;
+        return `第${index}项${text ? `「${text}」` : ''}`;
+    }
+
+    function buildAfkAdventureAttemptStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeAdventureAttempt(attempt);
+        const reason = normalized.reason;
+        if (!reason || reason === 'disabled' || reason === 'no-adventure') return '';
+        if ((reason === 'choice-ready' || reason === 'close-ready') && !normalized.shouldAttempt) return '';
+        const parts = [formatAdventureAttemptReason(reason)];
+        const id = sanitizeDebugText(normalized.adventureId || '', 60);
+        if (id) parts.push(`#${id}`);
+        const choice = formatAdventureAttemptChoice(normalized);
+        if (choice) parts.push(choice);
+        const source = formatAdventureAttemptSource(normalized.source);
+        if (source) parts.push(source);
+        const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        return `奇遇动作: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkAdventureAttemptAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeAdventureAttempt(attempt);
+        const reason = normalized.reason;
+        if (reason === 'choice-ready') {
+            return '奇遇建议: 已开启奇遇自动选择 · 将按当前固定项或策略表点击一次';
+        }
+        if (reason === 'choice-triggered') {
+            return '奇遇建议: 已触发奇遇自动选择 · 等待奇遇推进或恢复窗口继续探索';
+        }
+        if (reason === 'choice-failed') {
+            return '奇遇建议: 自动选择失败 · 检查当前奇遇选项/策略是否匹配，必要时手动处理或复制摘要';
+        }
+        if (reason === 'close-ready') {
+            return '奇遇建议: 奇遇已无可选项 · 将尝试关闭/完成当前奇遇';
+        }
+        if (reason === 'close-triggered') {
+            return '奇遇建议: 已触发关闭奇遇 · 等待恢复窗口继续探索';
+        }
+        if (reason === 'close-failed') {
+            return '奇遇建议: 自动关闭奇遇失败 · 检查关闭按钮，必要时手动处理或复制摘要';
+        }
+        return '';
+    }
+
     function formatExploreStartAttemptReason(reason) {
         const labels = {
             disabled: '自动挂机关闭',
@@ -2372,6 +2451,19 @@
         };
     }
 
+    function normalizeAdventureAttempt(attempt) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        return {
+            shouldAttempt: !!raw.shouldAttempt,
+            reason: String(raw.reason || ''),
+            source: String(raw.source || ''),
+            adventureId: raw.adventureId === null || typeof raw.adventureId === 'undefined' ? '' : String(raw.adventureId),
+            choiceIndex: optionalNumberOrNull(raw.choiceIndex),
+            choiceText: String(raw.choiceText || ''),
+            failureMessage: String(raw.failureMessage || '')
+        };
+    }
+
     function normalizeExploreStartAttempt(attempt) {
         const raw = attempt && typeof attempt === 'object' ? attempt : {};
         return {
@@ -2647,6 +2739,49 @@
         return normalizePlayerEncounterAttempt({
             shouldAttempt: false,
             reason: 'no-player-encounter'
+        });
+    }
+
+    function buildAdventureDebugAttempt(attempt, snapshot, config, decision) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const state = snapshot || {};
+        const currentDecision = decision || {};
+        if (attempt && typeof attempt === 'object' && (
+            attempt.reason ||
+            attempt.source ||
+            typeof attempt.shouldAttempt !== 'undefined'
+        )) {
+            return normalizeAdventureAttempt(attempt);
+        }
+        if (cfg.adventureMode !== 'fixed' && cfg.adventureMode !== 'strategy') {
+            return normalizeAdventureAttempt({
+                shouldAttempt: false,
+                reason: 'disabled'
+            });
+        }
+        if (!state.adventureActive) {
+            return normalizeAdventureAttempt({
+                shouldAttempt: false,
+                reason: 'no-adventure'
+            });
+        }
+        const adventureId = state.adventureId || '';
+        const choiceIndex = resolveAdventureChoiceIndex(adventureId, cfg);
+        const choices = Array.isArray(state.adventureChoices) ? state.adventureChoices : [];
+        const choiceText = choiceIndex > 0 ? String(choices[choiceIndex - 1] || '') : '';
+        if (currentDecision.action === 'handleAdventure' && choiceIndex > 0) {
+            return normalizeAdventureAttempt({
+                shouldAttempt: true,
+                reason: 'choice-ready',
+                adventureId,
+                choiceIndex,
+                choiceText
+            });
+        }
+        return normalizeAdventureAttempt({
+            shouldAttempt: false,
+            reason: 'no-adventure',
+            adventureId
         });
     }
 
@@ -3086,6 +3221,19 @@
         };
     }
 
+    function summarizeAdventureAttempt(attempt) {
+        const normalized = normalizeAdventureAttempt(attempt);
+        return {
+            shouldAttempt: normalized.shouldAttempt,
+            reason: normalized.reason,
+            source: sanitizeDebugText(normalized.source, 40),
+            adventureId: sanitizeDebugText(normalized.adventureId, 60),
+            choiceIndex: optionalNumberOrNull(normalized.choiceIndex),
+            choiceText: sanitizeDebugText(normalized.choiceText, DEBUG_SUMMARY_TEXT_LIMIT),
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
+        };
+    }
+
     function summarizeExploreStartAttempt(attempt) {
         const normalized = normalizeExploreStartAttempt(attempt);
         return {
@@ -3246,6 +3394,7 @@
                 meditation: summarizeMeditationAttempt(automation.meditation),
                 merchant: summarizeMerchantAttempt(automation.merchant),
                 playerEncounter: summarizePlayerEncounterAttempt(automation.playerEncounter),
+                adventureAttempt: summarizeAdventureAttempt(automation.adventureAttempt),
                 exploreStart: summarizeExploreStartAttempt(automation.exploreStart),
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
                 talismans: summarizeCombatTalismanAttempt(automation.talismans),
@@ -3378,6 +3527,12 @@
         const source = attempt && typeof attempt === 'object' ? attempt : {};
         const reason = String(source.reason || '');
         return !!reason && reason !== 'disabled' && reason !== 'no-player-encounter';
+    }
+
+    function isReportableAdventureAttempt(attempt) {
+        const source = attempt && typeof attempt === 'object' ? attempt : {};
+        const reason = String(source.reason || '');
+        return !!reason && reason !== 'disabled' && reason !== 'no-adventure';
     }
 
     function buildReplayStrategyImportText(summary) {
@@ -3539,6 +3694,9 @@
         ];
         if (isReportablePlayerEncounterAttempt(automation.playerEncounter)) {
             automationAttempts.unshift(formatReplayAttempt('道友', automation.playerEncounter));
+        }
+        if (isReportableAdventureAttempt(automation.adventureAttempt)) {
+            automationAttempts.unshift(formatReplayAttempt('奇遇', automation.adventureAttempt));
         }
         const automationText = automationAttempts.join(' | ');
         const strategyImportText = buildReplayStrategyImportText(summary);
@@ -3766,6 +3924,9 @@
             `迎战 ${sanitizeDebugText(automation.fight && automation.fight.reason || 'unknown', 60)}`,
             `用丹 ${sanitizeDebugText(automation.nirvanaPill && automation.nirvanaPill.reason || 'unknown', 60)}`
         ];
+        if (isReportableAdventureAttempt(automation.adventureAttempt)) {
+            automationSummaryParts.unshift(`奇遇 ${sanitizeDebugText(automation.adventureAttempt.reason, 60)}`);
+        }
         if (isReportablePlayerEncounterAttempt(automation.playerEncounter)) {
             automationSummaryParts.unshift(`道友 ${sanitizeDebugText(automation.playerEncounter.reason, 60)}`);
         }
@@ -3773,6 +3934,14 @@
         const adventureStatusLine = buildAfkAdventureStatusLine(summary);
         if (adventureStatusLine) {
             lines.push(adventureStatusLine);
+        }
+        const adventureAttemptStatusLine = buildAfkAdventureAttemptStatusLine(automation.adventureAttempt);
+        if (adventureAttemptStatusLine) {
+            lines.push(adventureAttemptStatusLine);
+        }
+        const adventureAttemptAdviceStatusLine = buildAfkAdventureAttemptAdviceStatusLine(automation.adventureAttempt);
+        if (adventureAttemptAdviceStatusLine) {
+            lines.push(adventureAttemptAdviceStatusLine);
         }
         if (strategyImportText) {
             lines.push(`奇遇策略: ${strategyImportText.split('\n').join(' / ')}`);
@@ -3841,6 +4010,7 @@
                 meditation: buildMeditationDebugAttempt(debugContext.meditationAttempt, snapshot, cfg, currentDecision),
                 merchant: buildMerchantDebugAttempt(debugContext.merchantAttempt, snapshot),
                 playerEncounter: buildPlayerEncounterDebugAttempt(debugContext.playerEncounterAttempt, snapshot, cfg, currentDecision),
+                adventureAttempt: buildAdventureDebugAttempt(debugContext.adventureAttempt, snapshot, cfg, currentDecision),
                 exploreStart: buildExploreStartDebugAttempt(debugContext.exploreStartAttempt, snapshot, cfg, currentDecision),
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
                 talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
@@ -3856,6 +4026,7 @@
                         decision: currentDecision,
                         meditationAttempt: debugContext.meditationAttempt,
                         merchantAttempt: debugContext.merchantAttempt,
+                        adventureAttempt: debugContext.adventureAttempt,
                         exploreStartAttempt: debugContext.exploreStartAttempt,
                         nirvanaPillAttempt: debugContext.nirvanaPillAttempt,
                         talismanAttempt: debugContext.talismanAttempt,
@@ -3960,6 +4131,7 @@
         normalizeMeditationAttempt,
         normalizeMerchantAttempt,
         normalizePlayerEncounterAttempt,
+        normalizeAdventureAttempt,
         normalizeExploreStartAttempt,
         normalizeGuardianConfig,
         buildGuardianHirePayload,
@@ -3993,6 +4165,8 @@
         buildAfkMerchantAdviceStatusLine,
         buildAfkPlayerEncounterStatusLine,
         buildAfkPlayerEncounterAdviceStatusLine,
+        buildAfkAdventureAttemptStatusLine,
+        buildAfkAdventureAttemptAdviceStatusLine,
         buildAfkExploreStartStatusLine,
         buildAfkExploreStartAdviceStatusLine,
         buildAfkStatusReport,
@@ -5534,6 +5708,7 @@
         lastMeditationAttempt: null,
         lastExploreStartAttempt: null,
         lastPlayerEncounterAttempt: null,
+        lastAdventureAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
         resourceUsage: normalizeAfkResourceUsage({}),
@@ -5621,6 +5796,7 @@
                     meditationAttempt: this.lastMeditationAttempt,
                     merchantAttempt: MerchantAutoBuyer.lastAttempt,
                     playerEncounterAttempt: this.lastPlayerEncounterAttempt,
+                    adventureAttempt: this.lastAdventureAttempt,
                     exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
@@ -5654,6 +5830,7 @@
                     meditationAttempt: this.lastMeditationAttempt,
                     merchantAttempt: MerchantAutoBuyer.lastAttempt,
                     playerEncounterAttempt: this.lastPlayerEncounterAttempt,
+                    adventureAttempt: this.lastAdventureAttempt,
                     exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
@@ -6595,38 +6772,107 @@
         },
 
         async handleAdventure(cfg) {
-            if (cfg.adventureMode !== 'fixed' && cfg.adventureMode !== 'strategy') return;
+            if (cfg.adventureMode !== 'fixed' && cfg.adventureMode !== 'strategy') {
+                this.lastAdventureAttempt = normalizeAdventureAttempt({
+                    shouldAttempt: false,
+                    reason: 'disabled'
+                });
+                return;
+            }
+            let source = '';
+            let adventureId = '';
+            let choiceIndex = null;
+            let choiceText = '';
             try {
                 installAdventureStepHook();
                 const overlay = $('#adventureOverlay');
                 if (!overlay || overlay.classList.contains('hidden')) {
+                    this.lastAdventureAttempt = normalizeAdventureAttempt({
+                        shouldAttempt: true,
+                        reason: 'choice-failed',
+                        source: 'missing-overlay',
+                        failureMessage: '未检测到可处理的奇遇面板'
+                    });
                     Logger.warn('未检测到可处理的奇遇面板，继续等待');
                     return;
                 }
 
                 const adventureStep = _win._lingverseAutoMapLastAdventureStep || null;
-                const adventureId = adventureStep ? adventureStep.adventureId : undefined;
+                adventureId = adventureStep ? adventureStep.adventureId : '';
                 const closeBtn = this.findAdventureCloseButton(overlay);
                 const choiceButtons = this.findAdventureChoiceButtons(overlay);
 
                 if (choiceButtons.length > 0) {
                     const choiceNumber = resolveAdventureChoiceIndex(adventureId, cfg);
+                    choiceIndex = choiceNumber > 0 ? choiceNumber : null;
                     if (choiceNumber <= 0) {
+                        this.lastAdventureAttempt = normalizeAdventureAttempt({
+                            shouldAttempt: true,
+                            reason: 'choice-failed',
+                            source: 'strategy-miss',
+                            adventureId,
+                            failureMessage: `奇遇 ${adventureId || '未知'} 未命中固定策略`
+                        });
                         Logger.warn(`奇遇 ${adventureId || '未知'} 未命中固定策略，等待手动处理`);
                         return;
                     }
                     const choiceBtn = choiceButtons[choiceNumber - 1];
+                    choiceText = choiceBtn ? String(choiceBtn.textContent || '').trim() : '';
                     if (!choiceBtn || choiceBtn.disabled) {
+                        this.lastAdventureAttempt = normalizeAdventureAttempt({
+                            shouldAttempt: true,
+                            reason: 'choice-failed',
+                            source: 'disabled-choice',
+                            adventureId,
+                            choiceIndex,
+                            choiceText,
+                            failureMessage: `奇遇固定选择第${choiceNumber}项，但当前只有${choiceButtons.length}个可选项`
+                        });
                         Logger.warn(`奇遇固定选择第${choiceNumber}项，但当前只有${choiceButtons.length}个可选项，等待手动处理`);
                         return;
                     }
 
+                    this.lastAdventureAttempt = normalizeAdventureAttempt({
+                        shouldAttempt: true,
+                        reason: 'choice-ready',
+                        adventureId,
+                        choiceIndex,
+                        choiceText
+                    });
+                    source = 'choice-button';
                     choiceBtn.click();
+                    this.lastAdventureAttempt = normalizeAdventureAttempt({
+                        shouldAttempt: false,
+                        reason: 'choice-triggered',
+                        source,
+                        adventureId,
+                        choiceIndex,
+                        choiceText
+                    });
                     Logger.info(`已自动选择奇遇${adventureId ? ` ${adventureId}` : ''}第${choiceNumber}项`);
                 } else if (closeBtn && !closeBtn.disabled) {
+                    this.lastAdventureAttempt = normalizeAdventureAttempt({
+                        shouldAttempt: true,
+                        reason: 'close-ready',
+                        adventureId
+                    });
+                    source = 'close-button';
                     closeBtn.click();
+                    this.lastAdventureAttempt = normalizeAdventureAttempt({
+                        shouldAttempt: false,
+                        reason: 'close-triggered',
+                        source,
+                        adventureId
+                    });
                     Logger.info('已自动结束/关闭奇遇');
                 } else {
+                    this.lastAdventureAttempt = normalizeAdventureAttempt({
+                        shouldAttempt: true,
+                        reason: 'close-failed',
+                        source: 'missing-entry',
+                        adventureId,
+                        failureMessage: '奇遇面板中未找到可点击选项'
+                    });
                     Logger.warn('奇遇面板中未找到可点击选项，等待手动处理');
                     return;
                 }
@@ -6637,7 +6883,17 @@
                 this.refreshGameData();
                 setTimeout(() => this.tick(true), 1200);
             } catch (e) {
-                Logger.warn(`自动处理奇遇失败: ${e.message || e}`);
+                const failureMessage = e.message || String(e);
+                this.lastAdventureAttempt = normalizeAdventureAttempt({
+                    shouldAttempt: true,
+                    reason: source === 'close-button' ? 'close-failed' : 'choice-failed',
+                    source: source || 'exception',
+                    adventureId,
+                    choiceIndex,
+                    choiceText,
+                    failureMessage
+                });
+                Logger.warn(`自动处理奇遇失败: ${failureMessage}`);
             }
         },
 

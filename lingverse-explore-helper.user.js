@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.70.0
+// @version      2.71.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.70.0';
+    const SCRIPT_VERSION = '2.71.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -166,6 +166,23 @@
         const source = String(text || '');
         return source.indexOf('灵界已更新新版本') >= 0 ||
             (source.indexOf('已更新新版本') >= 0 && source.indexOf('刷新') >= 0);
+    }
+
+    function getExtensionVersion() {
+        const root = document && document.documentElement ? document.documentElement : null;
+        const dataset = root && root.dataset && typeof root.dataset === 'object' ? root.dataset : {};
+        return String(dataset.lingverseAutoMapExtensionVersion || _win.LingVerseAutoMapExtensionVersion || '');
+    }
+
+    function buildAfkEnvironmentInfo(source) {
+        const sourceObj = source && typeof source === 'object' ? source : {};
+        const env = sourceObj.environment && typeof sourceObj.environment === 'object' ? sourceObj.environment : {};
+        const scriptVersion = sanitizeDebugText(sourceObj.scriptVersion || SCRIPT_VERSION, 40);
+        const extensionVersion = sanitizeDebugText(env.extensionVersion || sourceObj.extensionVersion || getExtensionVersion(), 40);
+        return {
+            extensionVersion,
+            versionMismatch: !!(extensionVersion && scriptVersion && extensionVersion !== scriptVersion)
+        };
     }
 
     function resolveApiObject() {
@@ -3355,6 +3372,7 @@
             schema: 'lingverse-afk-debug-summary/v1',
             sourceSchema: String(full.schema || ''),
             scriptVersion: String(full.scriptVersion || SCRIPT_VERSION),
+            environment: buildAfkEnvironmentInfo(full),
             capturedAt: String(full.capturedAt || ''),
             page: {
                 title: sanitizeDebugText(page.title, 100),
@@ -3510,6 +3528,10 @@
         const source = summary && typeof summary === 'object' ? summary : {};
         const blockers = source.blockers && typeof source.blockers === 'object' ? source.blockers : {};
         const version = sanitizeDebugText(source.scriptVersion || SCRIPT_VERSION, 40);
+        const environment = buildAfkEnvironmentInfo(source);
+        if (environment.versionMismatch) {
+            return `环境: helper ${version} · 扩展 ${environment.extensionVersion || '未知'} · 版本不一致，重载扩展并刷新页面`;
+        }
         if (blockers.gameUpdateNoticeActive) {
             return `环境: helper ${version} · 游戏更新提示，先刷新页面/重载扩展`;
         }
@@ -3998,6 +4020,10 @@
         return {
             schema: 'lingverse-afk-debug-snapshot/v1',
             scriptVersion: SCRIPT_VERSION,
+            environment: buildAfkEnvironmentInfo({
+                scriptVersion: SCRIPT_VERSION,
+                extensionVersion: debugContext.extensionVersion
+            }),
             capturedAt: debugContext.capturedAt || new Date().toISOString(),
             page: resolvePageInfo(debugContext),
             decision: {
@@ -4172,6 +4198,7 @@
         buildAfkDebugSnapshot,
         buildAfkDebugSummary,
         buildAfkIssueReplay,
+        buildAfkEnvironmentInfo,
         buildAfkEnvironmentStatusLine,
         buildAfkAdventureStatusLine,
         buildAfkResumeStatusLine,

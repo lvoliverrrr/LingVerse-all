@@ -57,6 +57,7 @@
 - v2.68.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无陌生道友弹窗；测试 `2.68.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹或陌生道友按钮。
 - v2.69.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无奇遇/陌生道友弹窗；测试 `2.69.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮。
 - v2.70.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无商人/遭遇/战斗/奇遇/陌生道友/混天典狱；测试 `2.70.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试跳过混天典狱。
+- v2.71.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，页面尚无 `lingverseAutoMapExtensionVersion` / `lingverseAutoMapInjectedVersion` dataset，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无商人/遭遇/战斗/奇遇/陌生道友/混天典狱；测试 `2.71.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -466,6 +467,7 @@
 - `buildAfkEnvironmentStatusLine(summary)` 从摘要的 `scriptVersion` 和 `blockers.gameUpdateNoticeActive` 生成只读环境提示。
 - 当游戏更新 blocker 存在时，`buildAfkStatusReport` 会插入 `环境: helper x.y.z · 游戏更新提示，先刷新页面/重载扩展`。
 - 目的：真实测试时常见“游戏页面提示更新、扩展脚本版本未刷新”的情况可以直接从状态报告看出，减少误判为挂机逻辑问题。
+- v2.71.0 起，该环境提示也覆盖 helper/扩展版本不一致，优先提示重载扩展并刷新页面。
 
 `lingverse-explore-helper.user.js` v2.46.0 新增：
 
@@ -640,6 +642,13 @@
 - `buildAfkHardStopStatusLine` / `buildAfkHardStopAdviceStatusLine` 对 `immortalPrisonActive` 输出即时 hard-stop 状态。
 - 状态报告会显示“硬停: 混天典狱 · 脚本暂停自动探索”和“硬停建议: 混天典狱需要手动处理 · 脚本不会自动跳过、自动点击或消耗资源”。
 - 目的：混天典狱属于不可安全自动跳过的 hard-stop；测试者第一次复制状态就能知道脚本是主动停住，不是低神识、商人、奇遇、战斗或恢复窗口故障。
+
+`lingverse-explore-helper.user.js` v2.71.0 新增：
+
+- `lingverse-extension-loader.js` 会把扩展 manifest 版本写到 `document.documentElement.dataset.lingverseAutoMapExtensionVersion`，并给注入脚本 URL 添加版本查询参数。
+- `buildAfkDebugSnapshot` / `buildAfkDebugSummary` 保留 `environment.extensionVersion` 和 `versionMismatch`。
+- `buildAfkEnvironmentStatusLine` 在 helper/扩展版本不一致时输出“环境: helper ... · 扩展 ... · 版本不一致，重载扩展并刷新页面”。
+- 目的：外部测试者安装、重载或刷新步骤不一致时，状态报告能先暴露环境问题；该变更不增加任何探索、购买、战斗、复活或消耗品动作。
 
 默认配置：
 

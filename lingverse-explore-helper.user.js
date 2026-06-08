@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.56.0
+// @version      2.57.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.56.0';
+    const SCRIPT_VERSION = '2.57.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -1484,6 +1484,106 @@
         return current;
     }
 
+    const AFK_PRESET_LABELS = {
+        steady: '稳妥1倍',
+        guardian: '护道1倍',
+        rich: '富裕50倍'
+    };
+
+    const AFK_PRESET_COMPARE_FIELDS = [
+        { key: 'exploreMultiplier', label: '探索倍数', format: value => `${value}倍` },
+        { key: 'autoFight', label: '自动迎战', format: formatAfkPresetBoolean },
+        { key: 'autoHireGuardian', label: '自动护道', format: formatAfkPresetBoolean },
+        { key: 'autoRevive', label: '自动复活', format: formatAfkPresetBoolean },
+        { key: 'useTalismans', label: '战斗用符', format: formatAfkPresetBoolean },
+        { key: 'useNirvanaPill', label: '涅槃重生丹', format: formatAfkPresetBoolean },
+        { key: 'autoDeclinePlayerEncounter', label: '陌生道友婉拒', format: formatAfkPresetBoolean },
+        { key: 'reviveMaxPerRun', label: '复活上限', format: value => String(value), when: (cfg, expected) => cfg.autoRevive || expected.autoRevive },
+        { key: 'talismanMaxEncountersPerRun', label: '用符遭遇上限', format: value => String(value), when: (cfg, expected) => cfg.useTalismans || expected.useTalismans },
+        { key: 'talismanMaxKinds', label: '最多符种', format: value => String(value), when: (cfg, expected) => cfg.useTalismans || expected.useTalismans },
+        { key: 'talismanQuantity', label: '每种符数量', format: value => String(value), when: (cfg, expected) => cfg.useTalismans || expected.useTalismans },
+        { key: 'nirvanaMaxPerRun', label: '用丹上限', format: value => String(value), when: (cfg, expected) => cfg.useNirvanaPill || expected.useNirvanaPill },
+        { key: 'nirvanaMinRarity', label: '用丹最低品质', format: formatRarityThreshold, when: (cfg, expected) => cfg.useNirvanaPill || expected.useNirvanaPill },
+        { key: 'queueNirvanaPill', label: '丹药排队', format: formatAfkPresetBoolean, when: (cfg, expected) => cfg.useNirvanaPill || expected.useNirvanaPill }
+    ];
+
+    function formatAfkPresetBoolean(value) {
+        return value ? '开启' : '关闭';
+    }
+
+    function normalizeAfkPresetInputConfig(config) {
+        const source = config && typeof config === 'object' ? config : {};
+        const risks = source.risks && typeof source.risks === 'object' ? source.risks : {};
+        return normalizeAfkLoopConfig(Object.assign({}, source, risks));
+    }
+
+    function compareAfkPreset(config, presetName) {
+        const cfg = normalizeAfkPresetInputConfig(config || {});
+        const expected = applyAfkPreset(cfg, presetName);
+        const mismatchTexts = [];
+        AFK_PRESET_COMPARE_FIELDS.forEach(field => {
+            if (field.when && !field.when(cfg, expected)) return;
+            if (cfg[field.key] === expected[field.key]) return;
+            const connector = typeof expected[field.key] === 'boolean' ? '应' : '应为';
+            mismatchTexts.push(`${field.label}${connector}${field.format(expected[field.key])}`);
+        });
+        return {
+            preset: presetName,
+            label: AFK_PRESET_LABELS[presetName] || presetName,
+            mismatchCount: mismatchTexts.length,
+            mismatchTexts
+        };
+    }
+
+    function getAfkPresetPreference(config) {
+        const cfg = normalizeAfkPresetInputConfig(config || {});
+        if (cfg.exploreMultiplier >= 50 || cfg.autoFight || cfg.autoRevive || cfg.useTalismans || cfg.useNirvanaPill) {
+            return ['rich', 'guardian', 'steady'];
+        }
+        if (cfg.autoHireGuardian) {
+            return ['guardian', 'steady', 'rich'];
+        }
+        return ['steady', 'guardian', 'rich'];
+    }
+
+    function buildAfkPresetStatus(config) {
+        const cfg = normalizeAfkPresetInputConfig(config || {});
+        const preference = getAfkPresetPreference(cfg);
+        const byPreset = {};
+        preference.forEach(preset => {
+            byPreset[preset] = compareAfkPreset(cfg, preset);
+        });
+        const best = preference
+            .map(preset => byPreset[preset])
+            .sort((a, b) => a.mismatchCount - b.mismatchCount || preference.indexOf(a.preset) - preference.indexOf(b.preset))[0];
+        const match = best.mismatchCount === 0;
+        const label = match ? best.label : '自定义';
+        const summaryText = match
+            ? `${best.label} · 已匹配预设`
+            : `自定义 · 接近${best.label} · 偏离${best.mismatchCount}项`;
+        const lineText = match
+            ? `模式: ${summaryText} · 冥想${cfg.meditationMinutes}分钟 · 阈值${cfg.minSpirit} · 恢复${cfg.resumeWindowSeconds}秒`
+            : `模式: ${summaryText}: ${best.mismatchTexts.slice(0, 3).join(' / ')}`;
+        return {
+            schema: 'lingverse-afk-preset-status/v1',
+            mode: match ? best.preset : 'custom',
+            label,
+            match,
+            closestPreset: best.preset,
+            closestLabel: best.label,
+            mismatchCount: best.mismatchCount,
+            mismatchTexts: best.mismatchTexts.slice(),
+            summaryText,
+            lineText
+        };
+    }
+
+    function buildAfkPresetStatusLine(status) {
+        const source = status && typeof status === 'object' ? status : null;
+        if (!source || source.schema !== 'lingverse-afk-preset-status/v1') return '';
+        return sanitizeDebugText(source.lineText || source.summaryText || '', DEBUG_SUMMARY_TEXT_LIMIT);
+    }
+
     function getResumeWindowMs(config) {
         return normalizeAfkLoopConfig(config || {}).resumeWindowSeconds * 1000;
     }
@@ -2841,7 +2941,8 @@
                     queueNirvanaPill: !!config.queueNirvanaPill,
                     autoDeclinePlayerEncounter: !!config.autoDeclinePlayerEncounter
                 },
-                riskStatus: buildAfkRiskStatus(config, config.guardian, automation.resourceUsage)
+                riskStatus: buildAfkRiskStatus(config, config.guardian, automation.resourceUsage),
+                presetStatus: buildAfkPresetStatus(config)
             },
             history: {
                 decisionTail: tailRecords(history.decisionTail, DEBUG_SUMMARY_HISTORY_LIMIT).map(record => ({
@@ -3166,6 +3267,7 @@
         const automation = summary.automation && typeof summary.automation === 'object' ? summary.automation : {};
         const config = summary.config && typeof summary.config === 'object' ? summary.config : {};
         const riskStatus = config.riskStatus && typeof config.riskStatus === 'object' ? config.riskStatus : {};
+        const presetStatus = config.presetStatus && typeof config.presetStatus === 'object' ? config.presetStatus : null;
         const usage = normalizeAfkResourceUsage(automation.resourceUsage);
         const pageText = sanitizeDebugText(page.title || page.url || '未知页面', 100);
         const decisionText = `${formatAfkAction(decision.action)} · ${formatAfkReason(decision.reason)}`;
@@ -3196,6 +3298,11 @@
         const environmentLine = buildAfkEnvironmentStatusLine(summary);
         if (environmentLine) {
             lines.splice(2, 0, environmentLine);
+        }
+        const presetStatusLine = buildAfkPresetStatusLine(presetStatus);
+        if (presetStatusLine) {
+            const configLineIndex = lines.findIndex(line => line.indexOf('配置: ') === 0);
+            lines.splice(configLineIndex >= 0 ? configLineIndex + 1 : lines.length, 0, presetStatusLine);
         }
         (Array.isArray(riskStatus.warnings) ? riskStatus.warnings : [])
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
@@ -3419,7 +3526,8 @@
                     mode: guardianCfg.mode,
                     priority: guardianCfg.priority.slice(),
                     threatLevel: guardianCfg.threatLevel
-                }
+                },
+                presetStatus: buildAfkPresetStatus(cfg)
             },
             history: {
                 decisionTail: normalizeDecisionHistory(debugContext.decisionHistory),
@@ -3446,6 +3554,7 @@
         buildAfkPanelStatus,
         buildAfkWaitingDiagnosis,
         buildAfkRiskStatus,
+        buildAfkPresetStatus,
         buildAfkConfigPack,
         resolveAfkConfigPackImport,
         selectCombatTalismans,

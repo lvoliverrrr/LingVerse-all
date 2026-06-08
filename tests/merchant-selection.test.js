@@ -1702,6 +1702,67 @@ test('applyAfkPreset configures steady, guardian, and rich AFK modes without ena
     });
 });
 
+test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.buildAfkPresetStatus, 'function');
+
+    const guardianStatus = hooks.buildAfkPresetStatus(hooks.applyAfkPreset({
+        enabled: true,
+        resumeWindowSeconds: 75
+    }, 'guardian'));
+    assert.deepEqual(toPlain(guardianStatus), {
+        schema: 'lingverse-afk-preset-status/v1',
+        mode: 'guardian',
+        label: '护道1倍',
+        match: true,
+        closestPreset: 'guardian',
+        closestLabel: '护道1倍',
+        mismatchCount: 0,
+        mismatchTexts: [],
+        summaryText: '护道1倍 · 已匹配预设',
+        lineText: '模式: 护道1倍 · 已匹配预设 · 冥想140分钟 · 阈值20 · 恢复75秒'
+    });
+
+    const richDrift = hooks.buildAfkPresetStatus(Object.assign(
+        hooks.applyAfkPreset({}, 'rich'),
+        { autoRevive: false }
+    ));
+    assert.deepEqual(toPlain(richDrift), {
+        schema: 'lingverse-afk-preset-status/v1',
+        mode: 'custom',
+        label: '自定义',
+        match: false,
+        closestPreset: 'rich',
+        closestLabel: '富裕50倍',
+        mismatchCount: 1,
+        mismatchTexts: ['自动复活应开启'],
+        summaryText: '自定义 · 接近富裕50倍 · 偏离1项',
+        lineText: '模式: 自定义 · 接近富裕50倍 · 偏离1项: 自动复活应开启'
+    });
+
+    const report = hooks.buildAfkStatusReport({
+        schema: 'lingverse-afk-debug-summary/v1',
+        scriptVersion: '2.57.0',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decision: { action: 'startAutoExplore', reason: 'spirit-ready' },
+        player: { spirit: 2600, maxSpirit: 2758, spiritCost: 4, canExplore: true },
+        blockers: {},
+        automation: { resourceUsage: {} },
+        config: {
+            meditationMinutes: 140,
+            minSpirit: 20,
+            exploreMultiplier: 50,
+            reviveMaxPerRun: 1,
+            talismanMaxEncountersPerRun: 3,
+            nirvanaMaxPerRun: 1,
+            presetStatus: richDrift
+        }
+    });
+    assert.equal(report.lines.includes('模式: 自定义 · 接近富裕50倍 · 偏离1项: 自动复活应开启'), true);
+});
+
 test('getResumeWindowMs converts configured resume windows to milliseconds', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2630,7 +2691,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.56.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.57.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2760,7 +2821,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.56.0',
+        scriptVersion: '2.57.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

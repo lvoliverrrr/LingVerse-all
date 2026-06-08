@@ -28,7 +28,7 @@ function runLoader(overrides = {}) {
         chrome: {
             runtime: {
                 getManifest() {
-                    return { version: '2.72.0' };
+                    return { version: '2.73.0' };
                 },
                 getURL(fileName) {
                     return `chrome-extension://lingverse/${fileName}`;
@@ -44,21 +44,21 @@ test('extension loader exposes manifest version and cache-busts helper injection
     const result = runLoader();
 
     assert.equal(result.documentElement.dataset.lingverseAutoMapInjected, '1');
-    assert.equal(result.documentElement.dataset.lingverseAutoMapInjectedVersion, '2.72.0');
-    assert.equal(result.documentElement.dataset.lingverseAutoMapExtensionVersion, '2.72.0');
+    assert.equal(result.documentElement.dataset.lingverseAutoMapInjectedVersion, '2.73.0');
+    assert.equal(result.documentElement.dataset.lingverseAutoMapExtensionVersion, '2.73.0');
     assert.equal(result.appended.length, 1);
-    assert.equal(result.appended[0].src, 'chrome-extension://lingverse/lingverse-explore-helper.user.js?v=2.72.0');
+    assert.equal(result.appended[0].src, 'chrome-extension://lingverse/lingverse-explore-helper.user.js?v=2.73.0');
 });
 
 test('extension loader skips duplicate injection for the same extension version', () => {
     const documentElement = {
         dataset: {
             lingverseAutoMapInjected: '1',
-            lingverseAutoMapInjectedVersion: '2.72.0'
+            lingverseAutoMapInjectedVersion: '2.73.0'
         }
     };
     const result = runLoader({ documentElement });
 
     assert.equal(result.appended.length, 0);
-    assert.equal(documentElement.dataset.lingverseAutoMapInjectedVersion, '2.72.0');
+    assert.equal(documentElement.dataset.lingverseAutoMapInjectedVersion, '2.73.0');
 });

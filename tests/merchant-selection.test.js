@@ -154,6 +154,34 @@ test('decideAfkNextAction stops meditation after configured duration', () => {
     });
 });
 
+test('parseMeditationBarState reads visible meditation bar duration safely', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.parseMeditationBarState, 'function');
+
+    assert.deepEqual(toPlain(hooks.parseMeditationBarState([
+        '冥想修炼中 (最长12小时)',
+        '1时30分',
+        '预计修为: 7,650',
+        '恢复: 5,794血 / 3,002灵 / 914识',
+        '收功'
+    ].join('\n'))), {
+        isMeditating: true,
+        durationSeconds: 5400
+    });
+
+    assert.deepEqual(toPlain(hooks.parseMeditationBarState('冥想修炼中 (最长12小时)\n0分\n收功')), {
+        isMeditating: true,
+        durationSeconds: 0
+    });
+
+    assert.deepEqual(toPlain(hooks.parseMeditationBarState('你缓缓收功，结束了本次修炼。 修炼时长: 8分26秒')), {
+        isMeditating: false,
+        durationSeconds: null
+    });
+});
+
 test('decideAfkNextAction starts auto explore when spirit is usable and idle', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -1246,7 +1274,7 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         document: {
             readyState: 'loading',
             documentElement: {
-                dataset: { lingverseAutoMapExtensionVersion: '2.72.0' },
+                dataset: { lingverseAutoMapExtensionVersion: '2.73.0' },
                 classList: {
                     contains() { return false; }
                 }
@@ -1360,7 +1388,7 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
 
     assert.equal(snapshot.schema, 'lingverse-afk-debug-snapshot/v1');
     assert.equal(typeof snapshot.scriptVersion, 'string');
-    assert.equal(snapshot.environment.extensionVersion, '2.72.0');
+    assert.equal(snapshot.environment.extensionVersion, '2.73.0');
     assert.equal(snapshot.environment.initializedVersion, '2.71.0');
     assert.equal(snapshot.environment.initializedVersionMismatch, true);
     assert.equal(snapshot.decision.action, 'handleAdventure');
@@ -1488,9 +1516,9 @@ test('buildAfkStatusReport explains initialized panel version drift', () => {
 
     const summary = hooks.buildAfkDebugSummary({
         schema: 'lingverse-afk-debug-snapshot/v1',
-        scriptVersion: '2.72.0',
+        scriptVersion: '2.73.0',
         environment: {
-            extensionVersion: '2.72.0',
+            extensionVersion: '2.73.0',
             initializedVersion: '2.71.0',
             autoMapInited: true
         },
@@ -1505,7 +1533,7 @@ test('buildAfkStatusReport explains initialized panel version drift', () => {
     });
 
     assert.deepEqual(toPlain(summary.environment), {
-        extensionVersion: '2.72.0',
+        extensionVersion: '2.73.0',
         initializedVersion: '2.71.0',
         autoMapInited: true,
         versionMismatch: false,
@@ -1514,7 +1542,7 @@ test('buildAfkStatusReport explains initialized panel version drift', () => {
     });
 
     const report = hooks.buildAfkStatusReport(summary);
-    assert.equal(report.lines.includes('环境: helper 2.72.0 · 面板 2.71.0 · 页面仍是旧初始化，刷新页面'), true);
+    assert.equal(report.lines.includes('环境: helper 2.73.0 · 面板 2.71.0 · 页面仍是旧初始化，刷新页面'), true);
 });
 
 test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
@@ -1954,7 +1982,7 @@ test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.72.0',
+        scriptVersion: '2.73.0',
         page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
         decision: { action: 'startAutoExplore', reason: 'spirit-ready' },
         player: { spirit: 2600, maxSpirit: 2758, spiritCost: 4, canExplore: true },
@@ -3383,7 +3411,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.72.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.73.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -3544,7 +3572,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.72.0',
+        scriptVersion: '2.73.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

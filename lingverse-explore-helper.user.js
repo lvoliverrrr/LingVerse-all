@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.72.0
+// @version      2.73.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.72.0';
+    const SCRIPT_VERSION = '2.73.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -490,6 +490,51 @@
         const hours = Math.floor(minutes / 60);
         const restMinutes = minutes % 60;
         return restMinutes ? `${hours}小时${restMinutes}分钟` : `${hours}小时`;
+    }
+
+    function parseMeditationDurationLine(line) {
+        const text = String(line || '').replace(/\s+/g, '');
+        if (!text ||
+            text.indexOf('最长') >= 0 ||
+            text.indexOf('预计') >= 0 ||
+            text.indexOf('恢复') >= 0 ||
+            text.indexOf('修炼时长') >= 0) {
+            return null;
+        }
+        const match = text.match(/^(?:(\d+)(?:小时|时))?(?:(\d+)(?:分钟|分))?(?:(\d+)秒)?$/);
+        if (!match) return null;
+        const hours = match[1] ? parseInt(match[1], 10) : 0;
+        const minutes = match[2] ? parseInt(match[2], 10) : 0;
+        const seconds = match[3] ? parseInt(match[3], 10) : 0;
+        if (typeof match[1] === 'undefined' && typeof match[2] === 'undefined' && typeof match[3] === 'undefined') {
+            return null;
+        }
+        return hours * 3600 + minutes * 60 + seconds;
+    }
+
+    function parseMeditationBarState(text) {
+        const source = String(text || '');
+        if (source.indexOf('冥想修炼中') < 0 || source.indexOf('收功') < 0) {
+            return { isMeditating: false, durationSeconds: null };
+        }
+        const lines = source.split(/\n+/).map(line => line.trim()).filter(Boolean);
+        let durationSeconds = null;
+        for (const line of lines) {
+            durationSeconds = parseMeditationDurationLine(line);
+            if (durationSeconds !== null) break;
+        }
+        return {
+            isMeditating: true,
+            durationSeconds
+        };
+    }
+
+    function readMeditationBarState() {
+        const bar = $('#meditationBar');
+        if (!bar || bar.classList.contains('hidden')) {
+            return { isMeditating: false, durationSeconds: null };
+        }
+        return parseMeditationBarState(bar.innerText || bar.textContent || '');
     }
 
     function normalizeAfkPhaseStatus(status) {
@@ -4181,6 +4226,7 @@
         selectMerchantItem,
         detectGameUpdateNotice,
         resolveApiObject,
+        parseMeditationBarState,
         normalizeAfkLoopConfig,
         normalizeAfkResourceUsage,
         resolveAfkResourceBudget,
@@ -6062,6 +6108,15 @@
                 if (res.code === 200 && res.data) meditationStatus = res.data;
             } catch (e) {}
 
+            const meditationBarState = readMeditationBarState();
+            const meditationStatusDuration = meditationStatus ? numberOrNull(meditationStatus.durationSeconds) : null;
+            const meditationDurationSeconds = meditationStatusDuration !== null
+                ? meditationStatusDuration
+                : (meditationBarState.durationSeconds !== null ? meditationBarState.durationSeconds : undefined);
+            const isMeditating = !!(meditationStatus && meditationStatus.isMeditating) ||
+                !!meditationBarState.isMeditating ||
+                !!player.isMeditating;
+
             const toggle = $('#autoExploreToggle');
             const autoExploreRunning = !!(_win._autoExploreRunning || toggle?.checked);
             const autoExplorePending = !!_win._autoResumeExplorePending;
@@ -6123,8 +6178,8 @@
                 : 0;
 
             return {
-                isMeditating: meditationStatus ? !!meditationStatus.isMeditating : !!player.isMeditating,
-                meditationDurationSeconds: meditationStatus ? meditationStatus.durationSeconds : undefined,
+                isMeditating,
+                meditationDurationSeconds,
                 spirit: player.spirit,
                 maxSpirit: player.maxSpirit,
                 spiritCost: player.spiritCost,

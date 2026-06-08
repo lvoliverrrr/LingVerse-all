@@ -59,6 +59,7 @@
 - v2.70.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无商人/遭遇/战斗/奇遇/陌生道友/混天典狱；测试 `2.70.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试跳过混天典狱。
 - v2.71.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，页面尚无 `lingverseAutoMapExtensionVersion` / `lingverseAutoMapInjectedVersion` dataset，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无商人/遭遇/战斗/奇遇/陌生道友/混天典狱；测试 `2.71.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - v2.72.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，无 `LingVerseAutoMapInitializedVersion`，页面尚无扩展/注入版本 dataset，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无商人/遭遇/战斗/奇遇/陌生道友/混天典狱；测试 `2.72.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
+- v2.73.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载旧 helper `2.58.0`，`_autoMapInited=true`，页面尚无扩展/注入版本 dataset，神识 `3/2756`、单次消耗 `4`、倍率按钮 `×5`；页面可见 `#meditationBar` “冥想修炼中 (最长12小时) / 1时30分 / 收功”，但 `_lastPlayerData.isMeditating=false`。本次只读观察未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -657,6 +658,14 @@
 - `buildAfkDebugSnapshot` / `buildAfkDebugSummary` 的 `environment` 保留面板初始化版本、是否已初始化、初始化版本是否落后和已初始化但版本未知状态。
 - `buildAfkEnvironmentStatusLine` 在 helper 顶层版本和面板初始化版本不一致时提示“页面仍是旧初始化，刷新页面”；已初始化但无版本记录时提示“面板版本未知”。
 - 目的：扩展重载后可能只更新了顶层脚本和测试 hook，旧面板事件监听仍在页面中；该提示能阻止测试者把旧面板行为误判为新版挂机逻辑。
+
+`lingverse-explore-helper.user.js` v2.73.0 新增：
+
+- `parseMeditationBarState(text)` 解析真实页面 `#meditationBar` 当前文本，识别“冥想修炼中”和类似 `1时30分` 的已冥想时长。
+- `readMeditationBarState()` 只读当前 `#meditationBar`，用于 `AfkLoopManager.buildSnapshot` 在冥想接口或 `_lastPlayerData` 缓存不同步时兜底设置 `isMeditating` 和 `meditationDurationSeconds`。
+- 该兜底只读取 DOM，不点击“收功”或调用冥想/探索接口；真正是否收功仍由 `decideAfkNextAction` 根据自定义 `meditationMinutes`、神识是否已满和现有 `stopMeditation` 执行链决定。
+- 自动测试覆盖当前冥想条文本和聊天历史“收功/修炼时长”误判防护。
+- 真实 Edge 只读证据（2026-06-08）：标签 `292345702` 仍加载旧 helper `2.58.0`，页面可见 `#meditationBar` “冥想修炼中 (最长12小时) / 1时30分 / 收功”，但 `_lastPlayerData.isMeditating=false`；这解释了为什么需要 DOM 兜底，且本次未触发任何资源动作。
 
 默认配置：
 

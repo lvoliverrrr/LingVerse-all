@@ -62,6 +62,7 @@
 - v2.73.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载旧 helper `2.58.0`，`_autoMapInited=true`，页面尚无扩展/注入版本 dataset，神识 `3/2756`、单次消耗 `4`、倍率按钮 `×5`；页面可见 `#meditationBar` “冥想修炼中 (最长12小时) / 1时30分 / 收功”，但 `_lastPlayerData.isMeditating=false`。本次只读观察未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - v2.74.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载旧 helper `2.58.0`，页面可见 `#meditationBar` “冥想修炼中 (最长12小时) / 1时48分 / 收功”，但 `_lastPlayerData.isMeditating=false`；当前神识 `3/2756`、单次消耗 `4`、`canExplore=true`、倍率按钮 `×5`，无商人/遭遇/战斗/奇遇 blocker。本次只读观察未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - v2.75.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载旧 helper `2.58.0`，页面可见 `#meditationBar` “冥想修炼中 (最长12小时) / 2时2分 / 恢复: 7826血 / 4054灵 / 1234识 / 收功”，但 `_lastPlayerData.isMeditating=false` 且缓存神识仍为 `3/2756`。本次只读观察未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
+- v2.76.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载旧 helper `2.58.0`，无扩展/注入/面板初始化版本 dataset；页面可见 `#meditationBar` “冥想修炼中 (最长12小时) / 2时29分 / 恢复: 9545血 / 4945灵 / 1505识 / 收功”，但 `_lastPlayerData.isMeditating=false` 且缓存神识仍为 `3/2756`。后续测试需重载本地扩展并刷新页面，v2.76.0 应在复制状态里显示 `冥想兜底:` 解释该兜底依据。本次只读观察未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -683,6 +684,13 @@
 - `decideAfkNextAction` / `buildAfkPhaseStatus` 在 `meditationSpiritFromBar=true` 时，用 `spirit + meditationRecoveredSpirit` 作为满神识判断兜底。
 - 目的：真实页面里冥想恢复量已经增长，但玩家缓存仍停在冥想前神识时，仍可按“神识满提前收功”目标工作。
 - 该变更只读解析冥想条，不直接点击 `收功`；收功仍必须通过现有 `stopMeditation` 决策和执行链。
+
+`lingverse-explore-helper.user.js` v2.76.0 新增：
+
+- `buildAfkDebugSummary` 的 `player` 保留 `meditationRecoveredSpirit` 和 `meditationSpiritFromBar`。
+- `buildAfkStatusReport` 在冥想条恢复兜底激活时追加 `冥想兜底:` 行，例如 `冥想条恢复97识 · 缓存3/100 · 估算100/100`。
+- 目的：测试者复制状态时能看见“缓存神识低但脚本认为神识已满”的依据，减少误判为乱收功。
+- 该变更只增加脱敏摘要和可读状态报告，不新增收功、探索、商人、护道、战斗、复活、用符、用丹或奇遇点击动作。
 
 默认配置：
 

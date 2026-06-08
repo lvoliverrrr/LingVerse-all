@@ -320,6 +320,115 @@ test('decideAfkNextAction starts auto explore when spirit is usable and idle', (
     });
 });
 
+test('resolveExploreMultiplierSetting detects mismatched actual multiplier', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.resolveExploreMultiplierSetting, 'function');
+
+    assert.deepEqual(toPlain(hooks.resolveExploreMultiplierSetting(50, 50)), {
+        ok: true,
+        reason: 'multiplier-ready',
+        multiplier: 50,
+        actualMultiplier: 50,
+        failureMessage: ''
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveExploreMultiplierSetting(50, 1)), {
+        ok: false,
+        reason: 'multiplier-mismatch',
+        multiplier: 50,
+        actualMultiplier: 1,
+        failureMessage: '探索倍率未切换到50倍（当前1倍）'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveExploreMultiplierSetting(50, null)), {
+        ok: false,
+        reason: 'multiplier-read-failed',
+        multiplier: 50,
+        actualMultiplier: null,
+        failureMessage: '无法读取当前探索倍率'
+    });
+});
+
+test('startAutoExplore verifies multiplier before using nirvana pills', async () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const calls = [];
+    const manager = {
+        lastExploreStartAttempt: null,
+        async maybeUseNirvanaRebirthPill() {
+            calls.push('pill');
+        },
+        setExploreMultiplier(value) {
+            calls.push(`set:${value}`);
+        },
+        readExploreMultiplier() {
+            calls.push('read');
+            return 1;
+        },
+        refreshGameData() {}
+    };
+
+    assert.equal(typeof hooks.AfkLoopManager?.startAutoExplore, 'function');
+
+    await hooks.AfkLoopManager.startAutoExplore.call(manager, 50, {
+        useNirvanaPill: true
+    });
+
+    assert.deepEqual(calls, ['set:50', 'read']);
+    assert.equal(manager.lastExploreStartAttempt.reason, 'start-failed');
+    assert.equal(manager.lastExploreStartAttempt.multiplier, 50);
+    assert.equal(manager.lastExploreStartAttempt.actualMultiplier, 1);
+    assert.equal(manager.lastExploreStartAttempt.source, 'multiplier');
+    assert.equal(manager.lastExploreStartAttempt.failureMessage, '探索倍率未切换到50倍（当前1倍）');
+});
+
+test('startAutoExplore fails when page does not enter auto explore state', async () => {
+    const sandbox = loadUserScript({
+        _autoExploreRunning: false,
+        _autoResumeExplorePending: false,
+        toggleAutoExplore() {}
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const calls = [];
+    const toggle = { checked: false };
+    sandbox.document.querySelector = selector => {
+        if (selector === '#autoExploreToggle') return toggle;
+        return null;
+    };
+    const manager = {
+        lastExploreStartAttempt: null,
+        lastExploreProgressAt: 0,
+        async maybeUseNirvanaRebirthPill() {
+            calls.push('pill');
+        },
+        setExploreMultiplier(value) {
+            calls.push(`set:${value}`);
+        },
+        readExploreMultiplier() {
+            calls.push('read-multiplier');
+            return 50;
+        },
+        readAutoExploreStartState: hooks.AfkLoopManager.readAutoExploreStartState,
+        refreshGameData() {}
+    };
+
+    assert.equal(typeof hooks.AfkLoopManager?.startAutoExplore, 'function');
+
+    await hooks.AfkLoopManager.startAutoExplore.call(manager, 50, {
+        useNirvanaPill: false
+    });
+
+    assert.deepEqual(calls, ['set:50', 'read-multiplier', 'pill']);
+    assert.equal(manager.lastExploreStartAttempt.reason, 'start-failed');
+    assert.equal(manager.lastExploreStartAttempt.multiplier, 50);
+    assert.equal(manager.lastExploreStartAttempt.actualMultiplier, 50);
+    assert.equal(manager.lastExploreStartAttempt.source, 'toggle');
+    assert.equal(manager.lastExploreStartAttempt.failureMessage, '自动探索入口已调用但运行状态未开启');
+    assert.equal(manager.lastExploreProgressAt, 0);
+});
+
 test('decideAfkNextAction returns to meditation when auto explore is running with low spirit', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -433,6 +542,175 @@ test('isExploreStalledState treats resume pending as stallable auto exploration'
         autoExplorePending: false,
         lastExploreProgressAt: now - 90_000
     }, config, now), false);
+});
+
+test('AfkLoopManager refreshes explore progress when recent game log changes', async () => {
+    const sandbox = loadUserScript({
+        _autoExploreRunning: true,
+        _autoResumeExplorePending: false,
+        _autoExploreCount: 7,
+        _lastPlayerData: {
+            spirit: 977,
+            maxSpirit: 2756,
+            spiritCost: 10,
+            canExplore: true,
+            isMeditating: false,
+            isDead: false
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const now = 1_000_000;
+    const toggle = { checked: true };
+    const body = {
+        innerText: [
+            '灵界',
+            '[收入] 探索宝地: 32 灵石 (余额77496732)',
+            '探索双收获事件: 在北荒前哨获得修为 1475，灵石 32。'
+        ].join('\n')
+    };
+    sandbox.document.body = body;
+    sandbox.document.querySelector = selector => {
+        if (selector === '#autoExploreToggle') return toggle;
+        return null;
+    };
+    const manager = {
+        lastAutoExploreCount: 7,
+        lastExploreProgressAt: now - 120_000,
+        lastExploreLogSignature: 'old-log',
+        postReviveResumeUntil: 0,
+        postInteractionResumeUntil: 0,
+        postMeditationResumeUntil: 0,
+        getResourceUsage() { return {}; },
+        recordAdventureSample() {}
+    };
+
+    assert.equal(typeof hooks.AfkLoopManager?.buildSnapshot, 'function');
+    assert.equal(typeof hooks.getExploreProgressLogSignature, 'function');
+
+    const snapshot = await hooks.AfkLoopManager.buildSnapshot.call(manager, now, {
+        stallTimeoutSeconds: 90
+    });
+
+    assert.equal(manager.lastExploreProgressAt, now);
+    assert.equal(snapshot.exploreStalled, false);
+    assert.match(manager.lastExploreLogSignature, /探索双收获事件/);
+});
+
+test('AfkLoopManager refreshes player info instead of trusting stale cache', async () => {
+    const apiCalls = [];
+    const sandbox = loadUserScript({
+        _lastPlayerData: {
+            spirit: 467,
+            maxSpirit: 2756,
+            spiritCost: 10,
+            canExplore: true,
+            isMeditating: false,
+            isDead: false
+        },
+        api: {
+            async get(url) {
+                apiCalls.push(url);
+                if (url === '/api/player/info') {
+                    return {
+                        code: 200,
+                        data: {
+                            spirit: 7,
+                            maxSpirit: 2756,
+                            spiritCost: 10,
+                            canExplore: true,
+                            isMeditating: false,
+                            isDead: false
+                        }
+                    };
+                }
+                if (url === '/api/game/meditate/status') {
+                    return {
+                        code: 200,
+                        data: { isMeditating: false, durationSeconds: 0 }
+                    };
+                }
+                return { code: 404, data: null };
+            }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const manager = {
+        lastAutoExploreCount: null,
+        lastExploreProgressAt: 0,
+        lastExploreLogSignature: '',
+        postReviveResumeUntil: 0,
+        postInteractionResumeUntil: 0,
+        postMeditationResumeUntil: 0,
+        getResourceUsage() { return {}; },
+        recordAdventureSample() {}
+    };
+
+    const snapshot = await hooks.AfkLoopManager.buildSnapshot.call(manager, 1_000_000, {
+        stallTimeoutSeconds: 90
+    });
+
+    assert.equal(apiCalls.includes('/api/player/info'), true);
+    assert.equal(snapshot.spirit, 7);
+    assert.equal(snapshot.maxSpirit, 2756);
+});
+
+test('readAfkResourceDomFallback parses visible spirit and explore cost without actions', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const statSpirit = { innerText: '7 / 2,756' };
+    const exploreBtn = { textContent: '探索(-10神识)' };
+    sandbox.document.querySelector = selector => {
+        if (selector === '#statSpirit') return statSpirit;
+        if (selector === '#exploreBtn') return exploreBtn;
+        return null;
+    };
+
+    assert.equal(typeof hooks.readAfkResourceDomFallback, 'function');
+    assert.deepEqual(toPlain(hooks.parseAfkSpiritStatText('7/2,756')), {
+        spirit: 7,
+        maxSpirit: 2756
+    });
+    assert.equal(hooks.parseExploreSpiritCostText('探索(-10神识)'), 10);
+    assert.deepEqual(toPlain(hooks.readAfkResourceDomFallback()), {
+        spirit: 7,
+        maxSpirit: 2756,
+        spiritCost: 10
+    });
+    assert.deepEqual(toPlain(hooks.parseAfkSpiritStatText('--')), {
+        spirit: null,
+        maxSpirit: null
+    });
+});
+
+test('AfkLoopManager falls back to visible resource DOM when player data is unavailable', async () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const statSpirit = { textContent: '7/2,756' };
+    const exploreBtn = { innerText: '探索(-1神识)' };
+    sandbox.document.body.innerText = '';
+    sandbox.document.querySelector = selector => {
+        if (selector === '#statSpirit') return statSpirit;
+        if (selector === '#exploreBtn') return exploreBtn;
+        return null;
+    };
+    const manager = {
+        lastAutoExploreCount: null,
+        lastExploreProgressAt: 0,
+        lastExploreLogSignature: '',
+        postReviveResumeUntil: 0,
+        postInteractionResumeUntil: 0,
+        postMeditationResumeUntil: 0,
+        getResourceUsage() { return {}; },
+        recordAdventureSample() {}
+    };
+
+    const snapshot = await hooks.AfkLoopManager.buildSnapshot.call(manager, 1_000_000, {
+        stallTimeoutSeconds: 90
+    });
+
+    assert.equal(snapshot.spirit, 7);
+    assert.equal(snapshot.maxSpirit, 2756);
+    assert.equal(snapshot.spiritCost, 1);
 });
 
 test('decideAfkNextAction waits while merchant or encounter blocks the page', () => {
@@ -715,6 +993,18 @@ test('resolveEncounterGuardianAttempt marks completed guardian attempts per enco
         reason: 'guardian-in-progress'
     });
 
+    assert.deepEqual(toPlain(hooks.resolveEncounterGuardianAttempt('', snapshot, {
+        autoHireGuardian: true,
+        exploreMultiplier: 50
+    }, {
+        enabled: true
+    })), {
+        shouldAttempt: false,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: '',
+        reason: 'guardian-batch-explore-unavailable'
+    });
+
     assert.deepEqual(toPlain(hooks.resolveEncounterGuardianAttempt('monster:port_bandit:3:7', snapshot, {
         autoHireGuardian: true
     }, {
@@ -839,6 +1129,105 @@ test('resolveEncounterFightAttempt blocks auto fight while talisman dialog remai
         markEncounterKey: '',
         reason: 'talisman-dialog-open'
     });
+});
+
+test('handleEncounter waits instead of fighting when talisman dialog close fails', async () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const calls = [];
+    const snapshot = {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        talismanDialogActive: false
+    };
+    const manager = {
+        encounterBusy: false,
+        lastTalismanAttempt: null,
+        async useCombatTalismans() {
+            calls.push('talismans');
+            this.lastTalismanAttempt = {
+                reason: 'completed',
+                encounterKey: 'monster:port_bandit:3:7',
+                dialogClosed: false,
+                dialogCloseFailureMessage: '符箓面板未隐藏'
+            };
+        },
+        async fightEncounter() {
+            calls.push('fight');
+        }
+    };
+
+    assert.equal(typeof hooks.AfkLoopManager?.handleEncounter, 'function');
+
+    await hooks.AfkLoopManager.handleEncounter.call(manager, {
+        useTalismans: true,
+        autoFight: true,
+        autoHireGuardian: false
+    }, snapshot);
+
+    assert.deepEqual(calls, ['talismans']);
+    assert.equal(manager.encounterBusy, false);
+});
+
+test('resolveEncounterFightAttempt blocks auto fight when all selected talismans fail', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const snapshot = {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        talismanDialogActive: false
+    };
+    const cfg = { autoFight: true };
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterFightAttempt('', snapshot, cfg, {
+        talismanAttempt: {
+            reason: 'completed',
+            encounterKey: 'monster:port_bandit:3:7',
+            selectedTalismans: [
+                { itemId: 8, family: 'ancient' },
+                { itemId: 2, family: 'fire' }
+            ],
+            usedKinds: 0,
+            failedKinds: 2,
+            dialogClosed: true,
+            failureMessage: '全部战斗符箓使用失败'
+        }
+    })), {
+        shouldAttempt: false,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: '',
+        reason: 'talisman-use-failed',
+        failureMessage: '全部战斗符箓使用失败'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterFightAttempt('', snapshot, cfg, {
+        talismanAttempt: {
+            reason: 'completed',
+            encounterKey: 'monster:port_bandit:3:7',
+            selectedTalismans: [
+                { itemId: 8, family: 'ancient' },
+                { itemId: 2, family: 'fire' }
+            ],
+            usedKinds: 1,
+            failedKinds: 1,
+            dialogClosed: true,
+            failureMessage: '烈火符使用失败'
+        }
+    })).reason, 'fight-ready');
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterFightAttempt('', snapshot, cfg, {
+        talismanAttempt: {
+            reason: 'no-usable-talismans',
+            encounterKey: 'monster:port_bandit:3:7',
+            selectedTalismans: [],
+            usedKinds: 0,
+            failedKinds: 0
+        }
+    })).reason, 'fight-ready');
 });
 
 test('getCurrentGuardianConfig prefers page auto-hire settings', () => {
@@ -1340,6 +1729,8 @@ test('decideAfkNextAction handles adventure only when fixed adventure mode is en
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
 
+    assert.equal(hooks.normalizeAfkLoopConfig({}).autoCloseCompletedAdventure, true);
+
     assert.deepEqual(toPlain(hooks.decideAfkNextAction({
         adventureActive: true,
         spirit: 200,
@@ -1349,6 +1740,39 @@ test('decideAfkNextAction handles adventure only when fixed adventure mode is en
         minSpirit: 20,
         meditationMinutes: 140,
         adventureMode: 'pause'
+    }, 1_000_000)), {
+        action: 'wait',
+        reason: 'adventure-active'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        adventureActive: true,
+        adventureComplete: true,
+        adventureId: 456,
+        spirit: 200,
+        isDead: false
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        adventureMode: 'pause'
+    }, 1_000_000)), {
+        action: 'handleAdventure',
+        reason: 'adventure-close-completed'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        adventureActive: true,
+        adventureComplete: true,
+        adventureId: 456,
+        spirit: 200,
+        isDead: false
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        adventureMode: 'pause',
+        autoCloseCompletedAdventure: false
     }, 1_000_000)), {
         action: 'wait',
         reason: 'adventure-active'
@@ -1698,7 +2122,8 @@ test('buildAfkStatusReport explains helper and extension version drift', () => {
         autoMapInited: false,
         versionMismatch: true,
         initializedVersionMismatch: false,
-        initializedVersionMissing: false
+        initializedVersionMissing: false,
+        extensionVersionStale: false
     });
 
     const report = hooks.buildAfkStatusReport(summary);
@@ -1733,11 +2158,49 @@ test('buildAfkStatusReport explains initialized panel version drift', () => {
         autoMapInited: true,
         versionMismatch: false,
         initializedVersionMismatch: true,
-        initializedVersionMissing: false
+        initializedVersionMissing: false,
+        extensionVersionStale: false
     });
 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('环境: helper 2.75.0 · 面板 2.71.0 · 页面仍是旧初始化，刷新页面'), true);
+});
+
+test('buildAfkStatusReport treats stale extension dataset as loaded helper evidence', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary({
+        scriptVersion: '2.92.0',
+        environment: {
+            extensionVersion: '2.91.0',
+            initializedVersion: '2.92.0',
+            autoMapInited: true
+        },
+        capturedAt: '2026-06-08T13:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        state: {
+            spirit: 627,
+            maxSpirit: 2756,
+            spiritCost: 10,
+            canExplore: true,
+            isDead: false,
+            isMeditating: false
+        },
+        config: {
+            enabled: true,
+            meditationMinutes: 140,
+            minSpirit: 20
+        },
+        decision: { action: 'wait', reason: 'idle' }
+    }));
+
+    assert.equal(summary.environment.versionMismatch, true);
+    assert.equal(summary.environment.extensionVersionStale, true);
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('环境: helper 2.92.0 · 扩展提示 2.91.0 · 页面已加载新版，扩展提示待下次重载统一'), true);
+    assert.equal(report.lines.includes('环境: helper 2.92.0 · 扩展 2.91.0 · 版本不一致，重载扩展并刷新页面'), false);
 });
 
 test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
@@ -1975,8 +2438,8 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
         profileText: '富裕战斗模式',
         enabledRiskCount: 7,
         totalRiskCount: 7,
-        warningCount: 0,
-        summaryText: '富裕战斗模式 · 风险开关 7/7 · 警告 0',
+        warningCount: 1,
+        summaryText: '富裕战斗模式 · 风险开关 7/7 · 警告 1',
         itemTexts: [
             '自动迎战: 开启 · 50倍探索',
             '自动护道: 开启 · 游戏护道开 · 独立作战 · 最高5000 · 攻≥888 · normal>incarnation>body',
@@ -1986,7 +2449,7 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
             '陌生道友婉拒: 开启',
             '奇遇自动选择: 开启 · strategy'
         ],
-        warnings: []
+        warnings: ['批量探索遭遇不能雇护道，自动护道仅建议用于1倍探索']
     });
     assert.equal(summary.history.decisionTail.length, 8);
     assert.equal(summary.history.decisionTail[0].spirit, 4);
@@ -2075,6 +2538,7 @@ test('applyAfkPreset configures steady, guardian, and rich AFK modes without ena
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: false,
         autoReloadOnUpdate: false,
+        autoCloseCompletedAdventure: true,
         adventureMode: 'strategy',
         adventureChoiceIndex: 1,
         adventureChoiceMap: { 456: 2 }
@@ -2103,6 +2567,7 @@ test('applyAfkPreset configures steady, guardian, and rich AFK modes without ena
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: false,
         autoReloadOnUpdate: false,
+        autoCloseCompletedAdventure: true,
         adventureMode: 'strategy',
         adventureChoiceIndex: 1,
         adventureChoiceMap: { 456: 2 }
@@ -2131,6 +2596,7 @@ test('applyAfkPreset configures steady, guardian, and rich AFK modes without ena
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: true,
         autoReloadOnUpdate: false,
+        autoCloseCompletedAdventure: true,
         adventureMode: 'strategy',
         adventureChoiceIndex: 1,
         adventureChoiceMap: { 456: 2 }
@@ -2592,6 +3058,129 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
     });
 });
 
+test('buildAfkStatusReport keeps recent adventure samples after the popup closes', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = {
+        schema: 'lingverse-afk-debug-summary/v1',
+        scriptVersion: '2.89.0',
+        capturedAt: '2026-06-08T12:00:00.000Z',
+        page: {
+            title: '灵界 LingVerse - 修仙世界',
+            url: 'https://ling.muge.info/game.html'
+        },
+        decision: {
+            action: 'wait',
+            reason: 'auto-explore-running'
+        },
+        player: {
+            spirit: 880,
+            maxSpirit: 2758,
+            spiritCost: 10,
+            canExplore: true,
+            isDead: false,
+            isMeditating: false
+        },
+        blockers: {},
+        automation: {
+            autoExploreRunning: true,
+            resourceUsage: {}
+        },
+        adventure: {
+            id: null,
+            choices: [],
+            strategyHints: []
+        },
+        history: {
+            adventureSamples: [
+                {
+                    capturedAt: '2026-06-08T11:59:30.000Z',
+                    id: 456,
+                    step: 1,
+                    totalSteps: 3,
+                    choices: ['入谷探查', '绕路离开'],
+                    choiceIndex: 2,
+                    choiceText: '绕路离开'
+                }
+            ]
+        },
+        config: {
+            meditationMinutes: 140,
+            minSpirit: 20,
+            exploreMultiplier: 50
+        }
+    };
+
+    const report = hooks.buildAfkStatusReport(summary);
+
+    assert.equal(report.lines.includes('奇遇样本: #456 第1/3步 · 1.入谷探查 / 2.绕路离开 · 最近选择第2项「绕路离开」'), true);
+    assert.equal(report.lines.includes('奇遇策略: 456=1 / 456=2'), true);
+
+    const replay = hooks.buildAfkIssueReplay(summary);
+    assert.equal(replay.strategyImportText, '456=1\n456=2');
+});
+
+test('buildAfkStatusReport surfaces recent logs when a wait diagnosis needs investigation', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const report = hooks.buildAfkStatusReport({
+        schema: 'lingverse-afk-debug-summary/v1',
+        scriptVersion: '2.89.0',
+        capturedAt: '2026-06-08T12:10:00.000Z',
+        page: {
+            title: '灵界 LingVerse - 修仙世界',
+            url: 'https://ling.muge.info/game.html'
+        },
+        decision: {
+            action: 'wait',
+            reason: 'mystery-stall'
+        },
+        player: {
+            spirit: 420,
+            maxSpirit: 2756,
+            spiritCost: 10,
+            canExplore: true,
+            isDead: false,
+            isMeditating: false
+        },
+        blockers: {},
+        automation: {
+            autoExploreRunning: false,
+            autoExplorePending: false,
+            resourceUsage: {},
+            waitDiagnosis: {
+                active: true,
+                category: 'unknown',
+                message: '未知等待已持续5分钟（连续5次），建议复制摘要定位',
+                likelyCause: ''
+            }
+        },
+        config: {
+            meditationMinutes: 140,
+            minSpirit: 20,
+            exploreMultiplier: 1
+        },
+        history: {
+            logTail: [
+                {
+                    type: 'info',
+                    message: '普通轮询日志'
+                },
+                {
+                    type: 'error',
+                    message: '开图失败 Failed to fetch https://ling.muge.info/game.html?token=abc-secret&session=keep#debug'
+                }
+            ]
+        }
+    });
+
+    assert.equal(report.lines.includes('现场日志: error 开图失败 Failed to fetch https://ling.muge.info/game.html'), true);
+    assert.equal(report.text.includes('abc-secret'), false);
+    assert.equal(report.text.includes('session=keep'), false);
+});
+
 test('buildAfkStatusReport explains post-interaction resume windows', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2733,6 +3322,37 @@ test('buildAfkStatusReport explains low-spirit meditation returns', () => {
     assert.equal(batchReport.lines.includes('回冥想: 神识不足当前倍率 · 当前120/2758 · 单次10 · 50倍需500 · 阈值20'), true);
 });
 
+test('buildAfkStatusReport explains stalled exploration meditation returns', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 200,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        autoExploreRunning: true,
+        exploreStalled: true
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 1,
+        stallTimeoutSeconds: 90
+    }, {
+        action: 'startMeditation',
+        reason: 'explore-stalled'
+    }, {
+        capturedAt: '2026-06-08T09:05:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('回冥想: 自动探索疑似卡住 · 当前200/2758 · 单次4 · 阈值20 · 卡住判定90秒'), true);
+});
+
 test('buildAfkStatusReport suggests guardian fixes after hire failures', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2868,6 +3488,51 @@ test('buildAfkStatusReport explains failed fight attempts', () => {
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('迎战: 自动迎战失败 · 页面函数 · combat-choice failed token=<redacted>'), true);
     assert.equal(report.lines.includes('迎战建议: 自动迎战失败 · 检查遭遇面板和页面函数迎战入口，必要时手动迎战或复制摘要'), true);
+});
+
+test('buildAfkStatusReport explains fight blocks after failed talisman use', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        spirit: 120,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        talismanDialogActive: false
+    }, {
+        enabled: true,
+        autoFight: true,
+        useTalismans: true,
+        exploreMultiplier: 50
+    }, {
+        action: 'handleEncounter',
+        reason: 'encounter-auto-fight-enabled'
+    }, {
+        capturedAt: '2026-06-08T10:02:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        talismanAttempt: {
+            shouldAttempt: true,
+            reason: 'completed',
+            encounterKey: 'monster:port_bandit:3:7?token=talisman-secret',
+            markEncounterKey: 'monster:port_bandit:3:7',
+            selectedTalismans: [
+                { itemId: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 },
+                { itemId: 2, templateId: 'talisman_fire_3', name: '稀有烈火符', family: 'fire', rarity: 3, quantity: 1 }
+            ],
+            usedKinds: 0,
+            failedKinds: 2,
+            dialogClosed: true,
+            failureMessage: 'all talismans failed token=talisman-secret'
+        }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('迎战: 战斗用符未成功'), true);
+    assert.equal(report.lines.includes('迎战建议: 战斗用符全部失败 · all talismans failed token=<redacted> · 已暂停自动迎战，检查库存/API或手动处理后复制摘要'), true);
 });
 
 test('buildAfkStatusReport explains combat talisman attempts', () => {
@@ -3048,6 +3713,85 @@ test('buildAfkStatusReport explains failed revive attempts', () => {
     assert.equal(report.lines.includes('复活建议: 自动复活失败 · 检查灵石和页面复活入口，必要时手动复活或调高本轮上限'), true);
 });
 
+test('AfkLoopManager.revive does not open resume window when death state remains active', async () => {
+    const sandbox = loadUserScript({
+        handleRevive: async () => {}
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const manager = {
+        lastReviveAttempt: null,
+        postReviveResumeUntil: 12345,
+        lastDecisionKey: 'revive:dead-auto-revive-enabled',
+        resourceUsage: { revive: 0 },
+        getResourceUsage() {
+            return this.resourceUsage;
+        },
+        incrementResourceUsage(kind) {
+            this.resourceUsage[kind] = (this.resourceUsage[kind] || 0) + 1;
+        },
+        refreshGameData() {},
+        confirmReviveResolved: async () => ({
+            ok: false,
+            reason: 'still-dead',
+            failureMessage: '角色仍处于死亡状态'
+        })
+    };
+
+    await hooks.AfkLoopManager.revive.call(manager, {
+        autoRevive: true,
+        reviveMaxPerRun: 1,
+        resumeWindowSeconds: 60
+    });
+
+    assert.deepEqual(toPlain(manager.lastReviveAttempt), {
+        shouldAttempt: false,
+        reason: 'revive-not-confirmed',
+        source: 'page-function',
+        failureMessage: '角色仍处于死亡状态'
+    });
+    assert.equal(manager.resourceUsage.revive, 1);
+    assert.equal(manager.postReviveResumeUntil, 0);
+    assert.equal(manager.lastDecisionKey, '');
+});
+
+test('buildAfkStatusReport explains unconfirmed revive attempts', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 0,
+        maxSpirit: 2758,
+        spiritCost: 50,
+        canExplore: false,
+        isDead: true,
+        isMeditating: false,
+        resourceUsage: { revive: 1 }
+    }, {
+        enabled: true,
+        autoRevive: true,
+        reviveMaxPerRun: 1,
+        exploreMultiplier: 50
+    }, {
+        action: 'wait',
+        reason: 'revive-budget-exhausted'
+    }, {
+        capturedAt: '2026-06-08T11:10:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        reviveAttempt: {
+            shouldAttempt: false,
+            reason: 'revive-not-confirmed',
+            source: 'page-function',
+            failureMessage: '角色仍处于死亡状态 token=revive-secret'
+        }
+    })));
+
+    assert.equal(summary.automation.revive.failureMessage, '角色仍处于死亡状态 token=<redacted>');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('复活: 自动复活未确认 · 页面函数 · 角色仍处于死亡状态 token=<redacted>'), true);
+    assert.equal(report.lines.includes('复活建议: 复活入口已调用但死亡状态未解除 · 本轮不会直接进入恢复窗口，必要时手动复活或复制摘要'), true);
+});
+
 test('buildAfkStatusReport explains failed explore start attempts', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -3072,6 +3816,7 @@ test('buildAfkStatusReport explains failed explore start attempts', () => {
             shouldAttempt: true,
             reason: 'start-failed',
             multiplier: 50,
+            actualMultiplier: 1,
             source: 'toggle',
             failureMessage: 'toggle failed token=explore-secret'
         }
@@ -3080,7 +3825,7 @@ test('buildAfkStatusReport explains failed explore start attempts', () => {
     assert.equal(summary.automation.exploreStart.failureMessage, 'toggle failed token=<redacted>');
 
     const report = hooks.buildAfkStatusReport(summary);
-    assert.equal(report.lines.includes('探索启动: 自动探索启动失败 · 50倍 · 自动按钮 · toggle failed token=<redacted>'), true);
+    assert.equal(report.lines.includes('探索启动: 自动探索启动失败 · 50倍 · 实际1倍 · 自动按钮 · toggle failed token=<redacted>'), true);
     assert.equal(report.lines.includes('探索建议: 自动探索启动失败 · 检查探索倍率控件和自动探索入口，必要时刷新页面/重载扩展'), true);
 });
 
@@ -3554,6 +4299,171 @@ test('buildAfkStatusReport surfaces adventure auto-choice attempts', () => {
     assert.equal(report.lines.includes('奇遇建议: 自动选择失败 · 检查当前奇遇选项/策略是否匹配，必要时手动处理或复制摘要'), true);
 });
 
+test('handleAdventure does not repeat the same adventure choice while the step is unchanged', async () => {
+    const overlay = {
+        style: {},
+        hidden: false,
+        classList: { contains() { return false; } },
+        getBoundingClientRect() { return { width: 240, height: 160 }; }
+    };
+    const sandbox = loadUserScript({
+        document: {
+            readyState: 'loading',
+            documentElement: {
+                dataset: {},
+                classList: { contains() { return false; } }
+            },
+            addEventListener() {},
+            querySelector(selector) {
+                return selector === '#adventureOverlay' ? overlay : null;
+            },
+            querySelectorAll() { return []; },
+            createElement() { return createElementStub(); },
+            body: { appendChild() {} },
+            head: { appendChild() {} }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const clicks = [];
+    const makeButtons = () => [
+        { disabled: false, textContent: '入谷探查', click() { clicks.push('choice-1'); } },
+        { disabled: false, textContent: '绕路离开', click() { clicks.push('choice-2'); } }
+    ];
+    const manager = {
+        lastAdventureChoiceKey: '',
+        lastAdventureAttempt: null,
+        lastDecisionKey: '',
+        postInteractionResumeUntil: 0,
+        findAdventureChoiceButtons() { return makeButtons(); },
+        findAdventureCloseButton() { return null; },
+        refreshGameData() {},
+        tick() {}
+    };
+    const cfg = {
+        adventureMode: 'strategy',
+        adventureChoiceMap: { 456: 2 },
+        autoCloseCompletedAdventure: true,
+        resumeWindowSeconds: 60
+    };
+
+    sandbox._lingverseAutoMapLastAdventureStep = {
+        adventureId: 456,
+        step: 1,
+        totalSteps: 3,
+        isComplete: false,
+        choices: ['入谷探查', '绕路离开']
+    };
+    await hooks.AfkLoopManager.handleAdventure.call(manager, cfg);
+
+    sandbox._lingverseAutoMapLastAdventureStep = {
+        adventureId: 456,
+        step: 1,
+        totalSteps: 3,
+        isComplete: false,
+        choices: ['入谷探查', '绕路离开']
+    };
+    await hooks.AfkLoopManager.handleAdventure.call(manager, cfg);
+
+    assert.deepEqual(clicks, ['choice-2']);
+    assert.equal(manager.lastAdventureAttempt.reason, 'choice-already-triggered');
+    assert.equal(manager.lastAdventureAttempt.choiceIndex, 2);
+
+    sandbox._lingverseAutoMapLastAdventureStep = {
+        adventureId: 456,
+        step: 2,
+        totalSteps: 3,
+        isComplete: false,
+        choices: ['继续前行', '原地调息']
+    };
+    await hooks.AfkLoopManager.handleAdventure.call(manager, cfg);
+
+    assert.deepEqual(clicks, ['choice-2', 'choice-2']);
+});
+
+test('buildAfkStatusReport explains repeated adventure choice suppression', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 300,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        adventureActive: true,
+        adventureId: 456,
+        adventureStep: 1,
+        adventureTotalSteps: 3,
+        adventureChoices: ['入谷探查', '绕路离开']
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        adventureMode: 'strategy',
+        adventureChoiceMap: { 456: 2 }
+    }, {
+        action: 'handleAdventure',
+        reason: 'adventure-strategy-choice'
+    }, {
+        capturedAt: '2026-06-08T13:11:30.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        adventureAttempt: {
+            shouldAttempt: false,
+            reason: 'choice-already-triggered',
+            source: 'choice-button',
+            adventureId: 456,
+            choiceIndex: 2,
+            choiceText: '绕路离开'
+        }
+    })));
+
+    assert.equal(summary.automation.adventureAttempt.reason, 'choice-already-triggered');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('奇遇动作: 本步已触发自动选择 · #456 · 第2项「绕路离开」 · 选项按钮'), true);
+    assert.equal(report.lines.includes('奇遇建议: 本奇遇步骤已触发过自动选择 · 暂停重复点击，等待页面推进或手动处理后复制摘要'), true);
+});
+
+test('buildAfkStatusReport surfaces completed adventure close attempts in pause mode', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 300,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        adventureActive: true,
+        adventureComplete: true,
+        adventureId: 456,
+        adventureStep: 3,
+        adventureTotalSteps: 3,
+        adventureChoices: []
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        adventureMode: 'pause',
+        autoCloseCompletedAdventure: true
+    }, {
+        action: 'handleAdventure',
+        reason: 'adventure-close-completed'
+    }, {
+        capturedAt: '2026-06-08T13:12:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    assert.equal(summary.automation.adventureAttempt.reason, 'close-ready');
+    assert.equal(summary.automation.adventureAttempt.adventureId, '456');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('奇遇动作: 准备关闭奇遇 · #456'), true);
+    assert.equal(report.lines.includes('奇遇建议: 奇遇已完成 · 将只关闭/完成当前奇遇，不自动选择新剧情'), true);
+});
+
 test('buildAfkWaitingDiagnosis explains repeated player encounter auto-decline stalls', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -3796,7 +4706,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.86.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.98.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -3913,6 +4823,33 @@ test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
             '奇遇策略模式已开启，但策略表为空'
         ]
     });
+
+    const batchGuardianRisk = hooks.buildAfkRiskStatus({
+        exploreMultiplier: 50,
+        autoFight: false,
+        autoHireGuardian: true,
+        autoRevive: false,
+        useTalismans: false,
+        talismanMaxKinds: 5,
+        talismanQuantity: 1,
+        talismanFamilyOrder: '',
+        useNirvanaPill: false,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: false,
+        autoDeclinePlayerEncounter: false,
+        adventureMode: 'pause',
+        adventureChoiceMap: {}
+    }, {
+        enabled: true,
+        mode: 'alone',
+        maxFee: 51,
+        minAtk: 0,
+        priority: ['normal', 'incarnation', 'body']
+    });
+
+    assert.equal(batchGuardianRisk.warningCount, 1);
+    assert.equal(batchGuardianRisk.warnings.includes('批量探索遭遇不能雇护道，自动护道仅建议用于1倍探索'), true);
+    assert.equal(batchGuardianRisk.summaryText.endsWith('警告 1'), true);
 });
 
 test('AFK config packs export normalized settings and import safely', () => {
@@ -3957,7 +4894,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.86.0',
+        scriptVersion: '2.98.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {
@@ -3983,6 +4920,7 @@ test('AFK config packs export normalized settings and import safely', () => {
             queueNirvanaPill: false,
             autoDeclinePlayerEncounter: true,
             autoReloadOnUpdate: false,
+            autoCloseCompletedAdventure: true,
             adventureMode: 'strategy',
             adventureChoiceIndex: 1,
             adventureChoiceMap: { 456: 2, 789: 1 }
@@ -4001,8 +4939,8 @@ test('AFK config packs export normalized settings and import safely', () => {
             profileText: '富裕战斗模式',
             enabledRiskCount: 7,
             totalRiskCount: 7,
-            warningCount: 0,
-            summaryText: '富裕战斗模式 · 风险开关 7/7 · 警告 0',
+            warningCount: 1,
+            summaryText: '富裕战斗模式 · 风险开关 7/7 · 警告 1',
             itemTexts: [
                 '自动迎战: 开启 · 50倍探索',
                 '自动护道: 开启 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
@@ -4012,7 +4950,7 @@ test('AFK config packs export normalized settings and import safely', () => {
                 '陌生道友婉拒: 开启',
                 '奇遇自动选择: 开启 · strategy'
             ],
-            warnings: []
+            warnings: ['批量探索遭遇不能雇护道，自动护道仅建议用于1倍探索']
         }
     });
 
@@ -4065,6 +5003,7 @@ test('mergeAdventureStrategyImport adds replay hints without enabling AFK', () =
             queueNirvanaPill: false,
             autoDeclinePlayerEncounter: false,
             autoReloadOnUpdate: false,
+            autoCloseCompletedAdventure: true,
             adventureMode: 'strategy',
             adventureChoiceIndex: 1,
             adventureChoiceMap: { 111: 1, 456: 2, 789: 1 }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.86.0
+// @version      2.98.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,11 +20,12 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.86.0';
+    const SCRIPT_VERSION = '2.98.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
+    const DEBUG_ADVENTURE_SAMPLE_LIMIT = 5;
     const DEBUG_SUMMARY_TEXT_LIMIT = 150;
 
     // 配置对象
@@ -70,6 +71,7 @@
             queueNirvanaPill: false,  // 已有五行通灵时是否继续排队
             autoDeclinePlayerEncounter: false, // 陌生道友邂逅默认暂停，开启后自动婉拒/离开
             autoReloadOnUpdate: false, // 页面提示游戏已更新时是否自动刷新，默认关闭
+            autoCloseCompletedAdventure: true, // 奇遇已完成且无剧情选择时自动关闭收尾
             adventureMode: 'pause',    // 奇遇链默认暂停，避免自动选择剧情分支
             adventureChoiceIndex: 1,    // fixed 模式下点击第几个奇遇选项，按界面顺序从1开始
             adventureChoiceMap: {}      // strategy 模式下按 adventureId 固定选择
@@ -132,6 +134,7 @@
         queueNirvanaPill: false,
         autoDeclinePlayerEncounter: false,
         autoReloadOnUpdate: false,
+        autoCloseCompletedAdventure: true,
         adventureMode: 'pause',
         adventureChoiceIndex: 1,
         adventureChoiceMap: {}
@@ -188,6 +191,22 @@
         return String(_win.LingVerseAutoMapInitializedVersion || '');
     }
 
+    function compareVersionStrings(left, right) {
+        const parse = value => String(value || '')
+            .split('.')
+            .map(part => parseInt(part, 10))
+            .map(part => (Number.isFinite(part) ? part : 0));
+        const a = parse(left);
+        const b = parse(right);
+        const length = Math.max(a.length, b.length);
+        for (let i = 0; i < length; i += 1) {
+            const diff = (a[i] || 0) - (b[i] || 0);
+            if (diff > 0) return 1;
+            if (diff < 0) return -1;
+        }
+        return 0;
+    }
+
     function buildAfkEnvironmentInfo(source) {
         const sourceObj = source && typeof source === 'object' ? source : {};
         const env = sourceObj.environment && typeof sourceObj.environment === 'object' ? sourceObj.environment : {};
@@ -202,12 +221,21 @@
             sourceObj.autoMapInited ||
             _win._autoMapInited
         );
+        const versionMismatch = !!(extensionVersion && scriptVersion && extensionVersion !== scriptVersion);
+        const initializedVersionMismatch = !!(initializedVersion && scriptVersion && initializedVersion !== scriptVersion);
+        const extensionVersionStale = !!(
+            versionMismatch &&
+            initializedVersion &&
+            initializedVersion === scriptVersion &&
+            compareVersionStrings(scriptVersion, extensionVersion) > 0
+        );
         return {
             extensionVersion,
             initializedVersion,
             autoMapInited,
-            versionMismatch: !!(extensionVersion && scriptVersion && extensionVersion !== scriptVersion),
-            initializedVersionMismatch: !!(initializedVersion && scriptVersion && initializedVersion !== scriptVersion),
+            versionMismatch,
+            extensionVersionStale,
+            initializedVersionMismatch,
             initializedVersionMissing: !!(autoMapInited && !initializedVersion)
         };
     }
@@ -327,6 +355,7 @@
         cfg.queueNirvanaPill = !!cfg.queueNirvanaPill;
         cfg.autoDeclinePlayerEncounter = !!cfg.autoDeclinePlayerEncounter;
         cfg.autoReloadOnUpdate = !!cfg.autoReloadOnUpdate;
+        cfg.autoCloseCompletedAdventure = cfg.autoCloseCompletedAdventure !== false;
         cfg.adventureMode = cfg.adventureMode === 'fixed' || cfg.adventureMode === 'strategy' ? cfg.adventureMode : 'pause';
         cfg.adventureChoiceIndex = clampNumber(cfg.adventureChoiceIndex, 1, 10, 1);
         cfg.adventureChoiceMap = normalizeAdventureChoiceMap(cfg.adventureChoiceMap);
@@ -1021,6 +1050,7 @@
     function formatGuardianAttemptReason(reason) {
         const labels = {
             'afk-guardian-disabled': '自动护道关闭',
+            'guardian-batch-explore-unavailable': '批量探索不能护道',
             'guardian-config-disabled': '游戏护道关闭',
             'no-encounter': '等待遭遇',
             'guardian-already-attempted': '本次遭遇已尝试',
@@ -1063,6 +1093,9 @@
         if (reason === 'guardian-config-disabled') {
             return '护道建议: 游戏护道设置关闭 · 先在游戏护道面板开启自动护道，再启动护道1倍';
         }
+        if (reason === 'guardian-batch-explore-unavailable') {
+            return '护道建议: 批量探索遭遇不能雇护道 · 自动护道仅建议用于1倍探索，批量模式请改用富裕50倍的迎战/复活/用符/用丹链路或手动处理';
+        }
         if (reason === 'hire-failed') {
             return `护道建议: 自动护道失败 · 检查灵石、最高费用${guardian.maxFee || '不限'}、最低攻击力${guardian.minAtk}，必要时调整游戏护道设置后手动处理当前遭遇`;
         }
@@ -1087,7 +1120,8 @@
             'fight-already-triggered': '本次遭遇已触发迎战',
             'fight-triggered': '已触发自动迎战',
             'fight-failed': '自动迎战失败',
-            'talisman-dialog-open': '符箓面板未关闭'
+            'talisman-dialog-open': '符箓面板未关闭',
+            'talisman-use-failed': '战斗用符未成功'
         };
         return labels[reason] || reason || '未知';
     }
@@ -1112,7 +1146,7 @@
         const source = formatFightAttemptSource(normalized.source);
         if (source) parts.push(source);
         const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
-        if (failure) parts.push(failure);
+        if (failure && reason !== 'talisman-use-failed') parts.push(failure);
         return `迎战: ${parts.join(' · ')}`;
     }
 
@@ -1126,6 +1160,11 @@
         }
         if (reason === 'talisman-dialog-open') {
             return '迎战建议: 符箓面板未关闭 · 先关闭符箓面板再自动/手动迎战，并复制摘要排查关闭入口';
+        }
+        if (reason === 'talisman-use-failed') {
+            const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+            const detail = failure ? `${failure} · ` : '';
+            return `迎战建议: 战斗用符全部失败 · ${detail}已暂停自动迎战，检查库存/API或手动处理后复制摘要`;
         }
         if (reason === 'not-attempted' && normalized.shouldAttempt) {
             return '迎战建议: 尚未迎战 · 等待用符/护道处理结束，若持续不动请复制摘要';
@@ -1149,6 +1188,7 @@
             'budget-exhausted': '复活次数已到本轮上限',
             'revive-ready': '准备自动复活',
             'revive-triggered': '已触发自动复活',
+            'revive-not-confirmed': '自动复活未确认',
             'revive-failed': '自动复活失败'
         };
         return labels[reason] || reason || '未知';
@@ -1180,6 +1220,9 @@
         }
         if (reason === 'revive-triggered') {
             return '复活建议: 已触发自动复活 · 等待页面刷新和恢复窗口继续探索';
+        }
+        if (reason === 'revive-not-confirmed') {
+            return '复活建议: 复活入口已调用但死亡状态未解除 · 本轮不会直接进入恢复窗口，必要时手动复活或复制摘要';
         }
         if (reason === 'revive-failed') {
             return '复活建议: 自动复活失败 · 检查灵石和页面复活入口，必要时手动复活或调高本轮上限';
@@ -1390,6 +1433,7 @@
             'no-adventure': '等待奇遇',
             'choice-ready': '准备自动选择',
             'choice-triggered': '已触发自动选择',
+            'choice-already-triggered': '本步已触发自动选择',
             'choice-failed': '自动选择失败',
             'close-ready': '准备关闭奇遇',
             'close-triggered': '已触发关闭奇遇',
@@ -1448,11 +1492,14 @@
         if (reason === 'choice-triggered') {
             return '奇遇建议: 已触发奇遇自动选择 · 等待奇遇推进或恢复窗口继续探索';
         }
+        if (reason === 'choice-already-triggered') {
+            return '奇遇建议: 本奇遇步骤已触发过自动选择 · 暂停重复点击，等待页面推进或手动处理后复制摘要';
+        }
         if (reason === 'choice-failed') {
             return '奇遇建议: 自动选择失败 · 检查当前奇遇选项/策略是否匹配，必要时手动处理或复制摘要';
         }
         if (reason === 'close-ready') {
-            return '奇遇建议: 奇遇已无可选项 · 将尝试关闭/完成当前奇遇';
+            return '奇遇建议: 奇遇已完成 · 将只关闭/完成当前奇遇，不自动选择新剧情';
         }
         if (reason === 'close-triggered') {
             return '奇遇建议: 已触发关闭奇遇 · 等待恢复窗口继续探索';
@@ -1495,6 +1542,9 @@
         if (reason === 'start-ready' && !normalized.shouldAttempt) return '';
         const parts = [formatExploreStartAttemptReason(reason)];
         if (normalized.multiplier !== null) parts.push(`${normalized.multiplier}倍`);
+        if (normalized.actualMultiplier !== null && normalized.actualMultiplier !== normalized.multiplier) {
+            parts.push(`实际${normalized.actualMultiplier}倍`);
+        }
         const source = formatExploreStartAttemptSource(normalized.source);
         if (source) parts.push(source);
         const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
@@ -1732,6 +1782,9 @@
         const warnings = [];
         if (cfg.autoHireGuardian && !guardian.enabled) {
             warnings.push('自动护道已开启，但游戏护道设置关闭');
+        }
+        if (cfg.autoHireGuardian && cfg.exploreMultiplier > 1) {
+            warnings.push('批量探索遭遇不能雇护道，自动护道仅建议用于1倍探索');
         }
         if (cfg.useNirvanaPill && cfg.nirvanaMinRarity < 4) {
             warnings.push('涅槃重生丹最低品质低于史诗');
@@ -2095,6 +2148,21 @@
         };
     }
 
+    function buildAdventureChoiceAttemptKey(adventureStep, choiceIndex) {
+        const step = adventureStep && typeof adventureStep === 'object' ? adventureStep : {};
+        const id = sanitizeDebugName(step.adventureId || '', 80);
+        const choice = optionalNumberOrNull(choiceIndex);
+        if (!id || choice === null || choice <= 0) return '';
+        const stepIndex = optionalNumberOrNull(step.step);
+        const totalSteps = optionalNumberOrNull(step.totalSteps);
+        return [
+            id,
+            stepIndex === null ? '' : stepIndex,
+            totalSteps === null ? '' : totalSteps,
+            choice
+        ].join(':');
+    }
+
     function installAdventureStepHook() {
         if (_win._lingverseAutoMapAdventureHookInstalled) return true;
         if (typeof _win.showAdventureStep !== 'function') return false;
@@ -2399,6 +2467,9 @@
         if (!cfg.autoHireGuardian) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'afk-guardian-disabled' };
         }
+        if (cfg.exploreMultiplier > 1) {
+            return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'guardian-batch-explore-unavailable' };
+        }
         if (!guardian.enabled) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'guardian-config-disabled' };
         }
@@ -2428,6 +2499,15 @@
         }
         if (hasOpenTalismanDialogForEncounter(options && options.talismanAttempt, encounterKey, snapshot)) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'talisman-dialog-open' };
+        }
+        if (hasFailedTalismanUseForEncounter(options && options.talismanAttempt, encounterKey)) {
+            return {
+                shouldAttempt: false,
+                encounterKey,
+                markEncounterKey: '',
+                reason: 'talisman-use-failed',
+                failureMessage: getFailedTalismanUseMessageForEncounter(options && options.talismanAttempt, encounterKey)
+            };
         }
         if (encounterKey === String(lastEncounterKey || '')) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'fight-already-triggered' };
@@ -2557,6 +2637,27 @@
         return !!currentKey && (!attemptKey || attemptKey === currentKey);
     }
 
+    function hasFailedTalismanUseForEncounter(talismanAttempt, encounterKey) {
+        const normalized = normalizeCombatTalismanAttempt(talismanAttempt);
+        if (normalized.reason !== 'completed') return false;
+        const currentKey = sanitizeDebugName(encounterKey, 120);
+        const attemptKey = sanitizeDebugName(normalized.encounterKey || normalized.markEncounterKey, 120);
+        if (!currentKey || (attemptKey && attemptKey !== currentKey)) return false;
+        const selectedCount = normalized.selectedTalismans.length;
+        if (selectedCount <= 0) return false;
+        const usedKinds = optionalNumberOrNull(normalized.usedKinds);
+        if (usedKinds !== 0) return false;
+        const failedKinds = optionalNumberOrNull(normalized.failedKinds);
+        if (failedKinds !== null) return failedKinds >= selectedCount;
+        return !!sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+    }
+
+    function getFailedTalismanUseMessageForEncounter(talismanAttempt, encounterKey) {
+        if (!hasFailedTalismanUseForEncounter(talismanAttempt, encounterKey)) return '';
+        const normalized = normalizeCombatTalismanAttempt(talismanAttempt);
+        return normalized.failureMessage || '战斗符箓全部使用失败';
+    }
+
     function normalizeReviveAttempt(attempt) {
         const raw = attempt && typeof attempt === 'object' ? attempt : {};
         return {
@@ -2636,8 +2737,39 @@
             shouldAttempt: !!raw.shouldAttempt,
             reason: String(raw.reason || ''),
             multiplier: optionalNumberOrNull(raw.multiplier),
+            actualMultiplier: optionalNumberOrNull(raw.actualMultiplier),
             source: String(raw.source || ''),
             failureMessage: String(raw.failureMessage || '')
+        };
+    }
+
+    function resolveExploreMultiplierSetting(multiplier, actualMultiplier) {
+        const target = clampNumber(multiplier, 1, 50, 1);
+        const actual = optionalNumberOrNull(actualMultiplier);
+        if (actual === null) {
+            return {
+                ok: false,
+                reason: 'multiplier-read-failed',
+                multiplier: target,
+                actualMultiplier: null,
+                failureMessage: '无法读取当前探索倍率'
+            };
+        }
+        if (actual !== target) {
+            return {
+                ok: false,
+                reason: 'multiplier-mismatch',
+                multiplier: target,
+                actualMultiplier: actual,
+                failureMessage: `探索倍率未切换到${target}倍（当前${actual}倍）`
+            };
+        }
+        return {
+            ok: true,
+            reason: 'multiplier-ready',
+            multiplier: target,
+            actualMultiplier: actual,
+            failureMessage: ''
         };
     }
 
@@ -2746,6 +2878,14 @@
                 shouldAttempt: false,
                 reason: 'talisman-dialog-open',
                 encounterKey
+            });
+        }
+        if (hasFailedTalismanUseForEncounter(talismanAttempt, encounterKey)) {
+            return normalizeEncounterFightAttempt({
+                shouldAttempt: false,
+                reason: 'talisman-use-failed',
+                encounterKey,
+                failureMessage: getFailedTalismanUseMessageForEncounter(talismanAttempt, encounterKey)
             });
         }
         if (attempt && typeof attempt === 'object' && (
@@ -2919,7 +3059,7 @@
         )) {
             return normalizeAdventureAttempt(attempt);
         }
-        if (cfg.adventureMode !== 'fixed' && cfg.adventureMode !== 'strategy') {
+        if (cfg.adventureMode !== 'fixed' && cfg.adventureMode !== 'strategy' && !state.adventureComplete) {
             return normalizeAdventureAttempt({
                 shouldAttempt: false,
                 reason: 'disabled'
@@ -2935,6 +3075,13 @@
         const choiceIndex = resolveAdventureChoiceIndex(adventureId, cfg);
         const choices = Array.isArray(state.adventureChoices) ? state.adventureChoices : [];
         const choiceText = choiceIndex > 0 ? String(choices[choiceIndex - 1] || '') : '';
+        if (currentDecision.action === 'handleAdventure' && state.adventureComplete && cfg.autoCloseCompletedAdventure) {
+            return normalizeAdventureAttempt({
+                shouldAttempt: true,
+                reason: 'close-ready',
+                adventureId
+            });
+        }
         if (currentDecision.action === 'handleAdventure' && choiceIndex > 0) {
             return normalizeAdventureAttempt({
                 shouldAttempt: true,
@@ -3136,6 +3283,9 @@
                 : { action: 'wait', reason: 'revive-budget-exhausted' };
         }
         if (snapshot.adventureActive) {
+            if (snapshot.adventureComplete && cfg.autoCloseCompletedAdventure) {
+                return { action: 'handleAdventure', reason: 'adventure-close-completed' };
+            }
             const choiceIndex = resolveAdventureChoiceIndex(snapshot.adventureId, cfg);
             if (choiceIndex > 0) {
                 return { action: 'handleAdventure', reason: getAdventureChoiceReason(cfg) };
@@ -3238,6 +3388,59 @@
         return Number.isFinite(parsed) ? parsed : null;
     }
 
+    function parseAfkSpiritStatText(text) {
+        const source = String(text || '').trim();
+        const match = source.replace(/,/g, '').match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
+        if (!match) {
+            return { spirit: null, maxSpirit: null };
+        }
+        return {
+            spirit: numberOrNull(match[1]),
+            maxSpirit: numberOrNull(match[2])
+        };
+    }
+
+    function parseExploreSpiritCostText(text) {
+        const source = String(text || '').replace(/,/g, '');
+        const match = source.match(/\(\s*-\s*(\d+(?:\.\d+)?)\s*神识\s*\)/);
+        return match ? numberOrNull(match[1]) : null;
+    }
+
+    function readElementText(el) {
+        if (!el) return '';
+        return String(el.innerText || el.textContent || '');
+    }
+
+    function findAfkResourceElement(selector, id) {
+        if (typeof document === 'undefined') return null;
+        if (typeof document.querySelector === 'function') {
+            const el = document.querySelector(selector);
+            if (el) return el;
+        }
+        if (typeof document.getElementById === 'function') {
+            return document.getElementById(id);
+        }
+        return null;
+    }
+
+    function readAfkResourceDomFallback() {
+        const spiritText = readElementText(findAfkResourceElement('#statSpirit', 'statSpirit'));
+        const exploreText = readElementText(findAfkResourceElement('#exploreBtn', 'exploreBtn'));
+        const spiritState = parseAfkSpiritStatText(spiritText);
+        return {
+            spirit: spiritState.spirit,
+            maxSpirit: spiritState.maxSpirit,
+            spiritCost: parseExploreSpiritCostText(exploreText)
+        };
+    }
+
+    function pickFiniteNumber(primary, fallback) {
+        const parsed = numberOrNull(primary);
+        if (parsed !== null) return parsed;
+        const fallbackParsed = numberOrNull(fallback);
+        return fallbackParsed !== null ? fallbackParsed : primary;
+    }
+
     function optionalNumberOrNull(value) {
         if (value === null || typeof value === 'undefined' || value === '') return null;
         return numberOrNull(value);
@@ -3311,6 +3514,21 @@
 
     function sanitizeDebugName(value, limit) {
         return sanitizeDebugText(value, limit).replace(/[?#].*$/, '');
+    }
+
+    function getExploreProgressLogSignature(text) {
+        const lines = String(text || '')
+            .split(/\n+/)
+            .map(line => line.trim())
+            .filter(Boolean);
+        const progressPattern = /(\[收入\]|探索|击败|满载而归|获得修为|获得\s*\d+|保底获得|吸收到修为)/;
+        const matches = [];
+        for (let i = lines.length - 1; i >= 0 && matches.length < 3; i -= 1) {
+            const line = lines[i];
+            if (!progressPattern.test(line)) continue;
+            matches.unshift(sanitizeDebugText(line, 120));
+        }
+        return matches.join(' | ');
     }
 
     function summarizeNirvanaPillAttempt(attempt) {
@@ -3432,6 +3650,7 @@
             shouldAttempt: normalized.shouldAttempt,
             reason: normalized.reason,
             multiplier: optionalNumberOrNull(normalized.multiplier),
+            actualMultiplier: optionalNumberOrNull(normalized.actualMultiplier),
             source: sanitizeDebugText(normalized.source, 40),
             failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
         };
@@ -3521,6 +3740,87 @@
             choiceText: sanitizeDebugText(choice, DEBUG_SUMMARY_TEXT_LIMIT),
             mapLine: `${id}=${index + 1}`
         }));
+    }
+
+    function normalizeAdventureSample(sample) {
+        const raw = sample && typeof sample === 'object' ? sample : {};
+        const choices = (Array.isArray(raw.choices) ? raw.choices : (Array.isArray(raw.adventureChoices) ? raw.adventureChoices : []))
+            .map(choice => String(choice || '').trim())
+            .filter(Boolean)
+            .slice(0, 10);
+        const choiceIndex = optionalNumberOrNull(
+            typeof raw.choiceIndex !== 'undefined' ? raw.choiceIndex : raw.resolvedChoiceIndex
+        );
+        const fallbackChoice = choiceIndex !== null && choiceIndex > 0 ? choices[choiceIndex - 1] || '' : '';
+        return {
+            capturedAt: String(raw.capturedAt || raw.at || ''),
+            id: raw.id === null || typeof raw.id === 'undefined'
+                ? (raw.adventureId === null || typeof raw.adventureId === 'undefined' ? null : raw.adventureId)
+                : raw.id,
+            step: optionalNumberOrNull(typeof raw.step !== 'undefined' ? raw.step : raw.adventureStep),
+            totalSteps: optionalNumberOrNull(typeof raw.totalSteps !== 'undefined' ? raw.totalSteps : raw.adventureTotalSteps),
+            choices,
+            choiceIndex,
+            choiceText: String(raw.choiceText || fallbackChoice || '')
+        };
+    }
+
+    function summarizeAdventureSample(sample) {
+        const normalized = normalizeAdventureSample(sample);
+        const id = normalized.id === null || typeof normalized.id === 'undefined' || normalized.id === ''
+            ? null
+            : sanitizeDebugText(normalized.id, 60);
+        return {
+            capturedAt: sanitizeDebugText(normalized.capturedAt, 40),
+            id,
+            step: optionalNumberOrNull(normalized.step),
+            totalSteps: optionalNumberOrNull(normalized.totalSteps),
+            choices: normalized.choices.map(choice => sanitizeDebugText(choice, DEBUG_SUMMARY_TEXT_LIMIT)),
+            choiceIndex: optionalNumberOrNull(normalized.choiceIndex),
+            choiceText: sanitizeDebugText(normalized.choiceText, DEBUG_SUMMARY_TEXT_LIMIT),
+            strategyHints: id ? normalized.choices.map((choice, index) => ({
+                choiceIndex: index + 1,
+                choiceText: sanitizeDebugText(choice, DEBUG_SUMMARY_TEXT_LIMIT),
+                mapLine: `${id}=${index + 1}`
+            })) : []
+        };
+    }
+
+    function normalizeAdventureSamples(samples) {
+        return tailRecords(samples, DEBUG_ADVENTURE_SAMPLE_LIMIT)
+            .map(summarizeAdventureSample)
+            .filter(sample => sample.id || sample.choices.length > 0);
+    }
+
+    function buildAdventureSampleKey(sample) {
+        const normalized = normalizeAdventureSample(sample);
+        const id = normalized.id === null || typeof normalized.id === 'undefined' ? '' : String(normalized.id);
+        return [
+            id,
+            normalized.step === null ? '' : normalized.step,
+            normalized.totalSteps === null ? '' : normalized.totalSteps,
+            normalized.choices.join('|')
+        ].join('::');
+    }
+
+    function buildAdventureSampleStatusText(sample) {
+        const normalized = summarizeAdventureSample(sample);
+        const idText = normalized.id ? `#${normalized.id}` : '未知';
+        let heading = idText;
+        if (normalized.step !== null || normalized.totalSteps !== null) {
+            heading += ` 第${normalized.step === null ? '?' : normalized.step}/${normalized.totalSteps === null ? '?' : normalized.totalSteps}步`;
+        }
+        const choiceText = normalized.choices
+            .map((choice, index) => `${index + 1}.${sanitizeDebugText(choice, 48)}`)
+            .filter(Boolean)
+            .join(' / ');
+        const parts = [heading];
+        if (choiceText) parts.push(choiceText);
+        if (normalized.choiceIndex !== null && normalized.choiceIndex > 0) {
+            const selectedText = sanitizeDebugText(normalized.choiceText || normalized.choices[normalized.choiceIndex - 1] || '', 60);
+            parts.push(`最近选择第${normalized.choiceIndex}项${selectedText ? `「${selectedText}」` : ''}`);
+        }
+        return parts.filter(Boolean).join(' · ');
     }
 
     function buildAfkDebugSummary(debugSnapshot) {
@@ -3657,7 +3957,8 @@
                     time: sanitizeDebugText(record && record.time, 20),
                     type: sanitizeDebugText(record && record.type || 'info', 20),
                     message: sanitizeDebugText(record && record.message, DEBUG_SUMMARY_TEXT_LIMIT)
-                }))
+                })),
+                adventureSamples: normalizeAdventureSamples(history.adventureSamples)
             }
         };
     }
@@ -3708,6 +4009,9 @@
         const blockers = source.blockers && typeof source.blockers === 'object' ? source.blockers : {};
         const version = sanitizeDebugText(source.scriptVersion || SCRIPT_VERSION, 40);
         const environment = buildAfkEnvironmentInfo(source);
+        if (environment.extensionVersionStale) {
+            return `环境: helper ${version} · 扩展提示 ${environment.extensionVersion || '未知'} · 页面已加载新版，扩展提示待下次重载统一`;
+        }
         if (environment.versionMismatch) {
             return `环境: helper ${version} · 扩展 ${environment.extensionVersion || '未知'} · 版本不一致，重载扩展并刷新页面`;
         }
@@ -3745,9 +4049,14 @@
     function buildReplayStrategyImportText(summary) {
         const adventure = summary.adventure && typeof summary.adventure === 'object' ? summary.adventure : {};
         const hints = Array.isArray(adventure.strategyHints) ? adventure.strategyHints : [];
+        const history = summary.history && typeof summary.history === 'object' ? summary.history : {};
+        const sampleHints = (Array.isArray(history.adventureSamples) ? history.adventureSamples : [])
+            .flatMap(sample => Array.isArray(sample && sample.strategyHints)
+                ? sample.strategyHints
+                : summarizeAdventureSample(sample).strategyHints);
         const lines = [];
         const seen = new Set();
-        hints.forEach(hint => {
+        hints.concat(sampleHints).forEach(hint => {
             const line = sanitizeDebugText(hint && hint.mapLine, 80).trim();
             if (!line || seen.has(line)) return;
             seen.add(line);
@@ -3775,6 +4084,14 @@
             .join(' / ');
         if (choiceText) parts.push(choiceText);
         return parts.join(' · ');
+    }
+
+    function buildAfkRecentAdventureSamplesStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const history = source.history && typeof source.history === 'object' ? source.history : {};
+        const samples = normalizeAdventureSamples(history.adventureSamples).slice(-3);
+        const texts = samples.map(buildAdventureSampleStatusText).filter(Boolean);
+        return texts.length ? `奇遇样本: ${texts.join(' | ')}` : '';
     }
 
     function buildAfkResumeStatusLine(summary) {
@@ -3819,6 +4136,12 @@
             if (multiplier > 1) parts.push(`${multiplier}倍需${Math.ceil(spiritCost * multiplier)}`);
         }
         parts.push(`阈值${minSpirit}`);
+        if (reason === 'explore-stalled') {
+            const stallTimeoutSeconds = numberOrNull(config.stallTimeoutSeconds);
+            if (stallTimeoutSeconds !== null && stallTimeoutSeconds > 0) {
+                parts.push(`卡住判定${Math.round(stallTimeoutSeconds)}秒`);
+            }
+        }
         return parts.join(' · ');
     }
 
@@ -4023,6 +4346,24 @@
         return '冥想同步: 玩家缓存未标记冥想 · 已按可见冥想条估算';
     }
 
+    function buildAfkRecentLogStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const automation = source.automation && typeof source.automation === 'object' ? source.automation : {};
+        const diagnosis = automation.waitDiagnosis && typeof automation.waitDiagnosis === 'object'
+            ? automation.waitDiagnosis
+            : null;
+        if (!diagnosis || !diagnosis.active) return '';
+        if (diagnosis.category !== 'unknown' && diagnosis.category !== 'auto-action') return '';
+
+        const history = source.history && typeof source.history === 'object' ? source.history : {};
+        const logs = Array.isArray(history.logTail) ? history.logTail : [];
+        const latest = logs.slice().reverse().find(record => record && sanitizeDebugText(record.message, DEBUG_SUMMARY_TEXT_LIMIT));
+        if (!latest) return '';
+        const type = sanitizeDebugText(latest.type || 'info', 20);
+        const message = sanitizeDebugText(latest.message, DEBUG_SUMMARY_TEXT_LIMIT);
+        return `现场日志: ${type} ${message}`;
+    }
+
     function buildAfkStatusReport(source) {
         const parsed = source && typeof source === 'object' ? source : parseAfkIssueReplaySource(source);
         const summary = parsed && parsed.schema === 'lingverse-afk-debug-summary/v1'
@@ -4176,6 +4517,10 @@
             if (automation.waitDiagnosis.likelyCause) {
                 lines.push(`诊断归因: ${sanitizeDebugText(automation.waitDiagnosis.likelyCause, DEBUG_SUMMARY_TEXT_LIMIT)}`);
             }
+            const recentLogStatusLine = buildAfkRecentLogStatusLine(summary);
+            if (recentLogStatusLine) {
+                lines.push(recentLogStatusLine);
+            }
         }
         const preflight = automation.resourcePreflight && typeof automation.resourcePreflight === 'object'
             ? automation.resourcePreflight
@@ -4203,6 +4548,10 @@
         const adventureStatusLine = buildAfkAdventureStatusLine(summary);
         if (adventureStatusLine) {
             lines.push(adventureStatusLine);
+        }
+        const recentAdventureSamplesStatusLine = buildAfkRecentAdventureSamplesStatusLine(summary);
+        if (recentAdventureSamplesStatusLine) {
+            lines.push(recentAdventureSamplesStatusLine);
         }
         const adventureAttemptStatusLine = buildAfkAdventureAttemptStatusLine(automation.adventureAttempt);
         if (adventureAttemptStatusLine) {
@@ -4356,6 +4705,7 @@
                 queueNirvanaPill: cfg.queueNirvanaPill,
                 autoDeclinePlayerEncounter: cfg.autoDeclinePlayerEncounter,
                 autoReloadOnUpdate: cfg.autoReloadOnUpdate,
+                autoCloseCompletedAdventure: cfg.autoCloseCompletedAdventure,
                 adventureMode: cfg.adventureMode,
                 adventureChoiceIndex: cfg.adventureChoiceIndex,
                 adventureChoiceMap: normalizeAdventureChoiceMap(cfg.adventureChoiceMap),
@@ -4371,7 +4721,8 @@
             },
             history: {
                 decisionTail: normalizeDecisionHistory(debugContext.decisionHistory),
-                logTail: normalizeRecentLogs(debugContext.recentLogs)
+                logTail: normalizeRecentLogs(debugContext.recentLogs),
+                adventureSamples: normalizeAdventureSamples(debugContext.adventureSamples)
             }
         };
     }
@@ -4385,6 +4736,7 @@
         resolveApiObject,
         isElementVisibleForAutomation,
         parseMeditationBarState,
+        getExploreProgressLogSignature,
         normalizeAfkLoopConfig,
         normalizeAfkResourceUsage,
         resolveAfkResourceBudget,
@@ -4399,6 +4751,9 @@
         buildAfkWaitingDiagnosis,
         buildAfkRiskStatus,
         buildAfkPresetStatus,
+        parseAfkSpiritStatText,
+        parseExploreSpiritCostText,
+        readAfkResourceDomFallback,
         buildAfkConfigPack,
         resolveAfkConfigPackImport,
         selectCombatTalismans,
@@ -4415,6 +4770,7 @@
         normalizePlayerEncounterAttempt,
         normalizeAdventureAttempt,
         normalizeExploreStartAttempt,
+        resolveExploreMultiplierSetting,
         normalizeGuardianConfig,
         buildGuardianHirePayload,
         resolveEncounterGuardianAttempt,
@@ -4431,6 +4787,9 @@
         buildAfkEnvironmentInfo,
         buildAfkEnvironmentStatusLine,
         buildAfkAdventureStatusLine,
+        buildAfkRecentAdventureSamplesStatusLine,
+        normalizeAdventureSample,
+        normalizeAdventureSamples,
         buildAfkResumeStatusLine,
         buildAfkMeditationReturnStatusLine,
         buildAfkHardStopStatusLine,
@@ -4706,6 +5065,7 @@
         cfg.queueNirvanaPill = $('#am-afk-queue-nirvana')?.checked ?? cfg.queueNirvanaPill;
         cfg.autoDeclinePlayerEncounter = $('#am-afk-auto-decline-player')?.checked ?? cfg.autoDeclinePlayerEncounter;
         cfg.autoReloadOnUpdate = $('#am-afk-auto-reload-update')?.checked ?? cfg.autoReloadOnUpdate;
+        cfg.autoCloseCompletedAdventure = $('#am-afk-auto-close-completed-adventure')?.checked ?? cfg.autoCloseCompletedAdventure;
         cfg.adventureMode = $('#am-afk-adventure-mode')?.value || cfg.adventureMode || 'pause';
         cfg.adventureChoiceIndex = clampNumber($('#am-afk-adventure-choice')?.value, 1, 10, cfg.adventureChoiceIndex || 1);
         cfg.adventureChoiceMap = normalizeAdventureChoiceMap($('#am-afk-adventure-map')?.value ?? cfg.adventureChoiceMap);
@@ -5010,6 +5370,10 @@
                             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                                 <input type="checkbox" id="am-afk-auto-decline-player" ${CONFIG.afkLoop.autoDeclinePlayerEncounter?'checked':''} style="cursor:pointer;">
                                 <span style="font-size:12px;color:${text};">自动婉拒陌生道友邂逅</span>
+                            </label>
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                                <input type="checkbox" id="am-afk-auto-close-completed-adventure" ${CONFIG.afkLoop.autoCloseCompletedAdventure!==false?'checked':''} style="cursor:pointer;">
+                                <span style="font-size:12px;color:${text};">奇遇完成后自动关闭收尾</span>
                             </label>
                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
                                 <div>
@@ -5321,6 +5685,7 @@
             const afkAutoHireGuardianEl = $('#am-afk-auto-hire-guardian');
             const afkAutoDeclinePlayerEl = $('#am-afk-auto-decline-player');
             const afkAutoReloadUpdateEl = $('#am-afk-auto-reload-update');
+            const afkAutoCloseCompletedAdventureEl = $('#am-afk-auto-close-completed-adventure');
             const afkAdventureModeEl = $('#am-afk-adventure-mode');
             const afkAdventureChoiceEl = $('#am-afk-adventure-choice');
             const afkAdventureMapEl = $('#am-afk-adventure-map');
@@ -5358,6 +5723,7 @@
             if (afkAutoHireGuardianEl) afkAutoHireGuardianEl.checked = CONFIG.afkLoop.autoHireGuardian;
             if (afkAutoDeclinePlayerEl) afkAutoDeclinePlayerEl.checked = CONFIG.afkLoop.autoDeclinePlayerEncounter;
             if (afkAutoReloadUpdateEl) afkAutoReloadUpdateEl.checked = CONFIG.afkLoop.autoReloadOnUpdate;
+            if (afkAutoCloseCompletedAdventureEl) afkAutoCloseCompletedAdventureEl.checked = CONFIG.afkLoop.autoCloseCompletedAdventure !== false;
             if (afkAdventureModeEl) afkAdventureModeEl.value = CONFIG.afkLoop.adventureMode;
             if (afkAdventureChoiceEl) afkAdventureChoiceEl.value = CONFIG.afkLoop.adventureChoiceIndex;
             if (afkAdventureMapEl) afkAdventureMapEl.value = formatAdventureChoiceMap(CONFIG.afkLoop.adventureChoiceMap);
@@ -5987,6 +6353,7 @@
         lastDecisionKey: '',
         lastAutoExploreCount: null,
         lastExploreProgressAt: 0,
+        lastExploreLogSignature: '',
         encounterBusy: false,
         lastTalismanEncounterKey: '',
         lastGuardianEncounterKey: '',
@@ -6000,13 +6367,16 @@
         lastExploreStartAttempt: null,
         lastPlayerEncounterAttempt: null,
         lastAdventureAttempt: null,
+        lastAdventureChoiceKey: '',
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
         postMeditationResumeUntil: 0,
         resourceUsage: normalizeAfkResourceUsage({}),
         decisionHistory: [],
+        adventureSamples: [],
 
         init() {
+            this.adventureSamples = this.loadAdventureSamples();
             this.ensureTimer();
             if (CONFIG.afkLoop.enabled) {
                 setTimeout(() => this.tick(true), 1200);
@@ -6084,6 +6454,7 @@
                     page: { title: document.title || '', url: location.href || '' },
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
+                    adventureSamples: this.getAdventureSamples(),
                     inventoryItems,
                     meditationAttempt: this.lastMeditationAttempt,
                     merchantAttempt: MerchantAutoBuyer.lastAttempt,
@@ -6118,6 +6489,7 @@
                     page: { title: document.title || '', url: location.href || '' },
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
+                    adventureSamples: this.getAdventureSamples(),
                     inventoryItems,
                     meditationAttempt: this.lastMeditationAttempt,
                     merchantAttempt: MerchantAutoBuyer.lastAttempt,
@@ -6232,6 +6604,49 @@
             return this.decisionHistory.slice(-DEBUG_DECISION_HISTORY_LIMIT);
         },
 
+        loadAdventureSamples() {
+            try {
+                const raw = localStorage.getItem('lingverse_afk_adventure_samples');
+                if (!raw) return [];
+                return normalizeAdventureSamples(JSON.parse(raw));
+            } catch (e) {
+                return [];
+            }
+        },
+
+        saveAdventureSamples() {
+            try {
+                localStorage.setItem('lingverse_afk_adventure_samples', JSON.stringify(this.getAdventureSamples()));
+            } catch (e) {}
+        },
+
+        getAdventureSamples() {
+            this.adventureSamples = normalizeAdventureSamples(this.adventureSamples);
+            return this.adventureSamples.slice(-DEBUG_ADVENTURE_SAMPLE_LIMIT);
+        },
+
+        recordAdventureSample(snapshot, cfg, now) {
+            const state = snapshot && typeof snapshot === 'object' ? snapshot : {};
+            const choices = Array.isArray(state.adventureChoices) ? state.adventureChoices : [];
+            if (!state.adventureActive || !state.adventureId || choices.length === 0) return;
+            const normalizedCfg = normalizeAfkLoopConfig(cfg || CONFIG.afkLoop);
+            const choiceIndex = resolveAdventureChoiceIndex(state.adventureId, normalizedCfg);
+            const sample = summarizeAdventureSample({
+                capturedAt: new Date(now || Date.now()).toISOString(),
+                id: state.adventureId,
+                step: state.adventureStep,
+                totalSteps: state.adventureTotalSteps,
+                choices,
+                choiceIndex: choiceIndex > 0 ? choiceIndex : null,
+                choiceText: choiceIndex > 0 ? choices[choiceIndex - 1] || '' : ''
+            });
+            const key = buildAdventureSampleKey(sample);
+            const samples = this.getAdventureSamples().filter(item => buildAdventureSampleKey(item) !== key);
+            samples.push(sample);
+            this.adventureSamples = normalizeAdventureSamples(samples);
+            this.saveAdventureSamples();
+        },
+
         getPanelStatus(now) {
             return buildAfkPanelStatus(CONFIG.afkLoop, this.getDecisionHistory(), {
                 lastEvaluationAt: this.lastEvaluationAt,
@@ -6259,14 +6674,17 @@
 
         async buildSnapshot(now, cfg) {
             installAdventureStepHook();
-            let player = _win._lastPlayerData || null;
-            if (!player) {
-                try {
-                    const res = await API.getPlayerInfo();
-                    if (res.code === 200 && res.data) player = res.data;
-                } catch (e) {}
-            }
+            const cachedPlayer = _win._lastPlayerData || null;
+            let player = cachedPlayer;
+            try {
+                const res = await API.getPlayerInfo();
+                if (res.code === 200 && res.data) {
+                    player = res.data;
+                    _win._lastPlayerData = res.data;
+                }
+            } catch (e) {}
             player = player || {};
+            const resourceDomFallback = readAfkResourceDomFallback();
 
             let meditationStatus = null;
             try {
@@ -6296,11 +6714,18 @@
             const autoExplorePending = !!_win._autoResumeExplorePending;
             const autoExploreCount = toFiniteNumber(_win._autoExploreCount, 0);
             const autoExploreActive = autoExploreRunning || autoExplorePending;
+            const exploreLogSignature = getExploreProgressLogSignature(document.body ? document.body.innerText : '');
+            const exploreLogProgressed = !!(
+                autoExploreActive &&
+                exploreLogSignature &&
+                exploreLogSignature !== this.lastExploreLogSignature
+            );
 
-            if (!autoExploreActive || this.lastAutoExploreCount === null || autoExploreCount !== this.lastAutoExploreCount) {
+            if (!autoExploreActive || this.lastAutoExploreCount === null || autoExploreCount !== this.lastAutoExploreCount || exploreLogProgressed) {
                 this.lastExploreProgressAt = now;
                 this.lastAutoExploreCount = autoExploreCount;
             }
+            if (exploreLogSignature) this.lastExploreLogSignature = exploreLogSignature;
 
             const encounterOverlay = $('#encounterOverlay');
             const combatPanel = $('#combatPanel');
@@ -6329,6 +6754,7 @@
                 talismanDialogActive
             );
             const adventureActive = !!(_win._companionAdventureActive || isElementVisibleForAutomation(adventureOverlay));
+            if (!adventureActive) this.lastAdventureChoiceKey = '';
             const encounterText = encounterOverlayVisible ? encounterOverlay.innerText : '';
             const guardianAutoHireInProgress = detectGuardianAutoHireInProgress(encounterText);
             const encounterKey = buildEncounterKey({
@@ -6356,14 +6782,14 @@
                 ? Math.max(0, Math.ceil((this.postMeditationResumeUntil - now) / 1000))
                 : 0;
 
-            return {
+            const snapshot = {
                 isMeditating,
                 meditationDurationSeconds,
                 meditationRecoveredSpirit,
                 meditationSpiritFromBar,
-                spirit: player.spirit,
-                maxSpirit: player.maxSpirit,
-                spiritCost: player.spiritCost,
+                spirit: pickFiniteNumber(player.spirit, resourceDomFallback.spirit),
+                maxSpirit: pickFiniteNumber(player.maxSpirit, resourceDomFallback.maxSpirit),
+                spiritCost: pickFiniteNumber(player.spiritCost, resourceDomFallback.spiritCost),
                 canExplore: player.canExplore,
                 exploreDisabledReason: player.exploreDisabledReason,
                 isDead: !!(player.isDead || _win.playerDead),
@@ -6396,6 +6822,8 @@
                 postMeditationResumeRemainingSeconds,
                 exploreStalled
             };
+            this.recordAdventureSample(snapshot, cfg, now);
+            return snapshot;
         },
 
         async executeDecision(decision, snapshot, cfg) {
@@ -6567,15 +6995,21 @@
         async startAutoExplore(multiplier, cfg) {
             const normalizedMultiplier = clampNumber(multiplier, 1, 50, 1);
             let source = '';
+            let actualMultiplier = null;
             this.lastExploreStartAttempt = normalizeExploreStartAttempt({
                 shouldAttempt: true,
                 reason: 'start-ready',
                 multiplier: normalizedMultiplier
             });
             try {
-                await this.maybeUseNirvanaRebirthPill(cfg || CONFIG.afkLoop);
                 source = 'multiplier';
                 this.setExploreMultiplier(normalizedMultiplier);
+                actualMultiplier = this.readExploreMultiplier();
+                const multiplierCheck = resolveExploreMultiplierSetting(normalizedMultiplier, actualMultiplier);
+                if (!multiplierCheck.ok) {
+                    throw new Error(multiplierCheck.failureMessage);
+                }
+                await this.maybeUseNirvanaRebirthPill(cfg || CONFIG.afkLoop);
                 const toggle = $('#autoExploreToggle');
                 if (toggle) toggle.checked = true;
 
@@ -6592,10 +7026,15 @@
                     source = 'missing-entry';
                     throw new Error('页面探索函数不可用');
                 }
+                const startState = this.readAutoExploreStartState(source);
+                if (!startState.ok) {
+                    throw new Error(startState.failureMessage);
+                }
                 this.lastExploreStartAttempt = normalizeExploreStartAttempt({
                     shouldAttempt: false,
                     reason: 'start-triggered',
                     multiplier: normalizedMultiplier,
+                    actualMultiplier,
                     source
                 });
                 this.lastExploreProgressAt = Date.now();
@@ -6605,6 +7044,7 @@
                     shouldAttempt: true,
                     reason: 'start-failed',
                     multiplier: normalizedMultiplier,
+                    actualMultiplier,
                     source: source || 'exception',
                     failureMessage
                 });
@@ -6711,10 +7151,91 @@
             }
         },
 
-        async revive(cfg) {
-            const reviveBudget = resolveAfkResourceBudget('revive', cfg || CONFIG.afkLoop, this.getResourceUsage());
-            if (!reviveBudget.allowed) {
-                this.lastReviveAttempt = normalizeReviveAttempt({
+        readExploreMultiplier() {
+            if (typeof _win.getExploreMultiplier === 'function') {
+                try {
+                    return clampNumber(_win.getExploreMultiplier(), 1, 50, 1);
+                } catch (e) {}
+            }
+            const picker = $('#exploreMultiplier');
+            if (!picker) return null;
+            const raw = picker.tagName === 'SELECT'
+                ? picker.value
+                : (picker.dataset && picker.dataset.value);
+            const parsed = parseInt(raw || '', 10);
+            return Number.isFinite(parsed) ? clampNumber(parsed, 1, 50, 1) : null;
+        },
+
+	        readAutoExploreStartState(source) {
+	            const toggle = $('#autoExploreToggle');
+	            const hasRunningFlag = typeof _win._autoExploreRunning !== 'undefined';
+	            const hasPendingFlag = typeof _win._autoResumeExplorePending !== 'undefined';
+            const pageActive = !!(_win._autoExploreRunning || _win._autoResumeExplorePending);
+            if (pageActive) {
+                return { ok: true, reason: 'page-running' };
+            }
+            if (hasRunningFlag || hasPendingFlag) {
+                return {
+                    ok: false,
+                    reason: 'page-not-running',
+                    failureMessage: '自动探索入口已调用但运行状态未开启'
+                };
+            }
+            if (source === 'single-explore') {
+                return { ok: true, reason: 'single-explore' };
+            }
+            return {
+                ok: !!toggle?.checked,
+                reason: toggle?.checked ? 'toggle-checked' : 'toggle-not-checked',
+	                failureMessage: '自动探索入口已调用但自动开关未开启'
+	            };
+	        },
+
+	        readDeathState() {
+	            const player = _win._lastPlayerData && typeof _win._lastPlayerData === 'object'
+	                ? _win._lastPlayerData
+	                : {};
+	            const hasPlayerDead = Object.prototype.hasOwnProperty.call(player, 'isDead');
+	            const hasGlobalDead = typeof _win.playerDead !== 'undefined';
+	            const deathOverlay = $('#deathOverlay') || $('#deathModal') || $('.death-overlay') || $('.death-modal');
+	            const overlayVisible = isElementVisibleForAutomation(deathOverlay);
+	            return {
+	                known: hasPlayerDead || hasGlobalDead || !!deathOverlay,
+	                isDead: !!(
+	                    (hasPlayerDead && player.isDead) ||
+	                    (hasGlobalDead && _win.playerDead) ||
+	                    overlayVisible
+	                )
+	            };
+	        },
+
+	        async confirmReviveResolved() {
+	            const readState = () => this.readDeathState ? this.readDeathState() : { known: false, isDead: false };
+	            const buildSuccess = (state) => ({
+	                ok: true,
+	                reason: state && state.known ? 'death-cleared' : 'death-state-unknown'
+	            });
+	            this.refreshGameData();
+	            await wait(500);
+	            let state = readState();
+	            if (!state.known || !state.isDead) return buildSuccess(state);
+
+	            this.refreshGameData();
+	            await wait(1000);
+	            state = readState();
+	            if (!state.known || !state.isDead) return buildSuccess(state);
+
+	            return {
+	                ok: false,
+	                reason: 'still-dead',
+	                failureMessage: '复活入口已调用但页面仍显示死亡状态'
+	            };
+	        },
+
+	        async revive(cfg) {
+	            const reviveBudget = resolveAfkResourceBudget('revive', cfg || CONFIG.afkLoop, this.getResourceUsage());
+	            if (!reviveBudget.allowed) {
+	                this.lastReviveAttempt = normalizeReviveAttempt({
                     shouldAttempt: false,
                     reason: 'budget-exhausted'
                 });
@@ -6726,15 +7247,32 @@
                 if (typeof _win.handleRevive === 'function') {
                     source = 'page-function';
                     await _win.handleRevive();
-                } else {
-                    const res = await API.revive();
-                    if (res.code !== 200) throw new Error(res.message || '复活失败');
-                }
-                this.lastReviveAttempt = normalizeReviveAttempt({
-                    shouldAttempt: false,
-                    reason: 'revive-triggered',
-                    source
-                });
+	                } else {
+	                    const res = await API.revive();
+	                    if (res.code !== 200) throw new Error(res.message || '复活失败');
+	                }
+	                const confirmation = typeof this.confirmReviveResolved === 'function'
+	                    ? await this.confirmReviveResolved(source)
+	                    : { ok: true, reason: 'not-checked' };
+	                if (confirmation && confirmation.ok === false) {
+	                    this.lastReviveAttempt = normalizeReviveAttempt({
+	                        shouldAttempt: false,
+	                        reason: 'revive-not-confirmed',
+	                        source,
+	                        failureMessage: confirmation.failureMessage || '复活入口已调用但死亡状态未解除'
+	                    });
+	                    this.incrementResourceUsage('revive');
+	                    this.postReviveResumeUntil = 0;
+	                    this.lastDecisionKey = '';
+	                    this.refreshGameData();
+	                    Logger.warn(`自动复活未确认: ${confirmation.failureMessage || confirmation.reason || '死亡状态未解除'}`);
+	                    return;
+	                }
+	                this.lastReviveAttempt = normalizeReviveAttempt({
+	                    shouldAttempt: false,
+	                    reason: 'revive-triggered',
+	                    source
+	                });
                 this.incrementResourceUsage('revive');
                 const windowMs = getResumeWindowMs(cfg || CONFIG.afkLoop);
                 this.postReviveResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
@@ -6758,6 +7296,10 @@
             try {
                 if (cfg.useTalismans) {
                     await this.useCombatTalismans(cfg, snapshot);
+                    if (hasOpenTalismanDialogForEncounter(this.lastTalismanAttempt, buildEncounterKey(snapshot), null)) {
+                        Logger.warn('符箓面板未关闭，暂停自动迎战，等待下一轮确认');
+                        return;
+                    }
                 }
                 if (cfg.autoHireGuardian) {
                     const handled = await this.tryHireEncounterGuardian(cfg, snapshot);
@@ -7093,7 +7635,9 @@
         },
 
         async handleAdventure(cfg) {
-            if (cfg.adventureMode !== 'fixed' && cfg.adventureMode !== 'strategy') {
+            const canChooseAdventure = cfg.adventureMode === 'fixed' || cfg.adventureMode === 'strategy';
+            const canCloseCompletedAdventure = cfg.autoCloseCompletedAdventure !== false;
+            if (!canChooseAdventure && !canCloseCompletedAdventure) {
                 this.lastAdventureAttempt = normalizeAdventureAttempt({
                     shouldAttempt: false,
                     reason: 'disabled'
@@ -7124,6 +7668,15 @@
                 const choiceButtons = this.findAdventureChoiceButtons(overlay);
 
                 if (choiceButtons.length > 0) {
+                    if (!canChooseAdventure) {
+                        this.lastAdventureAttempt = normalizeAdventureAttempt({
+                            shouldAttempt: false,
+                            reason: 'disabled',
+                            adventureId
+                        });
+                        Logger.warn(`奇遇 ${adventureId || '未知'} 仍有可选项，暂停模式不会自动选择`);
+                        return;
+                    }
                     const choiceNumber = resolveAdventureChoiceIndex(adventureId, cfg);
                     choiceIndex = choiceNumber > 0 ? choiceNumber : null;
                     if (choiceNumber <= 0) {
@@ -7139,6 +7692,19 @@
                     }
                     const choiceBtn = choiceButtons[choiceNumber - 1];
                     choiceText = choiceBtn ? String(choiceBtn.textContent || '').trim() : '';
+                    const choiceKey = buildAdventureChoiceAttemptKey(adventureStep, choiceNumber);
+                    if (choiceKey && this.lastAdventureChoiceKey === choiceKey) {
+                        this.lastAdventureAttempt = normalizeAdventureAttempt({
+                            shouldAttempt: false,
+                            reason: 'choice-already-triggered',
+                            source: 'choice-button',
+                            adventureId,
+                            choiceIndex,
+                            choiceText
+                        });
+                        Logger.warn(`奇遇 ${adventureId || '未知'} 第${choiceNumber}项已触发过，等待页面推进`);
+                        return;
+                    }
                     if (!choiceBtn || choiceBtn.disabled) {
                         this.lastAdventureAttempt = normalizeAdventureAttempt({
                             shouldAttempt: true,
@@ -7162,6 +7728,7 @@
                     });
                     source = 'choice-button';
                     choiceBtn.click();
+                    if (choiceKey) this.lastAdventureChoiceKey = choiceKey;
                     this.lastAdventureAttempt = normalizeAdventureAttempt({
                         shouldAttempt: false,
                         reason: 'choice-triggered',
@@ -7171,12 +7738,15 @@
                         choiceText
                     });
                     Logger.info(`已自动选择奇遇${adventureId ? ` ${adventureId}` : ''}第${choiceNumber}项`);
-                } else if (closeBtn && !closeBtn.disabled) {
+                } else if (closeBtn && !closeBtn.disabled && (canChooseAdventure || (canCloseCompletedAdventure && adventureStep && adventureStep.isComplete))) {
                     this.lastAdventureAttempt = normalizeAdventureAttempt({
                         shouldAttempt: true,
                         reason: 'close-ready',
                         adventureId
                     });
+                    if (!canChooseAdventure && adventureStep && adventureStep.isComplete) {
+                        Logger.info(`奇遇${adventureId ? ` ${adventureId}` : ''}已完成，自动关闭收尾`);
+                    }
                     source = 'close-button';
                     closeBtn.click();
                     this.lastAdventureAttempt = normalizeAdventureAttempt({
@@ -7185,6 +7755,7 @@
                         source,
                         adventureId
                     });
+                    this.lastAdventureChoiceKey = '';
                     Logger.info('已自动结束/关闭奇遇');
                 } else {
                     this.lastAdventureAttempt = normalizeAdventureAttempt({
@@ -7981,6 +8552,10 @@
             return rewards.map(r => `${r.name||'未知'}x${r.count||1}`).join(', ');
         }
     };
+
+    _win.LingVerseAutoMapTestHooks = Object.assign({}, _win.LingVerseAutoMapTestHooks, {
+        AfkLoopManager
+    });
 
     /**
      * 初始化函数

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.61.0
+// @version      2.62.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.61.0';
+    const SCRIPT_VERSION = '2.62.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -2052,7 +2052,7 @@
         if (!cfg.autoFight) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'disabled' };
         }
-        if (hasOpenTalismanDialogForEncounter(options && options.talismanAttempt, encounterKey)) {
+        if (hasOpenTalismanDialogForEncounter(options && options.talismanAttempt, encounterKey, snapshot)) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'talisman-dialog-open' };
         }
         if (encounterKey === String(lastEncounterKey || '')) {
@@ -2167,7 +2167,15 @@
         };
     }
 
-    function hasOpenTalismanDialogForEncounter(talismanAttempt, encounterKey) {
+    function getSnapshotTalismanDialogState(snapshot) {
+        const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+        return typeof source.talismanDialogActive === 'boolean' ? source.talismanDialogActive : null;
+    }
+
+    function hasOpenTalismanDialogForEncounter(talismanAttempt, encounterKey, snapshot) {
+        const currentDialogState = getSnapshotTalismanDialogState(snapshot);
+        if (currentDialogState === true) return !!sanitizeDebugName(encounterKey, 120);
+        if (currentDialogState === false) return false;
         const normalized = normalizeCombatTalismanAttempt(talismanAttempt);
         if (normalized.dialogClosed !== false) return false;
         const currentKey = sanitizeDebugName(encounterKey, 120);
@@ -2335,7 +2343,7 @@
                 encounterKey
             });
         }
-        if (hasOpenTalismanDialogForEncounter(talismanAttempt, encounterKey)) {
+        if (hasOpenTalismanDialogForEncounter(talismanAttempt, encounterKey, snapshot)) {
             return normalizeEncounterFightAttempt({
                 shouldAttempt: false,
                 reason: 'talisman-dialog-open',
@@ -3035,6 +3043,7 @@
                 merchantActive: !!blockers.merchantActive,
                 encounterActive: !!blockers.encounterActive,
                 combatActive: !!blockers.combatActive,
+                talismanDialogActive: !!blockers.talismanDialogActive,
                 playerEncounterActive: !!blockers.playerEncounterActive,
                 adventureActive: !!blockers.adventureActive,
                 adventureId: blockers.adventureId || null,
@@ -3601,6 +3610,7 @@
                 merchantActive: !!snapshot.merchantActive,
                 encounterActive: !!snapshot.encounterActive,
                 combatActive: !!snapshot.combatActive,
+                talismanDialogActive: !!snapshot.talismanDialogActive,
                 playerEncounterActive: !!snapshot.playerEncounterActive,
                 adventureActive: !!snapshot.adventureActive,
                 adventureId,
@@ -5602,11 +5612,12 @@
                 return !!(el && !el.classList.contains('hidden'));
             });
             const combatActive = !!(combatPanel && combatPanel.classList.contains('active'));
+            const talismanDialogActive = !!(talismanDialog && !talismanDialog.classList.contains('hidden'));
             const encounterActive = !!(
                 _win._encounterActive ||
                 (encounterOverlay && !encounterOverlay.classList.contains('hidden')) ||
                 combatActive ||
-                (talismanDialog && !talismanDialog.classList.contains('hidden'))
+                talismanDialogActive
             );
             const adventureActive = !!(_win._companionAdventureActive || (adventureOverlay && !adventureOverlay.classList.contains('hidden')));
             const encounterText = encounterOverlay && !encounterOverlay.classList.contains('hidden') ? encounterOverlay.innerText : '';
@@ -5653,6 +5664,7 @@
                 merchantActive: MerchantAutoBuyer.isMerchantActive(),
                 encounterActive,
                 combatActive,
+                talismanDialogActive,
                 resourceUsage: this.getResourceUsage(),
                 encounterKey,
                 encounterMonsterId: _win._currentEncounterMonsterId,

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.81.0
+// @version      2.82.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.81.0';
+    const SCRIPT_VERSION = '2.82.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -386,6 +386,7 @@
             'explore-disabled-no-spirit': '不可探索且疑似神识不足',
             'explore-disabled': '当前区域不可探索',
             'spirit-below-threshold': '神识低于阈值',
+            'explore-batch-low-spirit': '神识不足当前倍率',
             'spirit-ready': '神识可探索',
             'post-revive-ready': '复活后神识可探索',
             'post-revive-low-spirit': '复活后神识不足',
@@ -651,8 +652,8 @@
             const remainingSeconds = optionalNumberOrNull(rawRemaining);
             const targetSeconds = Math.max(0, Math.round(cfg.resumeWindowSeconds));
             const spirit = Math.max(0, toFiniteNumber(snapshot.spirit, 0));
-            const spiritCost = Math.max(1, toFiniteNumber(snapshot.spiritCost, 1));
-            const lowSpirit = spirit < cfg.minSpirit || spirit < spiritCost;
+            const exploreBatchSpiritCost = getAfkExploreBatchSpiritCost(snapshot, cfg);
+            const lowSpirit = spirit < cfg.minSpirit || spirit < exploreBatchSpiritCost;
             const remainingText = remainingSeconds === null ? '' : ` · 剩余${formatAfkElapsedDuration(remainingSeconds)}`;
             const nextText = isMeditationResume
                 ? `收功后将继续${cfg.exploreMultiplier}倍探索`
@@ -671,7 +672,7 @@
             });
         }
 
-        if (reason === 'spirit-below-threshold' || reason === 'explore-disabled-no-spirit') {
+        if (reason === 'spirit-below-threshold' || reason === 'explore-disabled-no-spirit' || reason === 'explore-batch-low-spirit') {
             return make('needs-meditation', '待冥想', `待冥想 · ${formatAfkReason(reason)}`);
         }
         if (currentDecision.action === 'startAutoExplore') {
@@ -3082,6 +3083,14 @@
         return Math.max(spirit, spirit + Math.max(0, recoveredSpirit));
     }
 
+    function getAfkExploreBatchSpiritCost(state, config) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const snapshot = state || {};
+        const spiritCost = Math.max(1, toFiniteNumber(snapshot.spiritCost, 1));
+        const multiplier = Math.max(1, toFiniteNumber(cfg.exploreMultiplier, 1));
+        return Math.max(1, Math.ceil(spiritCost * multiplier));
+    }
+
     function decideAfkNextAction(state, config, now) {
         const cfg = normalizeAfkLoopConfig(config);
         const snapshot = state || {};
@@ -3133,7 +3142,9 @@
         const spirit = Math.max(0, toFiniteNumber(snapshot.spirit, 0));
         const maxSpirit = Math.max(0, toFiniteNumber(snapshot.maxSpirit, 0));
         const spiritCost = Math.max(1, toFiniteNumber(snapshot.spiritCost, 1));
-        const lowSpirit = spirit < cfg.minSpirit || spirit < spiritCost;
+        const exploreBatchSpiritCost = getAfkExploreBatchSpiritCost(snapshot, cfg);
+        const lowSpirit = spirit < cfg.minSpirit || spirit < exploreBatchSpiritCost;
+        const lowExploreBatchSpirit = spirit >= cfg.minSpirit && spirit >= spiritCost && spirit < exploreBatchSpiritCost;
         const disabledReason = String(snapshot.exploreDisabledReason || '');
         const exploreDisabledForSpirit = snapshot.canExplore === false &&
             (disabledReason.indexOf('神识') >= 0 || disabledReason.indexOf('体力') >= 0);
@@ -3195,7 +3206,7 @@
         }
 
         if (lowSpirit) {
-            return { action: 'startMeditation', reason: 'spirit-below-threshold' };
+            return { action: 'startMeditation', reason: lowExploreBatchSpirit ? 'explore-batch-low-spirit' : 'spirit-below-threshold' };
         }
 
         return { action: 'startAutoExplore', reason: 'spirit-ready' };
@@ -3756,6 +3767,7 @@
             'auto-explore-low-spirit': '自动探索神识不足',
             'explore-disabled-no-spirit': '页面提示神识不足',
             'spirit-below-threshold': '神识低于阈值',
+            'explore-batch-low-spirit': '神识不足当前倍率',
             'post-revive-low-spirit': '复活后神识不足',
             'post-interaction-low-spirit': '事件/战斗后神识不足',
             'explore-stalled': '自动探索疑似卡住'
@@ -3776,11 +3788,15 @@
         const maxSpirit = formatAfkReportNumber(player.maxSpirit);
         const spiritCost = numberOrNull(player.spiritCost);
         const minSpirit = formatAfkReportNumber(config.minSpirit);
+        const multiplier = Math.max(1, toFiniteNumber(config.exploreMultiplier, 1));
         const parts = [
             `回冥想: ${reasonLabel}`,
             `当前${spirit}/${maxSpirit}`
         ];
-        if (spiritCost !== null) parts.push(`单次${spiritCost}`);
+        if (spiritCost !== null) {
+            parts.push(`单次${spiritCost}`);
+            if (multiplier > 1) parts.push(`${multiplier}倍需${Math.ceil(spiritCost * multiplier)}`);
+        }
         parts.push(`阈值${minSpirit}`);
         return parts.join(' · ');
     }

@@ -276,6 +276,23 @@ test('decideAfkNextAction starts auto explore when spirit is usable and idle', (
         action: 'startAutoExplore',
         reason: 'spirit-ready'
     });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 120,
+        maxSpirit: 2758,
+        spiritCost: 10,
+        canExplore: true,
+        autoExploreRunning: false
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        exploreMultiplier: 50
+    }, 1_000_000)), {
+        action: 'startMeditation',
+        reason: 'explore-batch-low-spirit'
+    });
 });
 
 test('decideAfkNextAction returns to meditation when auto explore is running with low spirit', () => {
@@ -1131,7 +1148,7 @@ test('decideAfkNextAction resumes exploration after revive or interaction window
         postReviveResume: true,
         isDead: false,
         isMeditating: false,
-        spirit: 100,
+        spirit: 260,
         spiritCost: 4,
         canExplore: true
     }, config, 1_000_000)), {
@@ -1155,12 +1172,24 @@ test('decideAfkNextAction resumes exploration after revive or interaction window
         postInteractionResume: true,
         isDead: false,
         isMeditating: false,
-        spirit: 100,
+        spirit: 260,
         spiritCost: 4,
         canExplore: true
     }, config, 1_000_000)), {
         action: 'startAutoExplore',
         reason: 'post-interaction-ready'
+    });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        postInteractionResume: true,
+        isDead: false,
+        isMeditating: false,
+        spirit: 100,
+        spiritCost: 4,
+        canExplore: true
+    }, config, 1_000_000)), {
+        action: 'startMeditation',
+        reason: 'post-interaction-low-spirit'
     });
 
     assert.deepEqual(toPlain(hooks.decideAfkNextAction({
@@ -2545,7 +2574,7 @@ test('buildAfkStatusReport explains post-interaction resume windows', () => {
     const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
         postInteractionResume: true,
         postInteractionResumeRemainingSeconds: 45,
-        spirit: 160,
+        spirit: 260,
         maxSpirit: 2758,
         spiritCost: 4,
         canExplore: true,
@@ -2642,6 +2671,41 @@ test('buildAfkStatusReport explains low-spirit meditation returns', () => {
 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('回冥想: 自动探索神识不足 · 当前3/2758 · 单次4 · 阈值20'), true);
+
+    const batchSummary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 120,
+        maxSpirit: 2758,
+        spiritCost: 10,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 50,
+        stallTimeoutSeconds: 90
+    }, {
+        action: 'startMeditation',
+        reason: 'explore-batch-low-spirit'
+    }, {
+        capturedAt: '2026-06-08T08:50:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    assert.deepEqual(batchSummary.phase, {
+        schema: 'lingverse-afk-phase-status/v1',
+        phase: 'needs-meditation',
+        label: '待冥想',
+        text: '待冥想 · 神识不足当前倍率',
+        reason: 'explore-batch-low-spirit',
+        elapsedSeconds: null,
+        remainingSeconds: null,
+        targetSeconds: null
+    });
+
+    const batchReport = hooks.buildAfkStatusReport(batchSummary);
+    assert.equal(batchReport.lines.includes('回冥想: 神识不足当前倍率 · 当前120/2758 · 单次10 · 50倍需500 · 阈值20'), true);
 });
 
 test('buildAfkStatusReport suggests guardian fixes after hire failures', () => {
@@ -3706,7 +3770,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.81.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.82.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -3867,7 +3931,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.81.0',
+        scriptVersion: '2.82.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

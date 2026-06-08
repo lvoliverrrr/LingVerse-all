@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.69.0
+// @version      2.70.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.69.0';
+    const SCRIPT_VERSION = '2.70.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -3610,6 +3610,24 @@
         return parts.join(' · ');
     }
 
+    function buildAfkHardStopStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const blockers = source.blockers && typeof source.blockers === 'object' ? source.blockers : {};
+        if (blockers.immortalPrisonActive) {
+            return '硬停: 混天典狱 · 脚本暂停自动探索';
+        }
+        return '';
+    }
+
+    function buildAfkHardStopAdviceStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const blockers = source.blockers && typeof source.blockers === 'object' ? source.blockers : {};
+        if (blockers.immortalPrisonActive) {
+            return '硬停建议: 混天典狱需要手动处理 · 脚本不会自动跳过、自动点击或消耗资源';
+        }
+        return '';
+    }
+
     function extractAdventureStrategyImportText(source) {
         let parsed = source;
         if (typeof source === 'string') {
@@ -3822,6 +3840,14 @@
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
             .filter(Boolean)
             .forEach(item => lines.push(`! ${item}`));
+        const hardStopStatusLine = buildAfkHardStopStatusLine(summary);
+        if (hardStopStatusLine) {
+            lines.push(hardStopStatusLine);
+        }
+        const hardStopAdviceStatusLine = buildAfkHardStopAdviceStatusLine(summary);
+        if (hardStopAdviceStatusLine) {
+            lines.push(hardStopAdviceStatusLine);
+        }
         const meditationStatusLine = buildAfkMeditationStatusLine(automation.meditation);
         if (meditationStatusLine) {
             lines.push(meditationStatusLine);
@@ -4150,6 +4176,8 @@
         buildAfkAdventureStatusLine,
         buildAfkResumeStatusLine,
         buildAfkMeditationReturnStatusLine,
+        buildAfkHardStopStatusLine,
+        buildAfkHardStopAdviceStatusLine,
         buildAfkGuardianAdviceStatusLine,
         buildAfkTalismanStatusLine,
         buildAfkTalismanAdviceStatusLine,

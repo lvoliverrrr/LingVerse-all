@@ -1866,7 +1866,7 @@ test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.69.0',
+        scriptVersion: '2.70.0',
         page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
         decision: { action: 'startAutoExplore', reason: 'spirit-ready' },
         player: { spirit: 2600, maxSpirit: 2758, spiritCost: 4, canExplore: true },
@@ -3295,7 +3295,38 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.69.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.70.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+});
+
+test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 300,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        immortalPrisonActive: true
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20
+    }, {
+        action: 'wait',
+        reason: 'immortal-prison'
+    }, {
+        capturedAt: '2026-06-08T15:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    assert.equal(summary.blockers.immortalPrisonActive, true);
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('硬停: 混天典狱 · 脚本暂停自动探索'), true);
+    assert.equal(report.lines.includes('硬停建议: 混天典狱需要手动处理 · 脚本不会自动跳过、自动点击或消耗资源'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -3425,7 +3456,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.69.0',
+        scriptVersion: '2.70.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

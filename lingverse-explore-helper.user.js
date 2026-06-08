@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.83.0
+// @version      2.84.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.83.0';
+    const SCRIPT_VERSION = '2.84.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -4902,7 +4902,7 @@
                         </label>
                         <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
                             <input type="checkbox" id="am-merchant-auto-only" ${CONFIG.merchant.onlyAutoExplore?'checked':''} style="cursor:pointer;">
-                            <span style="font-size:13px;color:${text};">仅自动探索挂起时处理</span>
+                            <span style="font-size:13px;color:${text};">仅自动探索/挂机循环时处理</span>
                         </label>
                         <div>
                             <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">购买延迟 (ms)</div>

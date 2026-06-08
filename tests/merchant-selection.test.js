@@ -110,6 +110,13 @@ test('merchant automation context includes the AFK loop without manual shopping'
     assert.equal(hooks.isMerchantAutomationContext({ afkLoopEnabled: true }), true);
 });
 
+test('merchant auto-only panel label mentions AFK loop context', () => {
+    const source = fs.readFileSync(scriptPath, 'utf8');
+
+    assert.equal(source.includes('仅自动探索/挂机循环时处理'), true);
+    assert.equal(source.includes('仅自动探索挂起时处理'), false);
+});
+
 test('resolveApiObject falls back to page eval for non-window api globals', () => {
     const fakeApi = { get() {}, post() {} };
     const sandbox = loadUserScript({
@@ -3782,7 +3789,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.83.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.84.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -3943,7 +3950,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.83.0',
+        scriptVersion: '2.84.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

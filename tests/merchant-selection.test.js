@@ -1124,6 +1124,20 @@ test('decideAfkNextAction resumes exploration after revive or interaction window
         action: 'startAutoExplore',
         reason: 'post-meditation-ready'
     });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        postMeditationResume: true,
+        isDead: false,
+        isMeditating: false,
+        spirit: 3,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: false,
+        exploreDisabledReason: ''
+    }, config, 1_000_000)), {
+        action: 'startAutoExplore',
+        reason: 'post-meditation-ready'
+    });
 });
 
 test('classifyExploreInterruption can opt into auto-declining player encounters', () => {
@@ -3629,7 +3643,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.78.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.79.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -3790,7 +3804,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.78.0',
+        scriptVersion: '2.79.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

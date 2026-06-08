@@ -1866,7 +1866,7 @@ test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.64.0',
+        scriptVersion: '2.65.0',
         page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
         decision: { action: 'startAutoExplore', reason: 'spirit-ready' },
         player: { spirit: 2600, maxSpirit: 2758, spiritCost: 4, canExplore: true },
@@ -2930,6 +2930,81 @@ test('buildAfkWaitingDiagnosis explains repeated encounter stalls from automatio
     assert.equal(report.lines.includes('诊断归因: 符箓面板未关闭 · close failed token=<redacted>'), true);
 });
 
+test('buildAfkWaitingDiagnosis explains guardian already-attempted stalls without retrying hire', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const history = Array.from({ length: 5 }, (_, index) => ({
+        at: `2026-06-08T12:${String(index * 2).padStart(2, '0')}:00.000Z`,
+        action: 'handleEncounter',
+        reason: 'encounter-auto-guardian-enabled',
+        spirit: 90,
+        maxSpirit: 2758,
+        isMeditating: false,
+        encounterActive: true
+    }));
+    const now = Date.parse('2026-06-08T12:10:00.000Z');
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 90,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        encounterActive: true,
+        encounterMonsterId: 'low_level_beast',
+        encounterMonsterStage: 1,
+        encounterMonsterLevel: 3
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        autoHireGuardian: true,
+        autoFight: false
+    }, {
+        action: 'handleEncounter',
+        reason: 'encounter-auto-guardian-enabled'
+    }, {
+        capturedAt: '2026-06-08T12:10:00.000Z',
+        now,
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decisionHistory: history,
+        guardianConfig: {
+            enabled: true,
+            mode: 'alone',
+            maxFee: 51,
+            minAtk: 0,
+            priority: ['normal', 'incarnation', 'body'],
+            threatLevel: 'danger'
+        },
+        guardianAttempt: {
+            shouldAttempt: false,
+            reason: 'guardian-already-attempted',
+            encounterKey: 'monster:low_level_beast:1:3',
+            guardian: {
+                enabled: true,
+                mode: 'alone',
+                maxFee: 51,
+                minAtk: 0,
+                priority: ['normal', 'incarnation', 'body'],
+                threatLevel: 'danger'
+            }
+        }
+    })));
+
+    assert.equal(summary.automation.waitDiagnosis.active, true);
+    assert.equal(summary.automation.waitDiagnosis.category, 'auto-action');
+    assert.equal(summary.automation.waitDiagnosis.suggestion, '自动护道已尝试但遭遇仍在，确认护道结算或手动处理当前遭遇，并复制摘要');
+    assert.equal(summary.automation.waitDiagnosis.likelyCause, '本遭遇已尝试自动护道，避免重复扣费');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('诊断: 已开启遭遇前自动护道已持续10分钟（连续5次），建议复制摘要定位'), true);
+    assert.equal(report.lines.includes('诊断归因: 本遭遇已尝试自动护道，避免重复扣费'), true);
+});
+
 test('buildAfkWaitingDiagnosis explains repeated post-interaction resume failures', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -3023,7 +3098,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.64.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.65.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -3153,7 +3228,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.64.0',
+        scriptVersion: '2.65.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

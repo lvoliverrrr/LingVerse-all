@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.64.0
+// @version      2.65.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.64.0';
+    const SCRIPT_VERSION = '2.65.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -620,6 +620,12 @@
             if (guardian.reason === 'guardian-config-disabled') {
                 return '游戏护道设置关闭';
             }
+            if (guardian.reason === 'guardian-already-attempted') {
+                return '本遭遇已尝试自动护道，避免重复扣费';
+            }
+            if (guardian.reason === 'hire-triggered') {
+                return '自动护道已触发，等待遭遇结算';
+            }
 
             const fight = normalizeEncounterFightAttempt(source.fightAttempt);
             if (fight.reason === 'fight-failed') {
@@ -714,6 +720,10 @@
             'post-revive-ready': {
                 category: 'auto-action',
                 suggestion: '复活恢复窗口重复尝试启动探索失败，检查自动探索入口/倍率控件，必要时手动点一次自动探索并复制摘要'
+            },
+            'encounter-auto-guardian-enabled': {
+                category: 'auto-action',
+                suggestion: '自动护道已尝试但遭遇仍在，确认护道结算或手动处理当前遭遇，并复制摘要'
             }
         };
         if (labels[reason]) return labels[reason];

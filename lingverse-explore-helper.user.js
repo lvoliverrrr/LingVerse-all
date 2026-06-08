@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.80.0
+// @version      2.81.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.80.0';
+    const SCRIPT_VERSION = '2.81.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -769,6 +769,9 @@
             if (guardian.reason === 'guardian-already-attempted') {
                 return '本遭遇已尝试自动护道，避免重复扣费';
             }
+            if (guardian.reason === 'guardian-in-progress') {
+                return '游戏自动护道正在重试/处理中，等待结算';
+            }
             if (guardian.reason === 'hire-triggered') {
                 return '自动护道已触发，等待遭遇结算';
             }
@@ -999,6 +1002,7 @@
             'guardian-config-disabled': '游戏护道关闭',
             'no-encounter': '等待遭遇',
             'guardian-already-attempted': '本次遭遇已尝试',
+            'guardian-in-progress': '游戏护道处理中',
             'guardian-ready': '遭遇可尝试护道',
             'hire-triggered': '已触发自动护道',
             'hire-failed': '自动护道失败'
@@ -1042,6 +1046,9 @@
         }
         if (reason === 'guardian-already-attempted') {
             return '护道建议: 本次遭遇已尝试护道 · 不会重复扣费，仍停住请手动处理或复制摘要';
+        }
+        if (reason === 'guardian-in-progress') {
+            return '护道建议: 游戏自动护道正在重试/处理中 · 等待护道结算，长时间不动再手动接管或复制摘要';
         }
         if (reason === 'guardian-ready' || reason === 'hire-triggered') {
             return `护道建议: 将按当前游戏护道设置处理 · ${formatGuardianMode(guardian.mode)} · 最高${guardian.maxFee || '不限'} · ${formatGuardianPriority(guardian.priority)}`;
@@ -2353,6 +2360,12 @@
         };
     }
 
+    function detectGuardianAutoHireInProgress(text) {
+        const source = String(text || '');
+        if (!source) return false;
+        return /自动雇护道.*?(重试|手动接管|等待|处理中|已触发)|护道.*?(重试中|处理中|等待结算)/.test(source);
+    }
+
     function resolveEncounterGuardianAttempt(lastEncounterKey, snapshot, afkConfig, guardianConfig, options) {
         const encounterKey = buildEncounterKey(snapshot);
         const cfg = normalizeAfkLoopConfig(afkConfig || {});
@@ -2366,6 +2379,9 @@
         }
         if (!guardian.enabled) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'guardian-config-disabled' };
+        }
+        if (snapshot && snapshot.guardianAutoHireInProgress) {
+            return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'guardian-in-progress' };
         }
         if (encounterKey === String(lastEncounterKey || '')) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'guardian-already-attempted' };
@@ -4327,6 +4343,7 @@
         getResumeWindowMs,
         buildAfkPhaseStatus,
         isExploreStalledState,
+        detectGuardianAutoHireInProgress,
         decideAfkNextAction,
         formatAfkReason,
         formatAfkAction,
@@ -6259,6 +6276,7 @@
             );
             const adventureActive = !!(_win._companionAdventureActive || isElementVisibleForAutomation(adventureOverlay));
             const encounterText = encounterOverlayVisible ? encounterOverlay.innerText : '';
+            const guardianAutoHireInProgress = detectGuardianAutoHireInProgress(encounterText);
             const encounterKey = buildEncounterKey({
                 encounterActive,
                 combatActive,
@@ -6313,6 +6331,7 @@
                 encounterMonsterId: _win._currentEncounterMonsterId,
                 encounterMonsterStage: _win._currentEncounterMonsterStage,
                 encounterMonsterLevel: _win._currentEncounterMonsterLevel,
+                guardianAutoHireInProgress,
                 autoExploreRunning,
                 autoExplorePending,
                 postReviveResume: this.postReviveResumeUntil > now,

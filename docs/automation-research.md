@@ -44,6 +44,7 @@
 - v2.43.0 只读库存：`/api/game/inventory` 读到 184 项；当前相关资源包含 5 类战斗符箓 `ancient/ghost/thunder/fire/shield`，以及 `pill_nirvana_*` 九转还魂丹；没有读到 `bp_pill_rebirth_*` 涅槃重生丹。因此富裕模式应报告“用符 5/5类，涅槃丹无史诗+”，并继续避免把回血丹误当作五行通灵丹。
 - v2.44.0 只读护道配置：真实页仍显示更新提示，`window.LingVerseAutoMapVersion=null` 说明需要刷新/重载扩展；`getAutoHireConfig()` 返回游戏护道已开启，模式 `alone`，最高雇佣费 `51`，优先级 `normal,incarnation,body`。本次只读观察未点击探索、护道、战斗、复活、用符或用丹。
 - v2.45.0 只读环境状态：真实页仍显示“灵界已更新新版本，请点此刷新 获取最新内容”，helper hook 存在但 `window.LingVerseAutoMapVersion=null`，说明测试前需要刷新页面或重载扩展，否则测试反馈会混入旧页面状态。
+- v2.48.0 只读低神识状态：真实页仍显示游戏更新提示，`window.LingVerseAutoMapVersion=null`，`_lastPlayerData` 为神识 `3/2758`、单次探索消耗 `4`、`canExplore=true`、未冥想、未死亡，自动探索未运行且未挂起；本次只读观察未点击探索、冥想、护道、战斗、复活、用符或用丹。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -468,6 +469,13 @@
 - `buildAfkStatusReport` 新增 `恢复:` 行，直接复用 phase 文案。
 - 目的：富裕 50 倍遇怪链路中，自动用符/迎战/复活/奇遇处理后经常需要等待页面结算；测试者复制状态时可直接判断是在恢复窗口内等待，还是已经脱离窗口需要继续排障。
 
+`lingverse-explore-helper.user.js` v2.48.0 新增：
+
+- `buildAfkMeditationReturnStatusLine(summary)` 从脱敏摘要只读生成 `回冥想:` 行。
+- `buildAfkStatusReport` 在下一步为 `startMeditation` 且原因属于低神识/神识不足/探索卡住时输出 `回冥想: 原因 · 当前x/y · 单次z · 阈值n`。
+- 覆盖原因包括 `auto-explore-low-spirit`、`explore-disabled-no-spirit`、`spirit-below-threshold`、`post-revive-low-spirit`、`post-interaction-low-spirit` 和 `explore-stalled`。
+- 目的：真实挂机测试里最常见的“自动探索停住”可先被区分为正常回冥想闭环，不需要测试者翻 JSON 或日志。
+
 默认配置：
 
 - `enabled: false`
@@ -535,7 +543,7 @@
 
 - 高阶“富裕模式”需要继续真实长跑验证涅槃重生丹使用后的 buff 状态和恢复 50 倍探索稳定性。
 - 5 类战斗符箓的最佳收益顺序、每类用量和不同账号库存下的推荐 preset。
-- 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的真实长跑稳定性；v2.47.0 已能在状态报告中显示恢复窗口剩余秒数和下一步倾向。
+- 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的真实长跑稳定性；v2.47.0 已能在状态报告中显示恢复窗口剩余秒数和下一步倾向，v2.48.0 可在神识不足时说明回冥想原因。
 - 低境界 1 倍护道预设的真实长跑稳定性，尤其是状态报告“护道:”行里的失败消息，以及是否需要游戏内自动重试。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本；v2.46.0 可读状态已能回传 `adventureId`、步骤和选项文本，后续仍需记录最终奖励并沉淀成可分享策略。

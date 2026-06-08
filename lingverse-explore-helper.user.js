@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.47.0
+// @version      2.48.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.47.0';
+    const SCRIPT_VERSION = '2.48.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -2253,6 +2253,40 @@
         return `恢复: ${sanitizeDebugText(phase.text || phase.label, DEBUG_SUMMARY_TEXT_LIMIT)}`;
     }
 
+    function getAfkMeditationReturnLabel(reason) {
+        const labels = {
+            'auto-explore-low-spirit': '自动探索神识不足',
+            'explore-disabled-no-spirit': '页面提示神识不足',
+            'spirit-below-threshold': '神识低于阈值',
+            'post-revive-low-spirit': '复活后神识不足',
+            'post-interaction-low-spirit': '事件/战斗后神识不足',
+            'explore-stalled': '自动探索疑似卡住'
+        };
+        return labels[reason] || '';
+    }
+
+    function buildAfkMeditationReturnStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const decision = source.decision && typeof source.decision === 'object' ? source.decision : {};
+        if (decision.action !== 'startMeditation') return '';
+        const reason = String(decision.reason || '');
+        const reasonLabel = getAfkMeditationReturnLabel(reason);
+        if (!reasonLabel) return '';
+        const player = source.player && typeof source.player === 'object' ? source.player : {};
+        const config = source.config && typeof source.config === 'object' ? source.config : {};
+        const spirit = formatAfkReportNumber(player.spirit);
+        const maxSpirit = formatAfkReportNumber(player.maxSpirit);
+        const spiritCost = numberOrNull(player.spiritCost);
+        const minSpirit = formatAfkReportNumber(config.minSpirit);
+        const parts = [
+            `回冥想: ${reasonLabel}`,
+            `当前${spirit}/${maxSpirit}`
+        ];
+        if (spiritCost !== null) parts.push(`单次${spiritCost}`);
+        parts.push(`阈值${minSpirit}`);
+        return parts.join(' · ');
+    }
+
     function extractAdventureStrategyImportText(source) {
         let parsed = source;
         if (typeof source === 'string') {
@@ -2460,6 +2494,10 @@
         if (resumeStatusLine) {
             lines.push(resumeStatusLine);
         }
+        const meditationReturnStatusLine = buildAfkMeditationReturnStatusLine(summary);
+        if (meditationReturnStatusLine) {
+            lines.push(meditationReturnStatusLine);
+        }
         if (automation.waitDiagnosis && automation.waitDiagnosis.active && automation.waitDiagnosis.message) {
             lines.push(`诊断: ${sanitizeDebugText(automation.waitDiagnosis.message, DEBUG_SUMMARY_TEXT_LIMIT)}`);
         }
@@ -2654,6 +2692,7 @@
         buildAfkEnvironmentStatusLine,
         buildAfkAdventureStatusLine,
         buildAfkResumeStatusLine,
+        buildAfkMeditationReturnStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.63.0
+// @version      2.64.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.63.0';
+    const SCRIPT_VERSION = '2.64.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -634,7 +634,13 @@
 
         const exploreStart = normalizeExploreStartAttempt(source.exploreStartAttempt);
         if ((actionText === 'startAutoExplore' || reasonText.indexOf('explore') >= 0) && exploreStart.reason === 'start-failed') {
-            return joinAfkLikelyCause('自动探索启动失败', exploreStart.failureMessage);
+            let label = '自动探索启动失败';
+            if (reasonText === 'post-interaction-ready') {
+                label = '事件恢复后未能重启探索 · 自动探索启动失败';
+            } else if (reasonText === 'post-revive-ready') {
+                label = '复活恢复后未能重启探索 · 自动探索启动失败';
+            }
+            return joinAfkLikelyCause(label, exploreStart.failureMessage);
         }
 
         const meditation = normalizeMeditationAttempt(source.meditationAttempt);
@@ -700,6 +706,14 @@
             'explore-disabled': {
                 category: 'manual-action',
                 suggestion: '当前区域不可探索，换区域或查看页面提示后再启动挂机'
+            },
+            'post-interaction-ready': {
+                category: 'auto-action',
+                suggestion: '恢复窗口重复尝试启动探索失败，检查自动探索入口/倍率控件，必要时手动点一次自动探索并复制摘要'
+            },
+            'post-revive-ready': {
+                category: 'auto-action',
+                suggestion: '复活恢复窗口重复尝试启动探索失败，检查自动探索入口/倍率控件，必要时手动点一次自动探索并复制摘要'
             }
         };
         if (labels[reason]) return labels[reason];

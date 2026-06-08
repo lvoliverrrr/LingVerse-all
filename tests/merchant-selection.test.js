@@ -1866,7 +1866,7 @@ test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.63.0',
+        scriptVersion: '2.64.0',
         page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
         decision: { action: 'startAutoExplore', reason: 'spirit-ready' },
         player: { spirit: 2600, maxSpirit: 2758, spiritCost: 4, canExplore: true },
@@ -2930,6 +2930,65 @@ test('buildAfkWaitingDiagnosis explains repeated encounter stalls from automatio
     assert.equal(report.lines.includes('诊断归因: 符箓面板未关闭 · close failed token=<redacted>'), true);
 });
 
+test('buildAfkWaitingDiagnosis explains repeated post-interaction resume failures', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const history = Array.from({ length: 5 }, (_, index) => ({
+        at: `2026-06-08T11:${String(index * 2).padStart(2, '0')}:00.000Z`,
+        action: 'startAutoExplore',
+        reason: 'post-interaction-ready',
+        spirit: 180,
+        maxSpirit: 2758,
+        isMeditating: false,
+        postInteractionResume: true
+    }));
+    const now = Date.parse('2026-06-08T11:10:00.000Z');
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        postInteractionResume: true,
+        postInteractionResumeRemainingSeconds: 0,
+        spirit: 180,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 50,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        resumeWindowSeconds: 60
+    }, {
+        action: 'startAutoExplore',
+        reason: 'post-interaction-ready'
+    }, {
+        capturedAt: '2026-06-08T11:10:00.000Z',
+        now,
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decisionHistory: history,
+        exploreStartAttempt: {
+            shouldAttempt: true,
+            reason: 'start-failed',
+            multiplier: 50,
+            source: 'toggle',
+            failureMessage: 'resume toggle failed token=resume-secret'
+        }
+    })));
+
+    assert.equal(summary.automation.waitDiagnosis.active, true);
+    assert.equal(summary.automation.waitDiagnosis.category, 'auto-action');
+    assert.equal(summary.automation.waitDiagnosis.suggestion, '恢复窗口重复尝试启动探索失败，检查自动探索入口/倍率控件，必要时手动点一次自动探索并复制摘要');
+    assert.equal(summary.automation.waitDiagnosis.likelyCause, '事件恢复后未能重启探索 · 自动探索启动失败 · resume toggle failed token=<redacted>');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('诊断: 事件/战斗后神识可探索已持续10分钟（连续5次），建议复制摘要定位'), true);
+    assert.equal(report.lines.includes('诊断归因: 事件恢复后未能重启探索 · 自动探索启动失败 · resume toggle failed token=<redacted>'), true);
+});
+
 test('buildAfkStatusReport includes game update blockers from snapshots', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2964,7 +3023,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.63.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.64.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -3094,7 +3153,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.63.0',
+        scriptVersion: '2.64.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

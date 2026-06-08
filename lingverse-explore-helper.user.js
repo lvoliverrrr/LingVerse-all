@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.59.0
+// @version      2.60.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.59.0';
+    const SCRIPT_VERSION = '2.60.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -866,6 +866,8 @@
             disabled: '自动迎战关闭',
             'no-encounter': '等待遭遇',
             'not-attempted': '尚未迎战',
+            'fight-ready': '准备自动迎战',
+            'fight-already-triggered': '本次遭遇已触发迎战',
             'fight-triggered': '已触发自动迎战',
             'fight-failed': '自动迎战失败'
         };
@@ -906,6 +908,12 @@
         }
         if (reason === 'not-attempted' && normalized.shouldAttempt) {
             return '迎战建议: 尚未迎战 · 等待用符/护道处理结束，若持续不动请复制摘要';
+        }
+        if (reason === 'fight-ready') {
+            return '迎战建议: 已满足自动迎战条件 · 将触发一次迎战并记录本次遭遇，避免重复点击';
+        }
+        if (reason === 'fight-already-triggered') {
+            return '迎战建议: 本次遭遇已触发过迎战 · 不会重复点击，等待战斗结算或复制摘要';
         }
         if (reason === 'fight-triggered') {
             return '迎战建议: 已触发自动迎战 · 等待战斗结算或恢复窗口继续探索';
@@ -2027,6 +2035,27 @@
             encounterKey,
             markEncounterKey: attemptCompleted ? encounterKey : '',
             reason: 'guardian-ready'
+        };
+    }
+
+    function resolveEncounterFightAttempt(lastEncounterKey, snapshot, afkConfig, options) {
+        const encounterKey = buildEncounterKey(snapshot);
+        const cfg = normalizeAfkLoopConfig(afkConfig || {});
+        const attemptTriggered = !!(options && options.attemptTriggered);
+        if (!encounterKey) {
+            return { shouldAttempt: false, encounterKey: '', markEncounterKey: '', reason: 'no-encounter' };
+        }
+        if (!cfg.autoFight) {
+            return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'disabled' };
+        }
+        if (encounterKey === String(lastEncounterKey || '')) {
+            return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'fight-already-triggered' };
+        }
+        return {
+            shouldAttempt: true,
+            encounterKey,
+            markEncounterKey: attemptTriggered ? encounterKey : '',
+            reason: 'fight-ready'
         };
     }
 
@@ -3677,6 +3706,7 @@
         buildEncounterKey,
         shouldUseCombatTalismansForEncounter,
         resolveCombatTalismanAttempt,
+        resolveEncounterFightAttempt,
         normalizeEncounterFightAttempt,
         normalizeReviveAttempt,
         normalizeMeditationAttempt,
@@ -5244,6 +5274,7 @@
         encounterBusy: false,
         lastTalismanEncounterKey: '',
         lastGuardianEncounterKey: '',
+        lastFightEncounterKey: '',
         lastTalismanAttempt: null,
         lastGuardianAttempt: null,
         lastFightAttempt: null,
@@ -5620,6 +5651,7 @@
             if (!snapshot || (!snapshot.encounterActive && !snapshot.combatActive)) {
                 this.lastTalismanEncounterKey = '';
                 this.lastGuardianEncounterKey = '';
+                this.lastFightEncounterKey = '';
             }
             if (decision.action === 'wait' || decision.action === 'idle') {
                 if (key !== this.lastDecisionKey && decision.reason !== 'auto-explore-running') {
@@ -6213,20 +6245,34 @@
         },
 
         async fightEncounter(cfg, snapshot) {
-            const encounterKey = buildEncounterKey(snapshot || {});
+            const fightUse = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop);
+            const encounterKey = fightUse.encounterKey;
+            if (!fightUse.shouldAttempt) {
+                this.lastFightAttempt = normalizeEncounterFightAttempt({
+                    shouldAttempt: false,
+                    reason: fightUse.reason,
+                    encounterKey
+                });
+                if (fightUse.reason === 'fight-already-triggered') {
+                    Logger.info('本次遭遇已触发自动迎战，等待战斗结算');
+                }
+                return;
+            }
             this.lastFightAttempt = normalizeEncounterFightAttempt({
                 shouldAttempt: true,
-                reason: 'not-attempted',
+                reason: fightUse.reason,
                 encounterKey
             });
             try {
                 const fightBtn = $('#encounterFightBtn');
                 if (fightBtn && !fightBtn.disabled) {
                     fightBtn.click();
+                    const completedAttempt = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop, { attemptTriggered: true });
+                    if (completedAttempt.markEncounterKey) this.lastFightEncounterKey = completedAttempt.markEncounterKey;
                     this.lastFightAttempt = normalizeEncounterFightAttempt({
                         shouldAttempt: true,
                         reason: 'fight-triggered',
-                        encounterKey,
+                        encounterKey: completedAttempt.encounterKey,
                         source: 'button'
                     });
                     this.schedulePostInteractionResume(cfg);
@@ -6234,10 +6280,12 @@
                 }
                 if (typeof _win.handleCombatChoice === 'function') {
                     await _win.handleCombatChoice('fight');
+                    const completedAttempt = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop, { attemptTriggered: true });
+                    if (completedAttempt.markEncounterKey) this.lastFightEncounterKey = completedAttempt.markEncounterKey;
                     this.lastFightAttempt = normalizeEncounterFightAttempt({
                         shouldAttempt: true,
                         reason: 'fight-triggered',
-                        encounterKey,
+                        encounterKey: completedAttempt.encounterKey,
                         source: 'page-function'
                     });
                     this.schedulePostInteractionResume(cfg);
@@ -6255,10 +6303,12 @@
                     Logger.warn(`自动迎战失败: ${res.message || '未知错误'}`);
                     return;
                 }
+                const completedAttempt = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop, { attemptTriggered: true });
+                if (completedAttempt.markEncounterKey) this.lastFightEncounterKey = completedAttempt.markEncounterKey;
                 this.lastFightAttempt = normalizeEncounterFightAttempt({
                     shouldAttempt: true,
                     reason: 'fight-triggered',
-                    encounterKey,
+                    encounterKey: completedAttempt.encounterKey,
                     source: 'api'
                 });
                 this.schedulePostInteractionResume(cfg);

@@ -544,6 +544,64 @@ test('resolveEncounterGuardianAttempt marks completed guardian attempts per enco
     });
 });
 
+test('resolveEncounterFightAttempt skips repeated auto fight for one encounter', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const snapshot = {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7
+    };
+
+    assert.equal(typeof hooks.resolveEncounterFightAttempt, 'function');
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterFightAttempt('', snapshot, {
+        autoFight: false
+    })), {
+        shouldAttempt: false,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: '',
+        reason: 'disabled'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterFightAttempt('', snapshot, {
+        autoFight: true
+    })), {
+        shouldAttempt: true,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: '',
+        reason: 'fight-ready'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterFightAttempt('', snapshot, {
+        autoFight: true
+    }, { attemptTriggered: true })), {
+        shouldAttempt: true,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: 'monster:port_bandit:3:7',
+        reason: 'fight-ready'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveEncounterFightAttempt('monster:port_bandit:3:7', snapshot, {
+        autoFight: true
+    })), {
+        shouldAttempt: false,
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: '',
+        reason: 'fight-already-triggered'
+    });
+
+    assert.equal(toPlain(hooks.resolveEncounterFightAttempt('monster:port_bandit:3:7', {
+        encounterActive: true,
+        encounterMonsterId: 'mountain_beast',
+        encounterMonsterStage: 4,
+        encounterMonsterLevel: 2
+    }, {
+        autoFight: true
+    })).reason, 'fight-ready');
+});
+
 test('getCurrentGuardianConfig prefers page auto-hire settings', () => {
     const sandbox = loadUserScript({
         getAutoHireConfig() {
@@ -1750,7 +1808,7 @@ test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.59.0',
+        scriptVersion: '2.60.0',
         page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
         decision: { action: 'startAutoExplore', reason: 'spirit-ready' },
         player: { spirit: 2600, maxSpirit: 2758, spiritCost: 4, canExplore: true },
@@ -2815,7 +2873,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.59.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.60.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2945,7 +3003,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.59.0',
+        scriptVersion: '2.60.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

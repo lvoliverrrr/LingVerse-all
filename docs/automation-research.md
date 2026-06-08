@@ -72,6 +72,7 @@
 - v2.83.0 研究结论：真实页旧 helper 日志反复出现云游商人自动购买，说明商人仍是长跑高频中断点。商人配置里的“只在自动探索时处理”应保护手动购物，但 AFK 循环本身也是自动化上下文；因此 `CONFIG.afkLoop.enabled=true` 时允许 MerchantAutoBuyer 处理商人，避免原生 `_autoResumeExplorePending` 缺失导致挂机停在商人。该规则只扩大已启动挂机时的商人入口，不改变未挂机手动购物保护。
 - v2.84.0 研究结论：v2.83.0 已把 AFK 循环纳入自动商人上下文，但面板文案仍写“仅自动探索挂起时处理”，容易让测试者误以为挂机循环不会触发商人处理。本版只把面板和 README 文案收敛为“仅自动探索/挂机循环时处理”，不改变商人购买、探索、护道、战斗、复活、用符或用丹调用。
 - v2.85.0 研究结论：真实页再次出现可见 `#meditationBar` 与 `_lastPlayerData.isMeditating=false` 不同步，且缓存神识很低但冥想条已经显示恢复神识。本版在复制状态中新增 `冥想同步:` 行，明确说明玩家缓存未标记冥想、脚本已按可见冥想条估算；该变更只增强诊断，不新增收功、探索、商人、护道、战斗、复活、用符或用丹调用。
+- v2.86.0 研究结论：真实页冥想条在只读观察中可表现为一整行文本，例如 `冥想修炼中 (最长12小时) 25分50秒 ... 收功`。旧解析会因同一行包含“最长/预计/恢复”而丢失已冥想时长，影响 140 分钟到点收功。本版在多行解析失败时，从“冥想修炼中 (最长12小时)”后提取真实已冥想时长，避开最长 12 小时上限；该变更只读解析冥想条，不新增收功、探索、商人、护道、战斗、复活、用符或用丹调用。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -673,7 +674,7 @@
 
 `lingverse-explore-helper.user.js` v2.73.0 新增：
 
-- `parseMeditationBarState(text)` 解析真实页面 `#meditationBar` 当前文本，识别“冥想修炼中”和类似 `1时30分` 的已冥想时长。
+- `parseMeditationBarState(text)` 解析真实页面 `#meditationBar` 当前文本，识别“冥想修炼中”和类似 `1时30分` 的已冥想时长；若冥想条被压成一行，会避开“最长12小时”并从正文中提取真实已冥想时长。
 - `readMeditationBarState()` 只读当前 `#meditationBar`，用于 `AfkLoopManager.buildSnapshot` 在冥想接口或 `_lastPlayerData` 缓存不同步时兜底设置 `isMeditating` 和 `meditationDurationSeconds`。
 - 该兜底只读取 DOM，不点击“收功”或调用冥想/探索接口；真正是否收功仍由 `decideAfkNextAction` 根据自定义 `meditationMinutes`、神识是否已满和现有 `stopMeditation` 执行链决定。
 - 自动测试覆盖当前冥想条文本和聊天历史“收功/修炼时长”误判防护。

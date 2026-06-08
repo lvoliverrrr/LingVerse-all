@@ -191,6 +191,12 @@ test('parseMeditationBarState reads visible meditation bar duration safely', () 
         recoveredSpirit: 914
     });
 
+    assert.deepEqual(toPlain(hooks.parseMeditationBarState('冥想修炼中 (最长12小时) 2时20分15秒 预计修为: 11,820 恢复: 8,944血 / 4,633灵 / 1,410识 收功')), {
+        isMeditating: true,
+        durationSeconds: 8415,
+        recoveredSpirit: 1410
+    });
+
     assert.deepEqual(toPlain(hooks.parseMeditationBarState('冥想修炼中 (最长12小时)\n0分\n收功')), {
         isMeditating: true,
         durationSeconds: 0,
@@ -3790,7 +3796,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.85.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.86.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -3951,7 +3957,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.85.0',
+        scriptVersion: '2.86.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

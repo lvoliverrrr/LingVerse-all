@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.85.0
+// @version      2.86.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.85.0';
+    const SCRIPT_VERSION = '2.86.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -524,6 +524,14 @@
         return hours * 3600 + minutes * 60 + seconds;
     }
 
+    function parseMeditationDurationFromBarText(source) {
+        const compact = String(source || '').replace(/\s+/g, ' ').trim();
+        if (!compact) return null;
+        const match = compact.match(/冥想修炼中\s*(?:\([^)]*\)|（[^）]*）)?\s*([^预计恢复收功]+)/);
+        if (!match) return null;
+        return parseMeditationDurationLine(match[1]);
+    }
+
     function parseMeditationRecoveredSpirit(text) {
         const source = String(text || '').replace(/,/g, '');
         const match = source.match(/恢复[:：][\s\S]*?\/\s*(\d+)\s*识/);
@@ -542,6 +550,9 @@
         for (const line of lines) {
             durationSeconds = parseMeditationDurationLine(line);
             if (durationSeconds !== null) break;
+        }
+        if (durationSeconds === null) {
+            durationSeconds = parseMeditationDurationFromBarText(source);
         }
         return {
             isMeditating: true,

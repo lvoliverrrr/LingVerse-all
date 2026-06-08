@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.48.0
+// @version      2.49.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.48.0';
+    const SCRIPT_VERSION = '2.49.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -757,6 +757,26 @@
         if (guardian.minAtk > 0) parts.push(`攻≥${guardian.minAtk}`);
         parts.push(formatGuardianPriority(guardian.priority));
         return `护道: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkGuardianAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const reason = String(attempt.reason || '');
+        if (!reason || reason === 'afk-guardian-disabled' || reason === 'no-encounter') return '';
+        const guardian = normalizeGuardianConfig(attempt.guardian || {});
+        if (reason === 'guardian-config-disabled') {
+            return '护道建议: 游戏护道设置关闭 · 先在游戏护道面板开启自动护道，再启动护道1倍';
+        }
+        if (reason === 'hire-failed') {
+            return `护道建议: 自动护道失败 · 检查灵石、最高费用${guardian.maxFee || '不限'}、最低攻击力${guardian.minAtk}，必要时调整游戏护道设置后手动处理当前遭遇`;
+        }
+        if (reason === 'guardian-already-attempted') {
+            return '护道建议: 本次遭遇已尝试护道 · 不会重复扣费，仍停住请手动处理或复制摘要';
+        }
+        if (reason === 'guardian-ready' || reason === 'hire-triggered') {
+            return `护道建议: 将按当前游戏护道设置处理 · ${formatGuardianMode(guardian.mode)} · 最高${guardian.maxFee || '不限'} · ${formatGuardianPriority(guardian.priority)}`;
+        }
+        return '';
     }
 
     function formatRarityThreshold(rarity) {
@@ -2490,6 +2510,10 @@
         if (guardianStatusLine) {
             lines.push(guardianStatusLine);
         }
+        const guardianAdviceStatusLine = buildAfkGuardianAdviceStatusLine(automation.guardian);
+        if (guardianAdviceStatusLine) {
+            lines.push(guardianAdviceStatusLine);
+        }
         const resumeStatusLine = buildAfkResumeStatusLine(summary);
         if (resumeStatusLine) {
             lines.push(resumeStatusLine);
@@ -2693,6 +2717,7 @@
         buildAfkAdventureStatusLine,
         buildAfkResumeStatusLine,
         buildAfkMeditationReturnStatusLine,
+        buildAfkGuardianAdviceStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset

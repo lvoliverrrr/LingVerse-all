@@ -2028,6 +2028,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
             '! 自动复活已到本轮上限',
             '护道: 自动护道失败 · 余额不足 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
+            '护道建议: 自动护道失败 · 检查灵石、最高费用51、最低攻击力0，必要时调整游戏护道设置后手动处理当前遭遇',
             '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
             '! 战斗符箓不足5类，会按现有3类用符',
             '! 未找到史诗+涅槃重生丹，会跳过用丹',
@@ -2048,6 +2049,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
             '! 自动复活已到本轮上限',
             '护道: 自动护道失败 · 余额不足 · 游戏护道开 · 独立作战 · 最高51 · normal>incarnation>body',
+            '护道建议: 自动护道失败 · 检查灵石、最高费用51、最低攻击力0，必要时调整游戏护道设置后手动处理当前遭遇',
             '预检: 资源预检: 用符 3/5类 · 涅槃丹 无史诗+',
             '! 战斗符箓不足5类，会按现有3类用符',
             '! 未找到史诗+涅槃重生丹，会跳过用丹',
@@ -2128,6 +2130,62 @@ test('buildAfkStatusReport explains low-spirit meditation returns', () => {
 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('回冥想: 自动探索神识不足 · 当前3/2758 · 单次4 · 阈值20'), true);
+});
+
+test('buildAfkStatusReport suggests guardian fixes after hire failures', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const report = hooks.buildAfkStatusReport({
+        schema: 'lingverse-afk-debug-summary/v1',
+        scriptVersion: '2.48.0',
+        capturedAt: '2026-06-08T09:20:00.000Z',
+        page: {
+            title: '灵界 LingVerse - 修仙世界',
+            url: 'https://ling.muge.info/game.html'
+        },
+        decision: {
+            action: 'handleEncounter',
+            reason: 'encounter-auto-guardian-enabled'
+        },
+        player: {
+            spirit: 120,
+            maxSpirit: 2758,
+            spiritCost: 4,
+            canExplore: true,
+            isDead: false,
+            isMeditating: false
+        },
+        blockers: {
+            encounterActive: true,
+            combatActive: false
+        },
+        automation: {
+            guardian: {
+                shouldAttempt: false,
+                reason: 'hire-failed',
+                failureMessage: '余额不足',
+                guardian: {
+                    enabled: true,
+                    maxFee: 51,
+                    minAtk: 0,
+                    mode: 'alone',
+                    priority: ['normal', 'incarnation', 'body'],
+                    threatLevel: 'danger'
+                }
+            },
+            talismans: { reason: 'disabled' },
+            fight: { reason: 'not-attempted' },
+            nirvanaPill: { reason: 'disabled' }
+        },
+        config: {
+            meditationMinutes: 140,
+            minSpirit: 20,
+            exploreMultiplier: 1
+        }
+    });
+
+    assert.equal(report.lines.includes('护道建议: 自动护道失败 · 检查灵石、最高费用51、最低攻击力0，必要时调整游戏护道设置后手动处理当前遭遇'), true);
 });
 
 test('buildAfkDebugSummary reports encounter fight attempts', () => {
@@ -2280,7 +2338,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.48.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.49.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2410,7 +2468,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.48.0',
+        scriptVersion: '2.49.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

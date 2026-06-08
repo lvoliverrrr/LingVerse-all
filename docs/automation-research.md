@@ -45,6 +45,7 @@
 - v2.44.0 只读护道配置：真实页仍显示更新提示，`window.LingVerseAutoMapVersion=null` 说明需要刷新/重载扩展；`getAutoHireConfig()` 返回游戏护道已开启，模式 `alone`，最高雇佣费 `51`，优先级 `normal,incarnation,body`。本次只读观察未点击探索、护道、战斗、复活、用符或用丹。
 - v2.45.0 只读环境状态：真实页仍显示“灵界已更新新版本，请点此刷新 获取最新内容”，helper hook 存在但 `window.LingVerseAutoMapVersion=null`，说明测试前需要刷新页面或重载扩展，否则测试反馈会混入旧页面状态。
 - v2.48.0 只读低神识状态：真实页仍显示游戏更新提示，`window.LingVerseAutoMapVersion=null`，`_lastPlayerData` 为神识 `3/2758`、单次探索消耗 `4`、`canExplore=true`、未冥想、未死亡，自动探索未运行且未挂起；本次只读观察未点击探索、冥想、护道、战斗、复活、用符或用丹。
+- v2.49.0 只读护道配置复核：真实页仍显示游戏更新提示，`getAutoHireConfig()` 返回游戏护道已开启、模式 `alone`、最高雇佣费 `51`、优先级 `normal,incarnation,body`，当前无遭遇/战斗；本次只读观察未点击探索、冥想、护道、战斗、复活、用符或用丹。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -476,6 +477,13 @@
 - 覆盖原因包括 `auto-explore-low-spirit`、`explore-disabled-no-spirit`、`spirit-below-threshold`、`post-revive-low-spirit`、`post-interaction-low-spirit` 和 `explore-stalled`。
 - 目的：真实挂机测试里最常见的“自动探索停住”可先被区分为正常回冥想闭环，不需要测试者翻 JSON 或日志。
 
+`lingverse-explore-helper.user.js` v2.49.0 新增：
+
+- `buildAfkGuardianAdviceStatusLine(attempt)` 从脱敏摘要只读生成 `护道建议:` 行。
+- `buildAfkStatusReport` 在 `automation.guardian` 表示游戏护道关闭、护道失败、本遭遇已尝试、可尝试/已触发时输出下一步建议。
+- 护道失败建议会带出最高费用和最低攻击力，方便测试者直接判断是否要调高费用、补灵石、降低最低攻击力或手动处理当前遭遇。
+- 目的：护道 1 倍预设卡在遭遇时，状态报告同时给“发生了什么”和“下一步怎么排障”，减少低境界测试者反复截图/翻日志。
+
 默认配置：
 
 - `enabled: false`
@@ -544,7 +552,7 @@
 - 高阶“富裕模式”需要继续真实长跑验证涅槃重生丹使用后的 buff 状态和恢复 50 倍探索稳定性。
 - 5 类战斗符箓的最佳收益顺序、每类用量和不同账号库存下的推荐 preset。
 - 50 倍探索遇怪后，符箓使用、关闭符箓面板、迎战、复活、恢复 50 倍循环的真实长跑稳定性；v2.47.0 已能在状态报告中显示恢复窗口剩余秒数和下一步倾向，v2.48.0 可在神识不足时说明回冥想原因。
-- 低境界 1 倍护道预设的真实长跑稳定性，尤其是状态报告“护道:”行里的失败消息，以及是否需要游戏内自动重试。
+- 低境界 1 倍护道预设的真实长跑稳定性，尤其是状态报告“护道:”和“护道建议:”行里的失败消息、费用/最低攻击力建议，以及是否需要游戏内自动重试。
 - 哪些奇遇/事件需要自动接受、拒绝或等待用户确认。
 - 继续收集真实奇遇链样本；v2.46.0 可读状态已能回传 `adventureId`、步骤和选项文本，后续仍需记录最终奖励并沉淀成可分享策略。
 - 为摘要增加导入式问题回放视图。

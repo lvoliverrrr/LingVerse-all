@@ -61,6 +61,7 @@
 - v2.72.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载 helper `2.58.0`，`_autoMapInited=true`，无 `LingVerseAutoMapInitializedVersion`，页面尚无扩展/注入版本 dataset，神识 `3/2756`，未冥想、未死亡，无游戏更新提示、无商人/遭遇/战斗/奇遇/陌生道友/混天典狱；测试 `2.72.0` 前仍需重载本地扩展并刷新页面。本次只读观察未点击探索、冥想、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - v2.73.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载旧 helper `2.58.0`，`_autoMapInited=true`，页面尚无扩展/注入版本 dataset，神识 `3/2756`、单次消耗 `4`、倍率按钮 `×5`；页面可见 `#meditationBar` “冥想修炼中 (最长12小时) / 1时30分 / 收功”，但 `_lastPlayerData.isMeditating=false`。本次只读观察未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - v2.74.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载旧 helper `2.58.0`，页面可见 `#meditationBar` “冥想修炼中 (最长12小时) / 1时48分 / 收功”，但 `_lastPlayerData.isMeditating=false`；当前神识 `3/2756`、单次消耗 `4`、`canExplore=true`、倍率按钮 `×5`，无商人/遭遇/战斗/奇遇 blocker。本次只读观察未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
+- v2.75.0 只读页面复核：真实 Edge 标签 `292345702` 仍加载旧 helper `2.58.0`，页面可见 `#meditationBar` “冥想修炼中 (最长12小时) / 2时2分 / 恢复: 7826血 / 4054灵 / 1234识 / 收功”，但 `_lastPlayerData.isMeditating=false` 且缓存神识仍为 `3/2756`。本次只读观察未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇选项或陌生道友按钮，也未尝试注入新版脚本。
 - 页面函数：
   - `handleMeditate()`
   - `handleStopMeditate()`
@@ -674,6 +675,14 @@
 - 如果神识低于 `minSpirit` 或低于当前 `spiritCost`，直接返回 `startMeditation / explore-disabled-no-spirit`。
 - 目的：低神识长跑时，页面禁用探索但没有给明确禁用原因，也不会停在 `wait/explore-disabled`；这更符合“神识小于阈值就回冥想”的挂机目标。
 - 该变更只改变状态机下一步决策，不新增探索、商人、护道、战斗、复活、用符、用丹或奇遇点击动作。
+
+`lingverse-explore-helper.user.js` v2.75.0 新增：
+
+- `parseMeditationBarState(text)` 解析冥想条恢复行中的 `recoveredSpirit`，例如 `恢复: 5,794血 / 3,002灵 / 914识`。
+- `AfkLoopManager.buildSnapshot` 在当前冥想条可见且 `_lastPlayerData.isMeditating=false` 时，将恢复神识作为 `meditationRecoveredSpirit`，并设置 `meditationSpiritFromBar=true`。
+- `decideAfkNextAction` / `buildAfkPhaseStatus` 在 `meditationSpiritFromBar=true` 时，用 `spirit + meditationRecoveredSpirit` 作为满神识判断兜底。
+- 目的：真实页面里冥想恢复量已经增长，但玩家缓存仍停在冥想前神识时，仍可按“神识满提前收功”目标工作。
+- 该变更只读解析冥想条，不直接点击 `收功`；收功仍必须通过现有 `stopMeditation` 决策和执行链。
 
 默认配置：
 

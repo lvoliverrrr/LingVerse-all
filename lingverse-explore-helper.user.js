@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.74.0
+// @version      2.75.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.74.0';
+    const SCRIPT_VERSION = '2.75.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -512,10 +512,18 @@
         return hours * 3600 + minutes * 60 + seconds;
     }
 
+    function parseMeditationRecoveredSpirit(text) {
+        const source = String(text || '').replace(/,/g, '');
+        const match = source.match(/恢复[:：][\s\S]*?\/\s*(\d+)\s*识/);
+        if (!match) return null;
+        const recovered = Number(match[1]);
+        return Number.isFinite(recovered) && recovered >= 0 ? recovered : null;
+    }
+
     function parseMeditationBarState(text) {
         const source = String(text || '');
         if (source.indexOf('冥想修炼中') < 0 || source.indexOf('收功') < 0) {
-            return { isMeditating: false, durationSeconds: null };
+            return { isMeditating: false, durationSeconds: null, recoveredSpirit: null };
         }
         const lines = source.split(/\n+/).map(line => line.trim()).filter(Boolean);
         let durationSeconds = null;
@@ -525,14 +533,15 @@
         }
         return {
             isMeditating: true,
-            durationSeconds
+            durationSeconds,
+            recoveredSpirit: parseMeditationRecoveredSpirit(source)
         };
     }
 
     function readMeditationBarState() {
         const bar = $('#meditationBar');
         if (!bar || bar.classList.contains('hidden')) {
-            return { isMeditating: false, durationSeconds: null };
+            return { isMeditating: false, durationSeconds: null, recoveredSpirit: null };
         }
         return parseMeditationBarState(bar.innerText || bar.textContent || '');
     }
@@ -576,7 +585,8 @@
             const targetSeconds = Math.max(0, Math.round(cfg.meditationMinutes * 60));
             const spirit = Math.max(0, toFiniteNumber(snapshot.spirit, 0));
             const maxSpirit = Math.max(0, toFiniteNumber(snapshot.maxSpirit, 0));
-            const fullSpirit = maxSpirit > 0 && spirit >= maxSpirit;
+            const effectiveSpirit = getMeditationEffectiveSpirit(snapshot, spirit);
+            const fullSpirit = maxSpirit > 0 && effectiveSpirit >= maxSpirit;
             const remainingSeconds = fullSpirit ? 0 : Math.max(0, targetSeconds - elapsedSeconds);
             const text = fullSpirit
                 ? `冥想中 · 已冥想${formatAfkElapsedDuration(elapsedSeconds)} · 神识已满，准备结束`
@@ -3009,6 +3019,14 @@
         return 0;
     }
 
+    function getMeditationEffectiveSpirit(state, baseSpirit) {
+        const spirit = Math.max(0, toFiniteNumber(baseSpirit, 0));
+        if (!state || !state.meditationSpiritFromBar) return spirit;
+        const recoveredSpirit = optionalNumberOrNull(state.meditationRecoveredSpirit);
+        if (recoveredSpirit === null) return spirit;
+        return Math.max(spirit, spirit + Math.max(0, recoveredSpirit));
+    }
+
     function decideAfkNextAction(state, config, now) {
         const cfg = normalizeAfkLoopConfig(config);
         const snapshot = state || {};
@@ -3066,7 +3084,8 @@
             (disabledReason.indexOf('神识') >= 0 || disabledReason.indexOf('体力') >= 0);
 
         if (snapshot.isMeditating) {
-            if (maxSpirit > 0 && spirit >= maxSpirit) {
+            const effectiveSpirit = getMeditationEffectiveSpirit(snapshot, spirit);
+            if (maxSpirit > 0 && effectiveSpirit >= maxSpirit) {
                 return { action: 'stopMeditation', reason: 'spirit-full' };
             }
             const elapsedMs = getMeditationElapsedMs(snapshot, currentTime);
@@ -4109,7 +4128,9 @@
                 exploreDisabledReason: String(snapshot.exploreDisabledReason || ''),
                 isDead: !!snapshot.isDead,
                 isMeditating: !!snapshot.isMeditating,
-                meditationDurationSeconds: numberOrNull(snapshot.meditationDurationSeconds)
+                meditationDurationSeconds: numberOrNull(snapshot.meditationDurationSeconds),
+                meditationRecoveredSpirit: numberOrNull(snapshot.meditationRecoveredSpirit),
+                meditationSpiritFromBar: !!snapshot.meditationSpiritFromBar
             },
             blockers: {
                 gameUpdateNoticeActive: !!snapshot.gameUpdateNoticeActive,
@@ -6113,6 +6134,14 @@
             const meditationDurationSeconds = meditationStatusDuration !== null
                 ? meditationStatusDuration
                 : (meditationBarState.durationSeconds !== null ? meditationBarState.durationSeconds : undefined);
+            const meditationRecoveredSpirit = meditationBarState.recoveredSpirit !== null
+                ? meditationBarState.recoveredSpirit
+                : undefined;
+            const meditationSpiritFromBar = !!(
+                meditationBarState.isMeditating &&
+                !player.isMeditating &&
+                meditationRecoveredSpirit !== undefined
+            );
             const isMeditating = !!(meditationStatus && meditationStatus.isMeditating) ||
                 !!meditationBarState.isMeditating ||
                 !!player.isMeditating;
@@ -6180,6 +6209,8 @@
             return {
                 isMeditating,
                 meditationDurationSeconds,
+                meditationRecoveredSpirit,
+                meditationSpiritFromBar,
                 spirit: player.spirit,
                 maxSpirit: player.maxSpirit,
                 spiritCost: player.spiritCost,

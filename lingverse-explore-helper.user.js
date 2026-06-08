@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.54.0
+// @version      2.55.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.54.0';
+    const SCRIPT_VERSION = '2.55.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -872,6 +872,71 @@
         }
         if (reason === 'revive-failed') {
             return '复活建议: 自动复活失败 · 检查灵石和页面复活入口，必要时手动复活或调高本轮上限';
+        }
+        return '';
+    }
+
+    function formatMerchantAttemptReason(reason) {
+        const labels = {
+            disabled: '自动商人关闭',
+            'no-merchant': '等待云游商人',
+            'auto-only-wait': '等待自动探索上下文',
+            'merchant-active': '云游商人处理中',
+            'read-failed': '商人信息读取失败',
+            'no-items': '云游商人没有商品',
+            'no-priced-items': '没有可购买商品',
+            'purchase-ready': '准备购买最高价商品',
+            'purchase-triggered': '已触发购买最高价商品',
+            'purchase-failed': '购买最高价商品失败'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function formatMerchantAttemptSource(source) {
+        const labels = {
+            api: '接口',
+            'page-function': '页面函数',
+            exception: '异常'
+        };
+        return labels[source] || source || '';
+    }
+
+    function buildAfkMerchantStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeMerchantAttempt(attempt);
+        const reason = normalized.reason;
+        if (!reason || reason === 'disabled' || reason === 'no-merchant' || reason === 'auto-only-wait') return '';
+        const parts = [formatMerchantAttemptReason(reason)];
+        const item = normalized.item || {};
+        const itemName = sanitizeDebugName(item.name, 80);
+        if (itemName) parts.push(itemName);
+        const price = optionalNumberOrNull(item.price);
+        if (price !== null && price > 0) parts.push(`${price}灵石`);
+        const source = formatMerchantAttemptSource(normalized.source);
+        if (source) parts.push(source);
+        const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        return `商人: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkMerchantAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeMerchantAttempt(attempt);
+        const reason = normalized.reason;
+        if (reason === 'merchant-active' || reason === 'purchase-ready') {
+            return '商人建议: 云游商人处理中 · 将按最高价商品自动购买，若持续停住请复制状态';
+        }
+        if (reason === 'purchase-triggered') {
+            return '商人建议: 已触发自动购买 · 等待商人离开和自动探索恢复';
+        }
+        if (reason === 'purchase-failed') {
+            return '商人建议: 自动购买失败 · 检查灵石、商人窗口和购买接口，必要时手动处理或复制摘要';
+        }
+        if (reason === 'read-failed') {
+            return '商人建议: 商人信息读取失败 · 检查页面 API 或刷新页面后再试';
+        }
+        if (reason === 'no-items' || reason === 'no-priced-items') {
+            return '商人建议: 没有可自动购买的商品 · 必要时手动关闭商人窗口后继续挂机';
         }
         return '';
     }
@@ -1818,6 +1883,32 @@
         };
     }
 
+    function normalizeMerchantItem(item) {
+        const raw = item && typeof item === 'object' ? item : null;
+        if (!raw) return null;
+        return {
+            index: optionalNumberOrNull(raw.index),
+            name: String(raw.name || ''),
+            price: parseMerchantPrice(raw.price)
+        };
+    }
+
+    function normalizeMerchantAttempt(attempt) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        const itemSource = raw.item || (
+            raw.itemName || raw.itemPrice || raw.itemIndex
+                ? { index: raw.itemIndex, name: raw.itemName, price: raw.itemPrice }
+                : null
+        );
+        return {
+            shouldAttempt: !!raw.shouldAttempt,
+            reason: String(raw.reason || ''),
+            source: String(raw.source || ''),
+            item: normalizeMerchantItem(itemSource),
+            failureMessage: String(raw.failureMessage || '')
+        };
+    }
+
     function normalizeExploreStartAttempt(attempt) {
         const raw = attempt && typeof attempt === 'object' ? attempt : {};
         return {
@@ -1983,6 +2074,28 @@
         return normalizeReviveAttempt({
             shouldAttempt: true,
             reason: 'revive-ready'
+        });
+    }
+
+    function buildMerchantDebugAttempt(attempt, snapshot) {
+        const state = snapshot || {};
+        if (attempt && typeof attempt === 'object' && (
+            attempt.reason ||
+            attempt.source ||
+            attempt.item ||
+            typeof attempt.shouldAttempt !== 'undefined'
+        )) {
+            return normalizeMerchantAttempt(attempt);
+        }
+        if (state.merchantActive) {
+            return normalizeMerchantAttempt({
+                shouldAttempt: true,
+                reason: 'merchant-active'
+            });
+        }
+        return normalizeMerchantAttempt({
+            shouldAttempt: false,
+            reason: 'no-merchant'
         });
     }
 
@@ -2381,6 +2494,20 @@
         };
     }
 
+    function summarizeMerchantAttempt(attempt) {
+        const normalized = normalizeMerchantAttempt(attempt);
+        const item = normalized.item || {};
+        return {
+            shouldAttempt: normalized.shouldAttempt,
+            reason: normalized.reason,
+            source: sanitizeDebugText(normalized.source, 40),
+            itemIndex: optionalNumberOrNull(item.index),
+            itemName: sanitizeDebugName(item.name, 80),
+            itemPrice: optionalNumberOrNull(item.price),
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
+        };
+    }
+
     function summarizeExploreStartAttempt(attempt) {
         const normalized = normalizeExploreStartAttempt(attempt);
         return {
@@ -2537,6 +2664,7 @@
                 exploreStalled: !!automation.exploreStalled,
                 postReviveResume: !!automation.postReviveResume,
                 postInteractionResume: !!automation.postInteractionResume,
+                merchant: summarizeMerchantAttempt(automation.merchant),
                 exploreStart: summarizeExploreStartAttempt(automation.exploreStart),
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
                 talismans: summarizeCombatTalismanAttempt(automation.talismans),
@@ -2938,6 +3066,14 @@
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
             .filter(Boolean)
             .forEach(item => lines.push(`! ${item}`));
+        const merchantStatusLine = buildAfkMerchantStatusLine(automation.merchant);
+        if (merchantStatusLine) {
+            lines.push(merchantStatusLine);
+        }
+        const merchantAdviceStatusLine = buildAfkMerchantAdviceStatusLine(automation.merchant);
+        if (merchantAdviceStatusLine) {
+            lines.push(merchantAdviceStatusLine);
+        }
         const exploreStartStatusLine = buildAfkExploreStartStatusLine(automation.exploreStart);
         if (exploreStartStatusLine) {
             lines.push(exploreStartStatusLine);
@@ -3075,6 +3211,7 @@
                 exploreStalled: !!snapshot.exploreStalled,
                 postReviveResume: !!snapshot.postReviveResume,
                 postInteractionResume: !!snapshot.postInteractionResume,
+                merchant: buildMerchantDebugAttempt(debugContext.merchantAttempt, snapshot),
                 exploreStart: buildExploreStartDebugAttempt(debugContext.exploreStartAttempt, snapshot, cfg, currentDecision),
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
                 talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
@@ -3175,6 +3312,7 @@
         resolveCombatTalismanAttempt,
         normalizeEncounterFightAttempt,
         normalizeReviveAttempt,
+        normalizeMerchantAttempt,
         normalizeExploreStartAttempt,
         normalizeGuardianConfig,
         buildGuardianHirePayload,
@@ -3202,6 +3340,8 @@
         buildAfkNirvanaPillAdviceStatusLine,
         buildAfkReviveStatusLine,
         buildAfkReviveAdviceStatusLine,
+        buildAfkMerchantStatusLine,
+        buildAfkMerchantAdviceStatusLine,
         buildAfkExploreStartStatusLine,
         buildAfkExploreStartAdviceStatusLine,
         buildAfkStatusReport,
@@ -4556,6 +4696,7 @@
         intervalId: null,
         busy: false,
         lastAttemptKey: '',
+        lastAttempt: null,
 
         init() {
             if (this.intervalId) return;
@@ -4607,11 +4748,26 @@
             try {
                 res = await API.getMerchant();
             } catch (e) {
-                Logger.warn(`自动商人读取失败: ${e.message}`);
+                const failureMessage = e.message || String(e);
+                this.lastAttempt = normalizeMerchantAttempt({
+                    shouldAttempt: true,
+                    reason: 'read-failed',
+                    source: 'api',
+                    failureMessage
+                });
+                Logger.warn(`自动商人读取失败: ${failureMessage}`);
                 return;
             }
 
-            if (res.code !== 200 || !res.data) return;
+            if (res.code !== 200 || !res.data) {
+                this.lastAttempt = normalizeMerchantAttempt({
+                    shouldAttempt: true,
+                    reason: 'read-failed',
+                    source: 'api',
+                    failureMessage: res && res.message || '未知错误'
+                });
+                return;
+            }
 
             const items = res.data.items || [];
             const merchantKey = this.getMerchantKey(items);
@@ -4621,27 +4777,70 @@
             if (!selected) {
                 Logger.warn('云游商人没有可自动购买的商品');
                 this.lastAttemptKey = merchantKey;
+                this.lastAttempt = normalizeMerchantAttempt({
+                    shouldAttempt: false,
+                    reason: Array.isArray(items) && items.length > 0 ? 'no-priced-items' : 'no-items'
+                });
                 return;
             }
 
             this.lastAttemptKey = merchantKey;
             const price = parseMerchantPrice(selected.price);
             Logger.info(`自动购买云游商人最高价商品: ${selected.name || '未知商品'} (${price} 灵石)`);
+            this.lastAttempt = normalizeMerchantAttempt({
+                shouldAttempt: true,
+                reason: 'purchase-ready',
+                item: selected
+            });
             await this.buySelected(selected);
         },
 
         async buySelected(item) {
-            if (typeof _win.buyMerchantItem === 'function') {
-                await _win.buyMerchantItem(item.index);
-                return;
-            }
+            let source = 'api';
+            try {
+                if (typeof _win.buyMerchantItem === 'function') {
+                    source = 'page-function';
+                    await _win.buyMerchantItem(item.index);
+                    this.lastAttempt = normalizeMerchantAttempt({
+                        shouldAttempt: false,
+                        reason: 'purchase-triggered',
+                        source,
+                        item
+                    });
+                    return;
+                }
 
-            const res = await API.buyMerchantItem(item.index);
-            if (res.code === 200) {
-                Logger.success('云游商人购买成功');
-                this.refreshAfterBuy();
-            } else {
-                Logger.warn(`云游商人购买失败: ${res.message || '未知错误'}`);
+                const res = await API.buyMerchantItem(item.index);
+                if (res.code === 200) {
+                    this.lastAttempt = normalizeMerchantAttempt({
+                        shouldAttempt: false,
+                        reason: 'purchase-triggered',
+                        source,
+                        item
+                    });
+                    Logger.success('云游商人购买成功');
+                    this.refreshAfterBuy();
+                } else {
+                    const failureMessage = res.message || '未知错误';
+                    this.lastAttempt = normalizeMerchantAttempt({
+                        shouldAttempt: true,
+                        reason: 'purchase-failed',
+                        source,
+                        item,
+                        failureMessage
+                    });
+                    Logger.warn(`云游商人购买失败: ${failureMessage}`);
+                }
+            } catch (e) {
+                const failureMessage = e.message || String(e);
+                this.lastAttempt = normalizeMerchantAttempt({
+                    shouldAttempt: true,
+                    reason: 'purchase-failed',
+                    source,
+                    item,
+                    failureMessage
+                });
+                Logger.warn(`云游商人购买失败: ${failureMessage}`);
             }
         },
 
@@ -4765,6 +4964,7 @@
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
                     inventoryItems,
+                    merchantAttempt: MerchantAutoBuyer.lastAttempt,
                     exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
@@ -4795,6 +4995,7 @@
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
                     inventoryItems,
+                    merchantAttempt: MerchantAutoBuyer.lastAttempt,
                     exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,

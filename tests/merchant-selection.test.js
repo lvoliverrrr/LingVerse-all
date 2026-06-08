@@ -2443,6 +2443,48 @@ test('buildAfkStatusReport explains failed explore start attempts', () => {
     assert.equal(report.lines.includes('探索建议: 自动探索启动失败 · 检查探索倍率控件和自动探索入口，必要时刷新页面/重载扩展'), true);
 });
 
+test('buildAfkStatusReport explains failed merchant purchase attempts', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 88,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        merchantActive: true
+    }, {
+        enabled: true,
+        exploreMultiplier: 1
+    }, {
+        action: 'wait',
+        reason: 'merchant-active'
+    }, {
+        capturedAt: '2026-06-08T11:05:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        merchantAttempt: {
+            shouldAttempt: true,
+            reason: 'purchase-failed',
+            source: 'api',
+            item: {
+                index: 2,
+                name: '稀有化神归识丹?token=merchant-secret',
+                price: 9972
+            },
+            failureMessage: 'buy failed token=merchant-secret'
+        }
+    })));
+
+    assert.equal(summary.automation.merchant.itemName, '稀有化神归识丹');
+    assert.equal(summary.automation.merchant.failureMessage, 'buy failed token=<redacted>');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('商人: 购买最高价商品失败 · 稀有化神归识丹 · 9972灵石 · 接口 · buy failed token=<redacted>'), true);
+    assert.equal(report.lines.includes('商人建议: 自动购买失败 · 检查灵石、商人窗口和购买接口，必要时手动处理或复制摘要'), true);
+});
+
 test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2548,7 +2590,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.54.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.55.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2678,7 +2720,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.54.0',
+        scriptVersion: '2.55.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.98.0
+// @version      2.99.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.98.0';
+    const SCRIPT_VERSION = '2.99.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -155,10 +155,12 @@
         if (!Array.isArray(items)) return null;
         let selected = null;
         let selectedPrice = 0;
-        items.forEach(item => {
+        items.forEach((item, index) => {
             const price = parseMerchantPrice(item && item.price);
             if (price > selectedPrice) {
-                selected = item;
+                selected = item && typeof item === 'object' && item.index === undefined
+                    ? Object.assign({}, item, { index })
+                    : item;
                 selectedPrice = price;
             }
         });
@@ -4346,6 +4348,39 @@
         return '冥想同步: 玩家缓存未标记冥想 · 已按可见冥想条估算';
     }
 
+    function buildAfkMeditationForecastStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const player = source.player && typeof source.player === 'object' ? source.player : {};
+        if (!player.isMeditating) return '';
+        const recoveredSpirit = optionalNumberOrNull(player.meditationRecoveredSpirit);
+        if (recoveredSpirit === null || recoveredSpirit <= 0) return '';
+
+        const spirit = Math.max(0, toFiniteNumber(player.spirit, 0));
+        const maxSpirit = numberOrNull(player.maxSpirit);
+        const maxText = formatAfkReportNumber(maxSpirit);
+        const capSpirit = value => (maxSpirit === null || maxSpirit <= 0 ? value : Math.min(value, maxSpirit));
+        const currentEstimate = Math.round(capSpirit(spirit + Math.max(0, recoveredSpirit)));
+        const parts = [
+            `已恢复${formatAfkReportNumber(recoveredSpirit)}识`,
+            `当前估算${formatAfkReportNumber(currentEstimate)}/${maxText}`
+        ];
+
+        const phase = source.phase && typeof source.phase === 'object' ? source.phase : {};
+        const config = source.config && typeof source.config === 'object' ? source.config : {};
+        const elapsedSeconds = optionalNumberOrNull(phase.elapsedSeconds);
+        const targetFromPhase = optionalNumberOrNull(phase.targetSeconds);
+        const targetFromConfig = Math.max(0, toFiniteNumber(config.meditationMinutes, 0)) * 60;
+        const targetSeconds = targetFromPhase !== null ? targetFromPhase : (targetFromConfig > 0 ? targetFromConfig : null);
+        if (elapsedSeconds !== null && elapsedSeconds > 0 && targetSeconds !== null && targetSeconds > elapsedSeconds) {
+            const recoveredPerSecond = Math.max(0, recoveredSpirit) / elapsedSeconds;
+            const remainingSeconds = Math.max(0, targetSeconds - elapsedSeconds);
+            const plannedEstimate = Math.round(capSpirit(spirit + recoveredSpirit + recoveredPerSecond * remainingSeconds));
+            parts.push(`计划收功约${formatAfkReportNumber(plannedEstimate)}/${maxText}`);
+        }
+
+        return `冥想预计: ${parts.join(' · ')}`;
+    }
+
     function buildAfkRecentLogStatusLine(summary) {
         const source = summary && typeof summary === 'object' ? summary : {};
         const automation = source.automation && typeof source.automation === 'object' ? source.automation : {};
@@ -4427,6 +4462,10 @@
         const meditationStatusLine = buildAfkMeditationStatusLine(automation.meditation);
         if (meditationStatusLine) {
             lines.push(meditationStatusLine);
+        }
+        const meditationForecastStatusLine = buildAfkMeditationForecastStatusLine(summary);
+        if (meditationForecastStatusLine) {
+            lines.push(meditationForecastStatusLine);
         }
         const meditationFallbackStatusLine = buildAfkMeditationFallbackStatusLine(player);
         if (meditationFallbackStatusLine) {

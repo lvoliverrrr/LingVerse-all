@@ -98,6 +98,19 @@ test('selectMerchantItem ignores items without a usable positive price', () => {
     assert.deepEqual(selected, { index: 2, name: '高阶妖核', price: 88 });
 });
 
+test('selectMerchantItem uses array position when merchant items omit index', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const selected = hooks.selectMerchantItem([
+        { name: '普通灵草', price: 120 },
+        { name: '传说归识丹', price: '9,999' },
+        { name: '玄铁', price: 300 }
+    ]);
+
+    assert.deepEqual(toPlain(selected), { index: 1, name: '传说归识丹', price: '9,999' });
+});
+
 test('merchant automation context includes the AFK loop without manual shopping', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -3976,6 +3989,36 @@ test('buildAfkStatusReport explains meditation bar spirit fallback', () => {
     assert.equal(report.lines.includes('冥想同步: 玩家缓存未标记冥想 · 已按可见冥想条估算'), true);
 });
 
+test('buildAfkStatusReport forecasts meditation spirit recovery from the visible bar', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 100,
+        maxSpirit: 2000,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: true,
+        meditationDurationSeconds: 3600,
+        meditationRecoveredSpirit: 600,
+        meditationSpiritFromBar: false
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        exploreMultiplier: 1
+    }, {
+        action: 'wait',
+        reason: 'meditating'
+    }, {
+        capturedAt: '2026-06-08T11:40:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('冥想预计: 已恢复600识 · 当前估算700/2000 · 计划收功约1500/2000'), true);
+});
+
 test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -4706,7 +4749,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.98.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.99.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -4894,7 +4937,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.98.0',
+        scriptVersion: '2.99.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

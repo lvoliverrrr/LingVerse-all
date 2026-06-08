@@ -1111,6 +1111,19 @@ test('decideAfkNextAction resumes exploration after revive or interaction window
         action: 'startMeditation',
         reason: 'post-interaction-low-spirit'
     });
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        postMeditationResume: true,
+        isDead: false,
+        isMeditating: false,
+        spirit: 3,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true
+    }, config, 1_000_000)), {
+        action: 'startAutoExplore',
+        reason: 'post-meditation-ready'
+    });
 });
 
 test('classifyExploreInterruption can opt into auto-declining player encounters', () => {
@@ -2195,6 +2208,32 @@ test('buildAfkPhaseStatus reports meditation and exploration timing', () => {
         remainingSeconds: null,
         targetSeconds: 90
     });
+
+    assert.deepEqual(toPlain(hooks.buildAfkPhaseStatus({
+        postMeditationResume: true,
+        postMeditationResumeRemainingSeconds: 45,
+        spirit: 3,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        resumeWindowSeconds: 60,
+        exploreMultiplier: 50
+    }, {
+        action: 'startAutoExplore',
+        reason: 'post-meditation-ready'
+    }, 1_000_000)), {
+        schema: 'lingverse-afk-phase-status/v1',
+        phase: 'resuming',
+        label: '收功恢复窗口',
+        text: '收功恢复窗口 · 剩余45秒 · 收功后将继续50倍探索',
+        reason: 'post-meditation-ready',
+        elapsedSeconds: null,
+        remainingSeconds: 45,
+        targetSeconds: 60
+    });
 });
 
 test('buildAfkIssueReplay turns copied summaries into a replay view', () => {
@@ -2462,6 +2501,40 @@ test('buildAfkStatusReport explains post-interaction resume windows', () => {
 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('恢复: 事件恢复窗口 · 剩余45秒 · 神识足够将继续50倍探索'), true);
+});
+
+test('buildAfkStatusReport explains post-meditation resume windows', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        postMeditationResume: true,
+        postMeditationResumeRemainingSeconds: 45,
+        spirit: 3,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 50,
+        resumeWindowSeconds: 60
+    }, {
+        action: 'startAutoExplore',
+        reason: 'post-meditation-ready'
+    }, {
+        capturedAt: '2026-06-08T08:45:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    assert.equal(summary.automation.postMeditationResume, true);
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('探索: 收功恢复窗口'), true);
+    assert.equal(report.lines.includes('恢复: 收功恢复窗口 · 剩余45秒 · 收功后将继续50倍探索'), true);
 });
 
 test('buildAfkStatusReport explains low-spirit meditation returns', () => {
@@ -3497,7 +3570,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.76.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.77.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -3658,7 +3731,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.76.0',
+        scriptVersion: '2.77.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

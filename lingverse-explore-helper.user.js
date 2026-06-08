@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.76.0
+// @version      2.77.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.76.0';
+    const SCRIPT_VERSION = '2.77.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -391,6 +391,7 @@
             'post-revive-low-spirit': '复活后神识不足',
             'post-interaction-ready': '事件/战斗后神识可探索',
             'post-interaction-low-spirit': '事件/战斗后神识不足',
+            'post-meditation-ready': '收功后继续探索',
             'dead-auto-revive-enabled': '已开启自动复活',
             'revive-budget-exhausted': '复活次数已到本轮上限',
             'encounter-auto-guardian-enabled': '已开启遭遇前自动护道',
@@ -609,21 +610,24 @@
             return make('blocked', '阻塞', `阻塞 · ${formatAfkReason(reason)}`);
         }
 
-        if (snapshot.postReviveResume || snapshot.postInteractionResume) {
+        if (snapshot.postReviveResume || snapshot.postInteractionResume || snapshot.postMeditationResume) {
             const isReviveResume = !!snapshot.postReviveResume;
-            const label = isReviveResume ? '复活恢复窗口' : '事件恢复窗口';
+            const isMeditationResume = !isReviveResume && !snapshot.postInteractionResume && !!snapshot.postMeditationResume;
+            const label = isReviveResume
+                ? '复活恢复窗口'
+                : (isMeditationResume ? '收功恢复窗口' : '事件恢复窗口');
             const rawRemaining = isReviveResume
                 ? snapshot.postReviveResumeRemainingSeconds
-                : snapshot.postInteractionResumeRemainingSeconds;
+                : (isMeditationResume ? snapshot.postMeditationResumeRemainingSeconds : snapshot.postInteractionResumeRemainingSeconds);
             const remainingSeconds = optionalNumberOrNull(rawRemaining);
             const targetSeconds = Math.max(0, Math.round(cfg.resumeWindowSeconds));
             const spirit = Math.max(0, toFiniteNumber(snapshot.spirit, 0));
             const spiritCost = Math.max(1, toFiniteNumber(snapshot.spiritCost, 1));
             const lowSpirit = spirit < cfg.minSpirit || spirit < spiritCost;
             const remainingText = remainingSeconds === null ? '' : ` · 剩余${formatAfkElapsedDuration(remainingSeconds)}`;
-            const nextText = lowSpirit
-                ? '神识不足将回冥想'
-                : `神识足够将继续${cfg.exploreMultiplier}倍探索`;
+            const nextText = isMeditationResume
+                ? `收功后将继续${cfg.exploreMultiplier}倍探索`
+                : (lowSpirit ? '神识不足将回冥想' : `神识足够将继续${cfg.exploreMultiplier}倍探索`);
             return make('resuming', label, `${label}${remainingText} · ${nextText}`, {
                 remainingSeconds,
                 targetSeconds
@@ -3119,6 +3123,9 @@
             return { action: 'wait', reason: 'explore-disabled' };
         }
 
+        if (snapshot.postMeditationResume) {
+            return { action: 'startAutoExplore', reason: 'post-meditation-ready' };
+        }
         if (snapshot.postReviveResume) {
             if (lowSpirit) {
                 return { action: 'startMeditation', reason: 'post-revive-low-spirit' };
@@ -3446,7 +3453,8 @@
                 autoExplorePending: !!automation.autoExplorePending,
                 exploreStalled: !!automation.exploreStalled,
                 postReviveResume: !!automation.postReviveResume,
-                postInteractionResume: !!automation.postInteractionResume
+                postInteractionResume: !!automation.postInteractionResume,
+                postMeditationResume: !!automation.postMeditationResume
             }), Object.assign({ enabled: true }, config), decision);
 
         return {
@@ -3492,6 +3500,7 @@
                 exploreStalled: !!automation.exploreStalled,
                 postReviveResume: !!automation.postReviveResume,
                 postInteractionResume: !!automation.postInteractionResume,
+                postMeditationResume: !!automation.postMeditationResume,
                 meditation: summarizeMeditationAttempt(automation.meditation),
                 merchant: summarizeMerchantAttempt(automation.merchant),
                 playerEncounter: summarizePlayerEncounterAttempt(automation.playerEncounter),
@@ -3876,6 +3885,7 @@
         if (source.exploreStalled) return '疑似卡住';
         if (source.postReviveResume) return '复活恢复窗口';
         if (source.postInteractionResume) return '事件恢复窗口';
+        if (source.postMeditationResume) return '收功恢复窗口';
         return '停止';
     }
 
@@ -3895,7 +3905,8 @@
             autoExplorePending: !!automation.autoExplorePending,
             exploreStalled: !!automation.exploreStalled,
             postReviveResume: !!automation.postReviveResume,
-            postInteractionResume: !!automation.postInteractionResume
+            postInteractionResume: !!automation.postInteractionResume,
+            postMeditationResume: !!automation.postMeditationResume
         }), Object.assign({ enabled }, config), decision));
     }
 
@@ -4171,6 +4182,7 @@
                 exploreStalled: !!snapshot.exploreStalled,
                 postReviveResume: !!snapshot.postReviveResume,
                 postInteractionResume: !!snapshot.postInteractionResume,
+                postMeditationResume: !!snapshot.postMeditationResume,
                 meditation: buildMeditationDebugAttempt(debugContext.meditationAttempt, snapshot, cfg, currentDecision),
                 merchant: buildMerchantDebugAttempt(debugContext.merchantAttempt, snapshot),
                 playerEncounter: buildPlayerEncounterDebugAttempt(debugContext.playerEncounterAttempt, snapshot, cfg, currentDecision),
@@ -5879,6 +5891,7 @@
         lastAdventureAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
+        postMeditationResumeUntil: 0,
         resourceUsage: normalizeAfkResourceUsage({}),
         decisionHistory: [],
 
@@ -6226,6 +6239,9 @@
             const postInteractionResumeRemainingSeconds = this.postInteractionResumeUntil > now
                 ? Math.max(0, Math.ceil((this.postInteractionResumeUntil - now) / 1000))
                 : 0;
+            const postMeditationResumeRemainingSeconds = this.postMeditationResumeUntil > now
+                ? Math.max(0, Math.ceil((this.postMeditationResumeUntil - now) / 1000))
+                : 0;
 
             return {
                 isMeditating,
@@ -6260,8 +6276,10 @@
                 autoExplorePending,
                 postReviveResume: this.postReviveResumeUntil > now,
                 postInteractionResume: this.postInteractionResumeUntil > now,
+                postMeditationResume: this.postMeditationResumeUntil > now,
                 postReviveResumeRemainingSeconds,
                 postInteractionResumeRemainingSeconds,
+                postMeditationResumeRemainingSeconds,
                 exploreStalled
             };
         },
@@ -6413,6 +6431,8 @@
                     targetMinutes: normalizedCfg.meditationMinutes,
                     elapsedSeconds
                 });
+                const windowMs = getResumeWindowMs(normalizedCfg);
+                this.postMeditationResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
                 this.refreshGameData();
             } catch (e) {
                 const failureMessage = e.message || String(e);

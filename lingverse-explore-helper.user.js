@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.60.0
+// @version      2.61.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.60.0';
+    const SCRIPT_VERSION = '2.61.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -869,7 +869,8 @@
             'fight-ready': '准备自动迎战',
             'fight-already-triggered': '本次遭遇已触发迎战',
             'fight-triggered': '已触发自动迎战',
-            'fight-failed': '自动迎战失败'
+            'fight-failed': '自动迎战失败',
+            'talisman-dialog-open': '符箓面板未关闭'
         };
         return labels[reason] || reason || '未知';
     }
@@ -905,6 +906,9 @@
         const source = formatFightAttemptSource(normalized.source);
         if (reason === 'fight-failed') {
             return `迎战建议: 自动迎战失败 · 检查遭遇面板和${source || '当前'}迎战入口，必要时手动迎战或复制摘要`;
+        }
+        if (reason === 'talisman-dialog-open') {
+            return '迎战建议: 符箓面板未关闭 · 先关闭符箓面板再自动/手动迎战，并复制摘要排查关闭入口';
         }
         if (reason === 'not-attempted' && normalized.shouldAttempt) {
             return '迎战建议: 尚未迎战 · 等待用符/护道处理结束，若持续不动请复制摘要';
@@ -2048,6 +2052,9 @@
         if (!cfg.autoFight) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'disabled' };
         }
+        if (hasOpenTalismanDialogForEncounter(options && options.talismanAttempt, encounterKey)) {
+            return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'talisman-dialog-open' };
+        }
         if (encounterKey === String(lastEncounterKey || '')) {
             return { shouldAttempt: false, encounterKey, markEncounterKey: '', reason: 'fight-already-triggered' };
         }
@@ -2158,6 +2165,14 @@
             source: String(raw.source || ''),
             failureMessage: String(raw.failureMessage || '')
         };
+    }
+
+    function hasOpenTalismanDialogForEncounter(talismanAttempt, encounterKey) {
+        const normalized = normalizeCombatTalismanAttempt(talismanAttempt);
+        if (normalized.dialogClosed !== false) return false;
+        const currentKey = sanitizeDebugName(encounterKey, 120);
+        const attemptKey = sanitizeDebugName(normalized.encounterKey || normalized.markEncounterKey, 120);
+        return !!currentKey && (!attemptKey || attemptKey === currentKey);
     }
 
     function normalizeReviveAttempt(attempt) {
@@ -2310,13 +2325,20 @@
         });
     }
 
-    function buildEncounterFightDebugAttempt(attempt, snapshot, config) {
+    function buildEncounterFightDebugAttempt(attempt, snapshot, config, talismanAttempt) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const encounterKey = buildEncounterKey(snapshot || {});
         if (!cfg.autoFight) {
             return normalizeEncounterFightAttempt({
                 shouldAttempt: false,
                 reason: 'disabled',
+                encounterKey
+            });
+        }
+        if (hasOpenTalismanDialogForEncounter(talismanAttempt, encounterKey)) {
+            return normalizeEncounterFightAttempt({
+                shouldAttempt: false,
+                reason: 'talisman-dialog-open',
                 encounterKey
             });
         }
@@ -3596,7 +3618,7 @@
                 exploreStart: buildExploreStartDebugAttempt(debugContext.exploreStartAttempt, snapshot, cfg, currentDecision),
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
                 talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
-                fight: buildEncounterFightDebugAttempt(debugContext.fightAttempt, snapshot, cfg),
+                fight: buildEncounterFightDebugAttempt(debugContext.fightAttempt, snapshot, cfg, debugContext.talismanAttempt),
                 revive: buildReviveDebugAttempt(debugContext.reviveAttempt, snapshot, cfg),
                 guardian: buildGuardianDebugAttempt(debugContext.guardianAttempt, snapshot, cfg, guardianCfg),
                 waitDiagnosis: buildAfkWaitingDiagnosis(
@@ -6245,7 +6267,9 @@
         },
 
         async fightEncounter(cfg, snapshot) {
-            const fightUse = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop);
+            const fightUse = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop, {
+                talismanAttempt: this.lastTalismanAttempt
+            });
             const encounterKey = fightUse.encounterKey;
             if (!fightUse.shouldAttempt) {
                 this.lastFightAttempt = normalizeEncounterFightAttempt({

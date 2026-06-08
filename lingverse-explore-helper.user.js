@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.57.0
+// @version      2.58.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.57.0';
+    const SCRIPT_VERSION = '2.58.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -1112,6 +1112,13 @@
         }
         const families = formatTalismanFamilies(normalized.selectedTalismans);
         if (families) parts.push(families);
+        if (normalized.dialogClosed === false) {
+            parts.push('符窗未关闭');
+        } else if (normalized.dialogClosed === true) {
+            parts.push('符窗已关闭');
+        }
+        const dialogFailure = sanitizeDebugText(normalized.dialogCloseFailureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (dialogFailure) parts.push(dialogFailure);
         const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
         if (failure) parts.push(failure);
         return `用符: ${parts.join(' · ')}`;
@@ -1131,6 +1138,9 @@
         }
         if (reason === 'budget-exhausted') {
             return '用符建议: 战斗用符已到本轮上限 · 本轮不会继续消耗符箓，可重启挂机或调高上限';
+        }
+        if (normalized.dialogClosed === false) {
+            return '用符建议: 符箓面板未关闭 · 先关闭符箓面板再自动/手动迎战，并复制摘要排查关闭入口';
         }
         if (reason === 'already-handled') {
             return '用符建议: 本次遭遇已处理过用符 · 不会重复消耗符箓，仍停住请复制摘要';
@@ -2021,6 +2031,9 @@
                 .filter(item => item.itemId !== null || item.templateId || item.name || item.family),
             usedKinds: optionalNumberOrNull(raw.usedKinds),
             failedKinds: optionalNumberOrNull(raw.failedKinds),
+            dialogClosed: typeof raw.dialogClosed === 'boolean' ? raw.dialogClosed : null,
+            dialogCloseSource: String(raw.dialogCloseSource || ''),
+            dialogCloseFailureMessage: String(raw.dialogCloseFailureMessage || ''),
             failureMessage: String(raw.failureMessage || '')
         };
     }
@@ -2690,6 +2703,9 @@
             usedKinds: optionalNumberOrNull(normalized.usedKinds),
             failedKinds: optionalNumberOrNull(normalized.failedKinds),
             selectedTalismans: selected,
+            dialogClosed: typeof normalized.dialogClosed === 'boolean' ? normalized.dialogClosed : null,
+            dialogCloseSource: sanitizeDebugText(normalized.dialogCloseSource, 40),
+            dialogCloseFailureMessage: sanitizeDebugText(normalized.dialogCloseFailureMessage, DEBUG_SUMMARY_TEXT_LIMIT),
             failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
         };
     }
@@ -6051,14 +6067,31 @@
                 }
             }
 
+            let dialogClosed = null;
+            let dialogCloseSource = '';
+            let dialogCloseFailureMessage = '';
             try {
                 if (typeof _win.hideEncounterTalismanDialog === 'function') {
                     _win.hideEncounterTalismanDialog();
+                    dialogClosed = true;
+                    dialogCloseSource = 'page-function';
                 } else {
                     const dialog = $('#encounterTalismanDialog');
-                    if (dialog) dialog.classList.add('hidden');
+                    if (dialog) {
+                        dialog.classList.add('hidden');
+                        dialogClosed = dialog.classList.contains('hidden');
+                        dialogCloseSource = 'dom';
+                        if (!dialogClosed) dialogCloseFailureMessage = '符箓面板未隐藏';
+                    } else {
+                        dialogClosed = true;
+                        dialogCloseSource = 'no-dialog';
+                    }
                 }
-            } catch (e) {}
+            } catch (e) {
+                dialogClosed = false;
+                dialogCloseSource = 'exception';
+                dialogCloseFailureMessage = e.message || String(e);
+            }
 
             const completedAttempt = resolveCombatTalismanAttempt(this.lastTalismanEncounterKey, snapshot, selected, { attemptCompleted: true });
             if (completedAttempt.markEncounterKey) this.lastTalismanEncounterKey = completedAttempt.markEncounterKey;
@@ -6070,6 +6103,9 @@
                 selectedTalismans: selected,
                 usedKinds,
                 failedKinds: Math.max(0, selected.length - usedKinds),
+                dialogClosed,
+                dialogCloseSource,
+                dialogCloseFailureMessage,
                 failureMessage: failures.join(' | ')
             });
             if (usedKinds > 0) {

@@ -1283,6 +1283,9 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         ],
         usedKinds: 2,
         failedKinds: 0,
+        dialogClosed: null,
+        dialogCloseSource: '',
+        dialogCloseFailureMessage: '',
         failureMessage: ''
     });
     assert.deepEqual(snapshot.automation.guardian, {
@@ -1501,6 +1504,9 @@ test('buildAfkDebugSummary strips page secrets and compacts histories', () => {
                 quantity: 1
             }
         ],
+        dialogClosed: null,
+        dialogCloseSource: '',
+        dialogCloseFailureMessage: '',
         failureMessage: 'talisman_fire_3 使用失败: token=<redacted>'
     });
     assert.equal(summary.automation.talismans.selectedTalismans[0].name.startsWith('史诗荒古符箓'), true);
@@ -1744,7 +1750,7 @@ test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.57.0',
+        scriptVersion: '2.58.0',
         page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
         decision: { action: 'startAutoExplore', reason: 'spirit-ready' },
         player: { spirit: 2600, maxSpirit: 2758, spiritCost: 4, canExplore: true },
@@ -2385,6 +2391,54 @@ test('buildAfkStatusReport explains combat talisman attempts', () => {
     assert.equal(report.lines.includes('用符建议: 部分符箓使用失败 · 检查失败消息或库存，必要时手动迎战后复制摘要'), true);
 });
 
+test('buildAfkStatusReport explains talisman dialog close failures', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        spirit: 120,
+        maxSpirit: 2758,
+        spiritCost: 4
+    }, {
+        enabled: true,
+        autoFight: true,
+        useTalismans: true,
+        exploreMultiplier: 50
+    }, {
+        action: 'handleEncounter',
+        reason: 'encounter-auto-fight-enabled'
+    }, {
+        capturedAt: '2026-06-08T10:15:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        talismanAttempt: {
+            shouldAttempt: true,
+            reason: 'completed',
+            encounterKey: 'monster:port_bandit:3:7',
+            markEncounterKey: 'monster:port_bandit:3:7',
+            selectedTalismans: [
+                { itemId: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 }
+            ],
+            usedKinds: 1,
+            failedKinds: 0,
+            dialogClosed: false,
+            dialogCloseSource: 'dom',
+            dialogCloseFailureMessage: 'close failed token=talisman-dialog-secret'
+        }
+    })));
+
+    assert.equal(summary.automation.talismans.dialogClosed, false);
+    assert.equal(summary.automation.talismans.dialogCloseSource, 'dom');
+    assert.equal(summary.automation.talismans.dialogCloseFailureMessage, 'close failed token=<redacted>');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('用符: 已完成战斗用符 · 成功1/1类 · ancient · 符窗未关闭 · close failed token=<redacted>'), true);
+    assert.equal(report.lines.includes('用符建议: 符箓面板未关闭 · 先关闭符箓面板再自动/手动迎战，并复制摘要排查关闭入口'), true);
+});
+
 test('buildAfkStatusReport explains failed nirvana pill attempts', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2691,7 +2745,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.57.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.58.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2821,7 +2875,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.57.0',
+        scriptVersion: '2.58.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

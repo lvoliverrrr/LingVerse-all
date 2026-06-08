@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.62.0
+// @version      2.63.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.62.0';
+    const SCRIPT_VERSION = '2.63.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -993,6 +993,14 @@
         return labels[source] || source || '';
     }
 
+    function formatMeditationTriggerReason(reason) {
+        const labels = {
+            'spirit-full': '神识已满',
+            'meditation-duration-reached': '冥想时长已到'
+        };
+        return labels[reason] || '';
+    }
+
     function buildAfkMeditationStatusLine(attempt) {
         if (!attempt || typeof attempt !== 'object') return '';
         const normalized = normalizeMeditationAttempt(attempt);
@@ -1001,6 +1009,8 @@
         const parts = [formatMeditationAttemptReason(reason)];
         const source = formatMeditationAttemptSource(normalized.source);
         if (source) parts.push(source);
+        const triggerReason = formatMeditationTriggerReason(normalized.triggerReason);
+        if (triggerReason) parts.push(triggerReason);
         if (normalized.elapsedSeconds !== null) parts.push(`已冥想${formatAfkElapsedDuration(normalized.elapsedSeconds)}`);
         if (normalized.targetMinutes !== null) parts.push(`计划${normalized.targetMinutes}分钟`);
         const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
@@ -1022,6 +1032,12 @@
             return '冥想建议: 进入冥想失败 · 检查冥想按钮/API，必要时手动冥想或刷新页面';
         }
         if (reason === 'stop-ready') {
+            if (normalized.triggerReason === 'spirit-full') {
+                return '冥想建议: 神识已满，准备提前收功 · 收功后会按当前神识继续探索';
+            }
+            if (normalized.triggerReason === 'meditation-duration-reached') {
+                return '冥想建议: 冥想时长已到，准备收功 · 收功后会按当前神识继续探索';
+            }
             return '冥想建议: 冥想目标已达到 · 将尝试收功后继续探索';
         }
         if (reason === 'stop-triggered') {
@@ -2199,6 +2215,7 @@
             shouldAttempt: !!raw.shouldAttempt,
             action: String(raw.action || ''),
             reason: String(raw.reason || ''),
+            triggerReason: String(raw.triggerReason || ''),
             source: String(raw.source || ''),
             targetMinutes: optionalNumberOrNull(raw.targetMinutes),
             elapsedSeconds: optionalNumberOrNull(raw.elapsedSeconds),
@@ -2432,6 +2449,7 @@
                 shouldAttempt: true,
                 action: 'stop',
                 reason: 'stop-ready',
+                triggerReason: currentDecision.reason || '',
                 targetMinutes: cfg.meditationMinutes,
                 elapsedSeconds: state.meditationDurationSeconds
             });
@@ -2878,6 +2896,7 @@
             shouldAttempt: normalized.shouldAttempt,
             action: sanitizeDebugText(normalized.action, 40),
             reason: normalized.reason,
+            triggerReason: sanitizeDebugText(normalized.triggerReason, 80),
             source: sanitizeDebugText(normalized.source, 40),
             targetMinutes: optionalNumberOrNull(normalized.targetMinutes),
             elapsedSeconds: optionalNumberOrNull(normalized.elapsedSeconds),
@@ -5708,7 +5727,7 @@
             }
             if (decision.action === 'stopMeditation') {
                 Logger.info(`自动挂机结束冥想：${this.formatReason(decision.reason)}`);
-                await this.stopMeditation(snapshot, cfg);
+                await this.stopMeditation(snapshot, cfg, decision.reason);
                 return;
             }
             if (decision.action === 'startAutoExplore') {
@@ -5795,14 +5814,16 @@
             }
         },
 
-        async stopMeditation(snapshot, cfg) {
+        async stopMeditation(snapshot, cfg, triggerReason) {
             const normalizedCfg = normalizeAfkLoopConfig(cfg || CONFIG.afkLoop);
             const elapsedSeconds = snapshot && snapshot.meditationDurationSeconds;
+            const normalizedTriggerReason = String(triggerReason || '');
             let source = '';
             this.lastMeditationAttempt = normalizeMeditationAttempt({
                 shouldAttempt: true,
                 action: 'stop',
                 reason: 'stop-ready',
+                triggerReason: normalizedTriggerReason,
                 targetMinutes: normalizedCfg.meditationMinutes,
                 elapsedSeconds
             });
@@ -5820,6 +5841,7 @@
                     shouldAttempt: false,
                     action: 'stop',
                     reason: 'stop-triggered',
+                    triggerReason: normalizedTriggerReason,
                     source,
                     targetMinutes: normalizedCfg.meditationMinutes,
                     elapsedSeconds
@@ -5831,6 +5853,7 @@
                     shouldAttempt: true,
                     action: 'stop',
                     reason: 'stop-failed',
+                    triggerReason: normalizedTriggerReason,
                     source: source || 'exception',
                     targetMinutes: normalizedCfg.meditationMinutes,
                     elapsedSeconds,

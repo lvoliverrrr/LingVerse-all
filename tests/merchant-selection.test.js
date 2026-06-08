@@ -1750,7 +1750,7 @@ test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.58.0',
+        scriptVersion: '2.59.0',
         page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
         decision: { action: 'startAutoExplore', reason: 'spirit-ready' },
         player: { spirit: 2600, maxSpirit: 2758, spiritCost: 4, canExplore: true },
@@ -2675,6 +2675,7 @@ test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', 
         elapsedSeconds: 600,
         firstAt: '2026-06-08T06:00:00.000Z',
         lastAt: '2026-06-08T06:08:00.000Z',
+        likelyCause: '',
         message: '奇遇链等待处理已持续10分钟（连续5次），需要手动处理或配置自动策略',
         suggestion: '处理当前奇遇，或在摘要回放里导入奇遇策略后再启动挂机'
     });
@@ -2705,10 +2706,79 @@ test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', 
         decisionHistory: history
     })));
 
-    assert.deepEqual(summary.automation.waitDiagnosis, diagnosis);
+    assert.deepEqual(summary.automation.waitDiagnosis, Object.assign({}, diagnosis, {
+        likelyCause: '奇遇#456未配置自动策略'
+    }));
 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('诊断: 奇遇链等待处理已持续10分钟（连续5次），需要手动处理或配置自动策略'), true);
+    assert.equal(report.lines.includes('诊断归因: 奇遇#456未配置自动策略'), true);
+});
+
+test('buildAfkWaitingDiagnosis explains repeated encounter stalls from automation attempts', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const history = Array.from({ length: 5 }, (_, index) => ({
+        at: `2026-06-08T10:${String(index * 2).padStart(2, '0')}:00.000Z`,
+        action: 'handleEncounter',
+        reason: 'encounter-auto-fight-enabled',
+        spirit: 120,
+        maxSpirit: 2758,
+        isMeditating: false,
+        encounterActive: true
+    }));
+    const now = Date.parse('2026-06-08T10:10:00.000Z');
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 120,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        autoFight: true,
+        useTalismans: true
+    }, {
+        action: 'handleEncounter',
+        reason: 'encounter-auto-fight-enabled'
+    }, {
+        capturedAt: '2026-06-08T10:10:00.000Z',
+        now,
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decisionHistory: history,
+        talismanAttempt: {
+            shouldAttempt: true,
+            reason: 'completed',
+            encounterKey: 'monster:port_bandit:3:7',
+            markEncounterKey: 'monster:port_bandit:3:7',
+            selectedTalismans: [
+                { itemId: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 }
+            ],
+            usedKinds: 1,
+            failedKinds: 0,
+            dialogClosed: false,
+            dialogCloseSource: 'dom',
+            dialogCloseFailureMessage: 'close failed token=talisman-dialog-secret'
+        }
+    })));
+
+    assert.equal(summary.automation.waitDiagnosis.active, true);
+    assert.equal(summary.automation.waitDiagnosis.category, 'auto-action');
+    assert.equal(summary.automation.waitDiagnosis.likelyCause, '符箓面板未关闭 · close failed token=<redacted>');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('诊断归因: 符箓面板未关闭 · close failed token=<redacted>'), true);
 });
 
 test('buildAfkStatusReport includes game update blockers from snapshots', () => {
@@ -2745,7 +2815,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.58.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.59.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -2875,7 +2945,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.58.0',
+        scriptVersion: '2.59.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

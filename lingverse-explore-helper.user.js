@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.58.0
+// @version      2.59.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.58.0';
+    const SCRIPT_VERSION = '2.59.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -575,9 +575,88 @@
             elapsedSeconds: Math.max(0, Math.round(toFiniteNumber(elapsedSeconds, 0))),
             firstAt: String(firstAt || ''),
             lastAt: String(lastAt || ''),
+            likelyCause: '',
             message: '',
             suggestion: ''
         };
+    }
+
+    function joinAfkLikelyCause(label, detail) {
+        const cleanLabel = String(label || '').trim();
+        const cleanDetail = String(detail || '').trim();
+        if (!cleanLabel) return cleanDetail;
+        return cleanDetail ? `${cleanLabel} · ${cleanDetail}` : cleanLabel;
+    }
+
+    function buildAfkWaitLikelyCause(action, reason, context) {
+        const source = context && typeof context === 'object' ? context : {};
+        const snapshot = source.snapshot && typeof source.snapshot === 'object' ? source.snapshot : {};
+        const actionText = String(action || '');
+        const reasonText = String(reason || '');
+
+        const encounterFlow = actionText === 'handleEncounter' ||
+            reasonText.indexOf('encounter') >= 0 ||
+            !!snapshot.encounterActive ||
+            !!snapshot.combatActive;
+        if (encounterFlow) {
+            const talismans = normalizeCombatTalismanAttempt(source.talismanAttempt);
+            if (talismans.dialogClosed === false) {
+                return joinAfkLikelyCause('符箓面板未关闭', talismans.dialogCloseFailureMessage);
+            }
+            if (talismans.reason === 'inventory-read-failed') {
+                return joinAfkLikelyCause('战斗用符背包读取失败', talismans.failureMessage);
+            }
+            if (talismans.reason === 'budget-exhausted') {
+                return joinAfkLikelyCause('战斗用符次数已到本轮上限', talismans.failureMessage);
+            }
+            if (talismans.reason === 'completed' && (toFiniteNumber(talismans.failedKinds, 0) > 0 || talismans.failureMessage)) {
+                return joinAfkLikelyCause('战斗用符部分失败', talismans.failureMessage);
+            }
+
+            const guardian = normalizeGuardianAttempt(source.guardianAttempt, source.guardianConfig);
+            if (guardian.reason === 'hire-failed') {
+                return joinAfkLikelyCause('自动护道失败', guardian.failureMessage);
+            }
+            if (guardian.reason === 'guardian-config-disabled') {
+                return '游戏护道设置关闭';
+            }
+
+            const fight = normalizeEncounterFightAttempt(source.fightAttempt);
+            if (fight.reason === 'fight-failed') {
+                return joinAfkLikelyCause('自动迎战失败', fight.failureMessage);
+            }
+        }
+
+        const merchant = normalizeMerchantAttempt(source.merchantAttempt);
+        if ((reasonText === 'merchant-active' || !!snapshot.merchantActive) && merchant.reason === 'purchase-failed') {
+            return joinAfkLikelyCause('云游商人购买失败', merchant.failureMessage);
+        }
+
+        const exploreStart = normalizeExploreStartAttempt(source.exploreStartAttempt);
+        if ((actionText === 'startAutoExplore' || reasonText.indexOf('explore') >= 0) && exploreStart.reason === 'start-failed') {
+            return joinAfkLikelyCause('自动探索启动失败', exploreStart.failureMessage);
+        }
+
+        const meditation = normalizeMeditationAttempt(source.meditationAttempt);
+        if ((actionText === 'startMeditation' || actionText === 'stopMeditation' || reasonText.indexOf('meditation') >= 0) && /failed$/.test(meditation.reason)) {
+            return joinAfkLikelyCause(meditation.action === 'stop' ? '结束冥想失败' : '开始冥想失败', meditation.failureMessage);
+        }
+
+        const revive = normalizeReviveAttempt(source.reviveAttempt);
+        if ((actionText === 'revive' || reasonText.indexOf('dead') >= 0 || reasonText.indexOf('revive') >= 0) && revive.reason === 'revive-failed') {
+            return joinAfkLikelyCause('自动复活失败', revive.failureMessage);
+        }
+
+        const nirvana = normalizeNirvanaPillAttempt(source.nirvanaPillAttempt);
+        if ((actionText === 'startAutoExplore' || reasonText.indexOf('explore') >= 0) && nirvana.reason === 'use-failed') {
+            return joinAfkLikelyCause('涅槃重生丹使用失败', nirvana.failureMessage);
+        }
+
+        if (reasonText === 'adventure-active' && snapshot.adventureId) {
+            return `奇遇#${snapshot.adventureId}未配置自动策略`;
+        }
+
+        return '';
     }
 
     function getAfkWaitingDiagnosisMeta(reason, action) {
@@ -643,7 +722,7 @@
         return Math.max(120, tickSeconds * 4, stallSeconds);
     }
 
-    function buildAfkWaitingDiagnosis(decisionHistory, config, now) {
+    function buildAfkWaitingDiagnosis(decisionHistory, config, now, context) {
         const history = normalizeDecisionHistory(decisionHistory);
         if (!history.length) return buildEmptyAfkWaitingDiagnosis('', '', 0, 0, '', '');
 
@@ -682,6 +761,7 @@
             ? '，建议复制摘要定位'
             : '，需要手动处理或配置自动策略';
         const message = `${label}已持续${durationText}（连续${repeated.length}次）${extra}`;
+        const likelyCause = buildAfkWaitLikelyCause(action, reason, context);
 
         return {
             schema: 'lingverse-afk-wait-diagnosis/v1',
@@ -695,6 +775,7 @@
             elapsedSeconds,
             firstAt,
             lastAt,
+            likelyCause,
             message,
             suggestion: meta.suggestion
         };
@@ -714,6 +795,7 @@
             elapsedSeconds: Math.max(0, Math.round(toFiniteNumber(source.elapsedSeconds, 0))),
             firstAt: sanitizeDebugText(source.firstAt || '', 40),
             lastAt: sanitizeDebugText(source.lastAt || '', 40),
+            likelyCause: sanitizeDebugText(source.likelyCause || '', DEBUG_SUMMARY_TEXT_LIMIT),
             message: sanitizeDebugText(source.message || '', DEBUG_SUMMARY_TEXT_LIMIT),
             suggestion: sanitizeDebugText(source.suggestion || '', DEBUG_SUMMARY_TEXT_LIMIT)
         };
@@ -3398,6 +3480,9 @@
         }
         if (automation.waitDiagnosis && automation.waitDiagnosis.active && automation.waitDiagnosis.message) {
             lines.push(`诊断: ${sanitizeDebugText(automation.waitDiagnosis.message, DEBUG_SUMMARY_TEXT_LIMIT)}`);
+            if (automation.waitDiagnosis.likelyCause) {
+                lines.push(`诊断归因: ${sanitizeDebugText(automation.waitDiagnosis.likelyCause, DEBUG_SUMMARY_TEXT_LIMIT)}`);
+            }
         }
         const preflight = automation.resourcePreflight && typeof automation.resourcePreflight === 'object'
             ? automation.resourcePreflight
@@ -3488,7 +3573,20 @@
                 waitDiagnosis: buildAfkWaitingDiagnosis(
                     debugContext.decisionHistory,
                     cfg,
-                    resolveAfkDiagnosisNow(debugContext.now, debugContext.capturedAt)
+                    resolveAfkDiagnosisNow(debugContext.now, debugContext.capturedAt),
+                    {
+                        snapshot,
+                        decision: currentDecision,
+                        meditationAttempt: debugContext.meditationAttempt,
+                        merchantAttempt: debugContext.merchantAttempt,
+                        exploreStartAttempt: debugContext.exploreStartAttempt,
+                        nirvanaPillAttempt: debugContext.nirvanaPillAttempt,
+                        talismanAttempt: debugContext.talismanAttempt,
+                        fightAttempt: debugContext.fightAttempt,
+                        reviveAttempt: debugContext.reviveAttempt,
+                        guardianAttempt: debugContext.guardianAttempt,
+                        guardianConfig: guardianCfg
+                    }
                 ),
                 resourcePreflight: buildAfkResourcePreflight(
                     debugContext.inventoryItems,

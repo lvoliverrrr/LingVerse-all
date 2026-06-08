@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.53.0
+// @version      2.54.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.53.0';
+    const SCRIPT_VERSION = '2.54.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -872,6 +872,61 @@
         }
         if (reason === 'revive-failed') {
             return '复活建议: 自动复活失败 · 检查灵石和页面复活入口，必要时手动复活或调高本轮上限';
+        }
+        return '';
+    }
+
+    function formatExploreStartAttemptReason(reason) {
+        const labels = {
+            disabled: '自动挂机关闭',
+            'no-need': '暂无启动需求',
+            'already-running': '自动探索已在运行',
+            'start-ready': '准备启动自动探索',
+            'start-triggered': '已触发自动探索',
+            'start-failed': '自动探索启动失败'
+        };
+        return labels[reason] || reason || '未知';
+    }
+
+    function formatExploreStartAttemptSource(source) {
+        const labels = {
+            toggle: '自动按钮',
+            'page-start': '页面启动函数',
+            'single-explore': '单次探索入口',
+            multiplier: '探索倍率控件',
+            'missing-entry': '自动探索入口',
+            exception: '异常'
+        };
+        return labels[source] || source || '';
+    }
+
+    function buildAfkExploreStartStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeExploreStartAttempt(attempt);
+        const reason = normalized.reason;
+        if (!reason || reason === 'disabled' || reason === 'no-need' || reason === 'already-running') return '';
+        if (reason === 'start-ready' && !normalized.shouldAttempt) return '';
+        const parts = [formatExploreStartAttemptReason(reason)];
+        if (normalized.multiplier !== null) parts.push(`${normalized.multiplier}倍`);
+        const source = formatExploreStartAttemptSource(normalized.source);
+        if (source) parts.push(source);
+        const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
+        if (failure) parts.push(failure);
+        return `探索启动: ${parts.join(' · ')}`;
+    }
+
+    function buildAfkExploreStartAdviceStatusLine(attempt) {
+        if (!attempt || typeof attempt !== 'object') return '';
+        const normalized = normalizeExploreStartAttempt(attempt);
+        const reason = normalized.reason;
+        if (reason === 'start-ready') {
+            return '探索建议: 神识已满足条件 · 将设置倍率并启动自动探索';
+        }
+        if (reason === 'start-triggered') {
+            return '探索建议: 已触发自动探索 · 等待探索计数变化或事件弹窗';
+        }
+        if (reason === 'start-failed') {
+            return '探索建议: 自动探索启动失败 · 检查探索倍率控件和自动探索入口，必要时刷新页面/重载扩展';
         }
         return '';
     }
@@ -1763,6 +1818,17 @@
         };
     }
 
+    function normalizeExploreStartAttempt(attempt) {
+        const raw = attempt && typeof attempt === 'object' ? attempt : {};
+        return {
+            shouldAttempt: !!raw.shouldAttempt,
+            reason: String(raw.reason || ''),
+            multiplier: optionalNumberOrNull(raw.multiplier),
+            source: String(raw.source || ''),
+            failureMessage: String(raw.failureMessage || '')
+        };
+    }
+
     function normalizeGuardianAttempt(attempt, fallbackGuardianConfig) {
         const raw = attempt && typeof attempt === 'object' ? attempt : {};
         const guardian = normalizeGuardianConfig(raw.guardian || fallbackGuardianConfig || {});
@@ -1917,6 +1983,46 @@
         return normalizeReviveAttempt({
             shouldAttempt: true,
             reason: 'revive-ready'
+        });
+    }
+
+    function buildExploreStartDebugAttempt(attempt, snapshot, config, decision) {
+        const cfg = normalizeAfkLoopConfig(config || {});
+        const state = snapshot || {};
+        const currentDecision = decision || {};
+        if (attempt && typeof attempt === 'object' && (
+            attempt.reason ||
+            attempt.source ||
+            typeof attempt.shouldAttempt !== 'undefined' ||
+            typeof attempt.multiplier !== 'undefined'
+        )) {
+            return normalizeExploreStartAttempt(attempt);
+        }
+        if (!cfg.enabled) {
+            return normalizeExploreStartAttempt({
+                shouldAttempt: false,
+                reason: 'disabled',
+                multiplier: cfg.exploreMultiplier
+            });
+        }
+        if (state.autoExploreRunning || state.autoExplorePending) {
+            return normalizeExploreStartAttempt({
+                shouldAttempt: false,
+                reason: 'already-running',
+                multiplier: cfg.exploreMultiplier
+            });
+        }
+        if (currentDecision.action === 'startAutoExplore') {
+            return normalizeExploreStartAttempt({
+                shouldAttempt: true,
+                reason: 'start-ready',
+                multiplier: cfg.exploreMultiplier
+            });
+        }
+        return normalizeExploreStartAttempt({
+            shouldAttempt: false,
+            reason: 'no-need',
+            multiplier: cfg.exploreMultiplier
         });
     }
 
@@ -2275,6 +2381,17 @@
         };
     }
 
+    function summarizeExploreStartAttempt(attempt) {
+        const normalized = normalizeExploreStartAttempt(attempt);
+        return {
+            shouldAttempt: normalized.shouldAttempt,
+            reason: normalized.reason,
+            multiplier: optionalNumberOrNull(normalized.multiplier),
+            source: sanitizeDebugText(normalized.source, 40),
+            failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
+        };
+    }
+
     function summarizeAfkPhaseStatus(status) {
         const normalized = normalizeAfkPhaseStatus(status);
         return {
@@ -2420,6 +2537,7 @@
                 exploreStalled: !!automation.exploreStalled,
                 postReviveResume: !!automation.postReviveResume,
                 postInteractionResume: !!automation.postInteractionResume,
+                exploreStart: summarizeExploreStartAttempt(automation.exploreStart),
                 nirvanaPill: summarizeNirvanaPillAttempt(automation.nirvanaPill),
                 talismans: summarizeCombatTalismanAttempt(automation.talismans),
                 fight: summarizeEncounterFightAttempt(automation.fight),
@@ -2820,6 +2938,14 @@
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
             .filter(Boolean)
             .forEach(item => lines.push(`! ${item}`));
+        const exploreStartStatusLine = buildAfkExploreStartStatusLine(automation.exploreStart);
+        if (exploreStartStatusLine) {
+            lines.push(exploreStartStatusLine);
+        }
+        const exploreStartAdviceStatusLine = buildAfkExploreStartAdviceStatusLine(automation.exploreStart);
+        if (exploreStartAdviceStatusLine) {
+            lines.push(exploreStartAdviceStatusLine);
+        }
         const reviveStatusLine = buildAfkReviveStatusLine(automation.revive);
         if (reviveStatusLine) {
             lines.push(reviveStatusLine);
@@ -2949,6 +3075,7 @@
                 exploreStalled: !!snapshot.exploreStalled,
                 postReviveResume: !!snapshot.postReviveResume,
                 postInteractionResume: !!snapshot.postInteractionResume,
+                exploreStart: buildExploreStartDebugAttempt(debugContext.exploreStartAttempt, snapshot, cfg, currentDecision),
                 nirvanaPill: normalizeNirvanaPillAttempt(debugContext.nirvanaPillAttempt),
                 talismans: buildCombatTalismanDebugAttempt(debugContext.talismanAttempt, snapshot, cfg),
                 fight: buildEncounterFightDebugAttempt(debugContext.fightAttempt, snapshot, cfg),
@@ -3048,6 +3175,7 @@
         resolveCombatTalismanAttempt,
         normalizeEncounterFightAttempt,
         normalizeReviveAttempt,
+        normalizeExploreStartAttempt,
         normalizeGuardianConfig,
         buildGuardianHirePayload,
         resolveEncounterGuardianAttempt,
@@ -3074,6 +3202,8 @@
         buildAfkNirvanaPillAdviceStatusLine,
         buildAfkReviveStatusLine,
         buildAfkReviveAdviceStatusLine,
+        buildAfkExploreStartStatusLine,
+        buildAfkExploreStartAdviceStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
         applyAfkPreset
@@ -4550,6 +4680,7 @@
         lastFightAttempt: null,
         lastReviveAttempt: null,
         lastNirvanaPillAttempt: null,
+        lastExploreStartAttempt: null,
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
         resourceUsage: normalizeAfkResourceUsage({}),
@@ -4634,6 +4765,7 @@
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
                     inventoryItems,
+                    exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
                     fightAttempt: this.lastFightAttempt,
@@ -4663,6 +4795,7 @@
                     decisionHistory: this.getDecisionHistory(),
                     recentLogs: Logger.getRecentEntries(),
                     inventoryItems,
+                    exploreStartAttempt: this.lastExploreStartAttempt,
                     nirvanaPillAttempt: this.lastNirvanaPillAttempt,
                     talismanAttempt: this.lastTalismanAttempt,
                     fightAttempt: this.lastFightAttempt,
@@ -5011,24 +5144,50 @@
         },
 
         async startAutoExplore(multiplier, cfg) {
+            const normalizedMultiplier = clampNumber(multiplier, 1, 50, 1);
+            let source = '';
+            this.lastExploreStartAttempt = normalizeExploreStartAttempt({
+                shouldAttempt: true,
+                reason: 'start-ready',
+                multiplier: normalizedMultiplier
+            });
             try {
                 await this.maybeUseNirvanaRebirthPill(cfg || CONFIG.afkLoop);
-                this.setExploreMultiplier(multiplier);
+                source = 'multiplier';
+                this.setExploreMultiplier(normalizedMultiplier);
                 const toggle = $('#autoExploreToggle');
                 if (toggle) toggle.checked = true;
 
                 if (typeof _win.toggleAutoExplore === 'function') {
+                    source = 'toggle';
                     await _win.toggleAutoExplore(true);
                 } else if (typeof _win.startAutoExplore === 'function') {
+                    source = 'page-start';
                     await _win.startAutoExplore();
                 } else if (typeof _win.handleExplore === 'function') {
+                    source = 'single-explore';
                     await _win.handleExplore();
                 } else {
+                    source = 'missing-entry';
                     throw new Error('页面探索函数不可用');
                 }
+                this.lastExploreStartAttempt = normalizeExploreStartAttempt({
+                    shouldAttempt: false,
+                    reason: 'start-triggered',
+                    multiplier: normalizedMultiplier,
+                    source
+                });
                 this.lastExploreProgressAt = Date.now();
             } catch (e) {
-                Logger.warn(`自动探索启动失败: ${e.message || e}`);
+                const failureMessage = e.message || String(e);
+                this.lastExploreStartAttempt = normalizeExploreStartAttempt({
+                    shouldAttempt: true,
+                    reason: 'start-failed',
+                    multiplier: normalizedMultiplier,
+                    source: source || 'exception',
+                    failureMessage
+                });
+                Logger.warn(`自动探索启动失败: ${failureMessage}`);
             }
         },
 

@@ -1866,7 +1866,7 @@ test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
 
     const report = hooks.buildAfkStatusReport({
         schema: 'lingverse-afk-debug-summary/v1',
-        scriptVersion: '2.65.0',
+        scriptVersion: '2.66.0',
         page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
         decision: { action: 'startAutoExplore', reason: 'spirit-ready' },
         player: { spirit: 2600, maxSpirit: 2758, spiritCost: 4, canExplore: true },
@@ -3005,6 +3005,62 @@ test('buildAfkWaitingDiagnosis explains guardian already-attempted stalls withou
     assert.equal(report.lines.includes('诊断归因: 本遭遇已尝试自动护道，避免重复扣费'), true);
 });
 
+test('buildAfkWaitingDiagnosis explains repeated adventure auto-choice stalls', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const history = Array.from({ length: 5 }, (_, index) => ({
+        at: `2026-06-08T13:${String(index * 2).padStart(2, '0')}:00.000Z`,
+        action: 'handleAdventure',
+        reason: 'adventure-strategy-choice',
+        spirit: 240,
+        maxSpirit: 2758,
+        isMeditating: false,
+        adventureActive: true,
+        adventureId: 456
+    }));
+    const now = Date.parse('2026-06-08T13:10:00.000Z');
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 240,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        adventureActive: true,
+        adventureId: 456,
+        adventureStep: 1,
+        adventureTotalSteps: 3,
+        adventureChoices: ['入谷探查', '绕路离开']
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        adventureMode: 'strategy',
+        adventureChoiceMap: { 456: 2 }
+    }, {
+        action: 'handleAdventure',
+        reason: 'adventure-strategy-choice'
+    }, {
+        capturedAt: '2026-06-08T13:10:00.000Z',
+        now,
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decisionHistory: history
+    })));
+
+    assert.equal(summary.automation.waitDiagnosis.active, true);
+    assert.equal(summary.automation.waitDiagnosis.category, 'auto-action');
+    assert.equal(summary.automation.waitDiagnosis.suggestion, '奇遇自动选择重复未前进，检查当前奇遇选项/策略是否匹配，必要时手动处理并复制摘要');
+    assert.equal(summary.automation.waitDiagnosis.likelyCause, '奇遇#456 自动选择第2项「绕路离开」后仍未前进');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('诊断: 奇遇链按ID策略选择已持续10分钟（连续5次），建议复制摘要定位'), true);
+    assert.equal(report.lines.includes('诊断归因: 奇遇#456 自动选择第2项「绕路离开」后仍未前进'), true);
+});
+
 test('buildAfkWaitingDiagnosis explains repeated post-interaction resume failures', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -3098,7 +3154,7 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.65.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes('环境: helper 2.66.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
 });
 
 test('buildAfkRiskStatus summarizes high-risk AFK switches', () => {
@@ -3228,7 +3284,7 @@ test('AFK config packs export normalized settings and import safely', () => {
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.65.0',
+        scriptVersion: '2.66.0',
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {

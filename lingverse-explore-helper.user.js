@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.65.0
+// @version      2.66.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.65.0';
+    const SCRIPT_VERSION = '2.66.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -594,6 +594,21 @@
         const actionText = String(action || '');
         const reasonText = String(reason || '');
 
+        const adventureFlow = actionText === 'handleAdventure' ||
+            reasonText === 'adventure-auto-choice' ||
+            reasonText === 'adventure-strategy-choice';
+        if (adventureFlow && snapshot.adventureActive) {
+            const cfg = normalizeAfkLoopConfig(source.config || {});
+            const adventureId = snapshot.adventureId;
+            const choiceIndex = resolveAdventureChoiceIndex(adventureId, cfg);
+            const choices = Array.isArray(snapshot.adventureChoices) ? snapshot.adventureChoices : [];
+            const idText = adventureId ? `#${sanitizeDebugText(adventureId, 60)}` : '未知奇遇';
+            const choiceText = choiceIndex > 0
+                ? `第${choiceIndex}项${choices[choiceIndex - 1] ? `「${sanitizeDebugText(choices[choiceIndex - 1], 60)}」` : ''}`
+                : '已配置策略';
+            return `奇遇${idText} 自动选择${choiceText}后仍未前进`;
+        }
+
         const encounterFlow = actionText === 'handleEncounter' ||
             reasonText.indexOf('encounter') >= 0 ||
             !!snapshot.encounterActive ||
@@ -688,6 +703,14 @@
             'adventure-active': {
                 category: 'manual-action',
                 suggestion: '处理当前奇遇，或在摘要回放里导入奇遇策略后再启动挂机'
+            },
+            'adventure-auto-choice': {
+                category: 'auto-action',
+                suggestion: '奇遇自动选择重复未前进，检查当前奇遇选项/策略是否匹配，必要时手动处理并复制摘要'
+            },
+            'adventure-strategy-choice': {
+                category: 'auto-action',
+                suggestion: '奇遇自动选择重复未前进，检查当前奇遇选项/策略是否匹配，必要时手动处理并复制摘要'
             },
             'immortal-prison': {
                 category: 'hard-stop',
@@ -785,7 +808,7 @@
             ? '，建议复制摘要定位'
             : '，需要手动处理或配置自动策略';
         const message = `${label}已持续${durationText}（连续${repeated.length}次）${extra}`;
-        const likelyCause = buildAfkWaitLikelyCause(action, reason, context);
+        const likelyCause = buildAfkWaitLikelyCause(action, reason, Object.assign({}, context || {}, { config: cfg }));
 
         return {
             schema: 'lingverse-afk-wait-diagnosis/v1',

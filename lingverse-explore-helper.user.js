@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.73.0
+// @version      2.74.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,7 +20,7 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.73.0';
+    const SCRIPT_VERSION = '2.74.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
@@ -3094,7 +3094,7 @@
         }
 
         if (snapshot.canExplore === false) {
-            if (exploreDisabledForSpirit) {
+            if (exploreDisabledForSpirit || lowSpirit) {
                 return { action: 'startMeditation', reason: 'explore-disabled-no-spirit' };
             }
             return { action: 'wait', reason: 'explore-disabled' };

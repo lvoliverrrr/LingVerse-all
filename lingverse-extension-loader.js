@@ -6,10 +6,18 @@
         ? chrome.runtime.getManifest()
         : {};
     const extensionVersion = String(manifest && manifest.version || '');
+    const loadedHelperVersion = String(
+        root.dataset.lingverseAutoMapInitializedVersion ||
+        root.dataset.lingverseAutoMapHelperVersion ||
+        globalThis.LingVerseAutoMapInitializedVersion ||
+        globalThis.LingVerseAutoMapVersion ||
+        ''
+    );
     if (
         root.dataset.lingverseAutoMapInjected === '1' &&
         root.dataset.lingverseAutoMapInjectedVersion &&
-        root.dataset.lingverseAutoMapInjectedVersion === extensionVersion
+        root.dataset.lingverseAutoMapInjectedVersion === extensionVersion &&
+        loadedHelperVersion
     ) {
         return;
     }

@@ -111,6 +111,591 @@ test('selectMerchantItem uses array position when merchant items omit index', ()
     assert.deepEqual(toPlain(selected), { index: 1, name: '传说归识丹', price: '9,999' });
 });
 
+test('extractMerchantItemsFromDom reads visible merchant cards with prices and indexes', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    function merchantCard({ text, name, dataset = {}, buttonOnclick = '' }) {
+        const button = {
+            textContent: '购买',
+            dataset: {},
+            getAttribute(name) {
+                return name === 'onclick' ? buttonOnclick : null;
+            }
+        };
+        const nameNode = { textContent: name };
+        return {
+            textContent: text,
+            dataset,
+            classList: { contains() { return false; } },
+            getAttribute(name) {
+                if (name === 'data-merchant-index') return dataset.merchantIndex ?? null;
+                if (name === 'data-index') return dataset.index ?? null;
+                if (name === 'data-name') return dataset.name ?? null;
+                return null;
+            },
+            getBoundingClientRect() {
+                return { width: 240, height: 92 };
+            },
+            querySelector(selector) {
+                if (selector.includes('name')) return nameNode;
+                if (selector.includes('button')) return button;
+                return null;
+            },
+            querySelectorAll(selector) {
+                return selector.includes('button') ? [button] : [];
+            }
+        };
+    }
+
+    const cards = [
+        merchantCard({
+            text: '普通灵草\n价格：120灵石\n购买',
+            name: '普通灵草',
+            dataset: { merchantIndex: '0' }
+        }),
+        merchantCard({
+            text: '传说归识丹\n售价 9,999 灵石\n购买',
+            name: '传说归识丹',
+            buttonOnclick: 'buyMerchantItem(2)'
+        })
+    ];
+    const overlay = {
+        classList: { contains() { return false; } },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 480, height: 360 }; },
+        querySelectorAll(selector) {
+            return selector.includes('merchant') || selector.includes('shop') || selector.includes('item')
+                ? cards
+                : [];
+        }
+    };
+    sandbox.getComputedStyle = () => ({ display: 'block', visibility: 'visible', opacity: '1' });
+    sandbox.document.querySelector = selector => selector === '#merchantOverlay' ? overlay : null;
+
+    assert.equal(typeof hooks.extractMerchantItemsFromDom, 'function');
+
+    assert.deepEqual(toPlain(hooks.extractMerchantItemsFromDom()), [
+        { index: 0, name: '普通灵草', price: 120 },
+        { index: 2, name: '传说归识丹', price: 9999 }
+    ]);
+});
+
+test('MerchantAutoBuyer buys highest priced DOM fallback item when API has no merchant items', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        _merchantActive: true,
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: false,
+                            buyDelay: 0
+                        }
+                    });
+                }
+                return null;
+            },
+            setItem() {},
+            removeItem() {}
+        },
+        api: {
+            async get(url) {
+                calls.push(['get', url]);
+                return { code: 200, data: { items: [] } };
+            },
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                return { code: 200 };
+            }
+        },
+        clearMerchantState(options) {
+            calls.push(['clear', options]);
+        },
+        loadGameLogs() {},
+        loadPlayerInfo() {},
+        _tryResumeAutoExploreAfterMerchant() {}
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const cards = [
+        {
+            textContent: '普通灵草\n价格：120灵石\n购买',
+            dataset: { merchantIndex: '0' },
+            classList: { contains() { return false; } },
+            getAttribute(name) {
+                return name === 'data-merchant-index' ? '0' : null;
+            },
+            getBoundingClientRect() { return { width: 240, height: 90 }; },
+            querySelector(selector) {
+                if (selector.includes('name')) return { textContent: '普通灵草' };
+                return null;
+            },
+            querySelectorAll() { return []; }
+        },
+        {
+            textContent: '传说归识丹\n价格：9,999灵石\n购买',
+            dataset: { merchantIndex: '3' },
+            classList: { contains() { return false; } },
+            getAttribute(name) {
+                return name === 'data-merchant-index' ? '3' : null;
+            },
+            getBoundingClientRect() { return { width: 240, height: 90 }; },
+            querySelector(selector) {
+                if (selector.includes('name')) return { textContent: '传说归识丹' };
+                return null;
+            },
+            querySelectorAll() { return []; }
+        }
+    ];
+    const overlay = {
+        classList: { contains() { return false; } },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 480, height: 360 }; },
+        querySelectorAll(selector) {
+            return selector.includes('merchant') || selector.includes('shop') || selector.includes('item')
+                ? cards
+                : [];
+        }
+    };
+    sandbox.getComputedStyle = () => ({ display: 'block', visibility: 'visible', opacity: '1' });
+    sandbox.document.querySelector = selector => selector === '#merchantOverlay' ? overlay : null;
+
+    await hooks.MerchantAutoBuyer.handleMerchant();
+
+    assert.deepEqual(toPlain(calls), [
+        ['get', '/api/game/merchant'],
+        ['post', '/api/game/merchant/buy', { index: 3 }],
+        ['clear', { clearItems: true, resume: true }]
+    ]);
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.reason, 'purchase-triggered');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.item.name, '传说归识丹');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.item.price, 9999);
+});
+
+test('MerchantAutoBuyer leaves merchant when confirmed no purchasable items remain', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        _merchantActive: true,
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: false,
+                            buyDelay: 0,
+                            leaveWhenNoItems: true
+                        }
+                    });
+                }
+                return null;
+            },
+            setItem() {},
+            removeItem() {}
+        },
+        api: {
+            async get(url) {
+                calls.push(['get', url]);
+                return { code: 200, data: { items: [] } };
+            },
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                return { code: 200 };
+            }
+        },
+        clearMerchantState(options) {
+            calls.push(['clear', options]);
+        },
+        loadGameLogs() {
+            calls.push(['logs']);
+        },
+        loadPlayerInfo(force) {
+            calls.push(['player', force]);
+        },
+        _tryResumeAutoExploreAfterMerchant() {
+            calls.push(['resume']);
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    await hooks.MerchantAutoBuyer.handleMerchant();
+
+    assert.deepEqual(toPlain(calls), [
+        ['get', '/api/game/merchant'],
+        ['post', '/api/game/merchant/leave', {}],
+        ['clear', { clearItems: true, resume: true }],
+        ['logs'],
+        ['player', true],
+        ['resume']
+    ]);
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.reason, 'leave-triggered');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.source, 'api');
+});
+
+test('MerchantAutoBuyer does not leave merchant on uncertain API read failures', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        _merchantActive: true,
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: false,
+                            buyDelay: 0,
+                            leaveWhenNoItems: true
+                        }
+                    });
+                }
+                return null;
+            },
+            setItem() {},
+            removeItem() {}
+        },
+        api: {
+            async get(url) {
+                calls.push(['get', url]);
+                throw new Error('temporary merchant read failure');
+            },
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                return { code: 200 };
+            }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    await hooks.MerchantAutoBuyer.handleMerchant();
+
+    assert.deepEqual(toPlain(calls), [
+        ['get', '/api/game/merchant']
+    ]);
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.reason, 'read-failed');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.failureMessage, 'temporary merchant read failure');
+});
+
+test('MerchantAutoBuyer clears stale merchant state when API says merchant is gone', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        _merchantActive: true,
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: false,
+                            buyDelay: 0,
+                            leaveWhenNoItems: true
+                        }
+                    });
+                }
+                return null;
+            },
+            setItem() {},
+            removeItem() {}
+        },
+        api: {
+            async get(url) {
+                calls.push(['get', url]);
+                return { code: 400, message: '没有遇到云游商人' };
+            },
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                return { code: 200 };
+            }
+        },
+        clearMerchantState(options) {
+            calls.push(['clear', options]);
+        },
+        loadGameLogs() {
+            calls.push(['logs']);
+        },
+        loadPlayerInfo(force) {
+            calls.push(['player', force]);
+        },
+        _tryResumeAutoExploreAfterMerchant() {
+            calls.push(['resume']);
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    await hooks.MerchantAutoBuyer.handleMerchant();
+
+    assert.deepEqual(toPlain(calls), [
+        ['get', '/api/game/merchant'],
+        ['clear', { clearItems: true, resume: true }],
+        ['logs'],
+        ['player', true],
+        ['resume']
+    ]);
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.reason, 'stale-cleared');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.triggerReason, 'merchant-missing');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.source, 'api-read');
+});
+
+test('MerchantAutoBuyer leaves a still-active merchant after purchase was triggered', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        _merchantActive: true,
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: false,
+                            buyDelay: 0,
+                            leaveAfterPurchaseStuck: true
+                        }
+                    });
+                }
+                return null;
+            },
+            setItem() {},
+            removeItem() {}
+        },
+        api: {
+            async get(url) {
+                calls.push(['get', url]);
+                return {
+                    code: 200,
+                    data: {
+                        items: [
+                            { index: 1, name: '传说归识丹', price: 9999 }
+                        ]
+                    }
+                };
+            },
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                return { code: 200 };
+            }
+        },
+        clearMerchantState(options) {
+            calls.push(['clear', options]);
+        },
+        loadGameLogs() {
+            calls.push(['logs']);
+        },
+        loadPlayerInfo(force) {
+            calls.push(['player', force]);
+        },
+        _tryResumeAutoExploreAfterMerchant() {
+            calls.push(['resume']);
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const buyer = hooks.MerchantAutoBuyer;
+    buyer.lastAttemptKey = '1:传说归识丹:9999';
+    buyer.lastAttempt = hooks.normalizeMerchantAttempt({
+        shouldAttempt: false,
+        reason: 'purchase-triggered',
+        source: 'api',
+        item: { index: 1, name: '传说归识丹', price: 9999 }
+    });
+
+    await buyer.handleMerchant();
+
+    assert.deepEqual(toPlain(calls), [
+        ['get', '/api/game/merchant'],
+        ['post', '/api/game/merchant/leave', {}],
+        ['clear', { clearItems: true, resume: true }],
+        ['logs'],
+        ['player', true],
+        ['resume']
+    ]);
+    assert.equal(buyer.lastAttempt.reason, 'leave-triggered');
+    assert.equal(buyer.lastAttempt.triggerReason, 'purchase-stuck');
+    assert.equal(buyer.lastAttempt.source, 'api');
+});
+
+test('MerchantAutoBuyer does not leave a stuck post-purchase merchant when disabled', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        _merchantActive: true,
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: false,
+                            buyDelay: 0,
+                            leaveAfterPurchaseStuck: false
+                        }
+                    });
+                }
+                return null;
+            },
+            setItem() {},
+            removeItem() {}
+        },
+        api: {
+            async get(url) {
+                calls.push(['get', url]);
+                return {
+                    code: 200,
+                    data: {
+                        items: [
+                            { index: 1, name: '传说归识丹', price: 9999 }
+                        ]
+                    }
+                };
+            },
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                return { code: 200 };
+            }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const buyer = hooks.MerchantAutoBuyer;
+    buyer.lastAttemptKey = '1:传说归识丹:9999';
+    buyer.lastAttempt = hooks.normalizeMerchantAttempt({
+        shouldAttempt: false,
+        reason: 'purchase-triggered',
+        source: 'api',
+        item: { index: 1, name: '传说归识丹', price: 9999 }
+    });
+
+    await buyer.handleMerchant();
+
+    assert.deepEqual(toPlain(calls), [
+        ['get', '/api/game/merchant']
+    ]);
+    assert.equal(buyer.lastAttempt.reason, 'purchase-triggered');
+});
+
+test('MerchantAutoBuyer leaves merchant after explicit insufficient funds purchase failures', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        _merchantActive: true,
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: false,
+                            buyDelay: 0,
+                            leaveOnInsufficientFunds: true
+                        }
+                    });
+                }
+                return null;
+            },
+            setItem() {},
+            removeItem() {}
+        },
+        api: {
+            async get(url) {
+                calls.push(['get', url]);
+                return {
+                    code: 200,
+                    data: {
+                        items: [
+                            { index: 1, name: '传说归识丹', price: 9999 }
+                        ]
+                    }
+                };
+            },
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                if (url === '/api/game/merchant/buy') {
+                    return { code: 400, message: '灵石不足，无法购买' };
+                }
+                return { code: 200 };
+            }
+        },
+        clearMerchantState(options) {
+            calls.push(['clear', options]);
+        },
+        loadGameLogs() {
+            calls.push(['logs']);
+        },
+        loadPlayerInfo(force) {
+            calls.push(['player', force]);
+        },
+        _tryResumeAutoExploreAfterMerchant() {
+            calls.push(['resume']);
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.detectMerchantInsufficientFundsNotice, 'function');
+    assert.equal(hooks.detectMerchantInsufficientFundsNotice('灵石不足，无法购买'), true);
+
+    await hooks.MerchantAutoBuyer.handleMerchant();
+
+    assert.deepEqual(toPlain(calls), [
+        ['get', '/api/game/merchant'],
+        ['post', '/api/game/merchant/buy', { index: 1 }],
+        ['post', '/api/game/merchant/leave', {}],
+        ['clear', { clearItems: true, resume: true }],
+        ['logs'],
+        ['player', true],
+        ['resume']
+    ]);
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.reason, 'leave-triggered');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.triggerReason, 'insufficient-funds');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.source, 'api');
+});
+
+test('MerchantAutoBuyer keeps merchant open after insufficient funds when auto leave is disabled', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        _merchantActive: true,
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: false,
+                            buyDelay: 0,
+                            leaveOnInsufficientFunds: false
+                        }
+                    });
+                }
+                return null;
+            },
+            setItem() {},
+            removeItem() {}
+        },
+        api: {
+            async get(url) {
+                calls.push(['get', url]);
+                return {
+                    code: 200,
+                    data: {
+                        items: [
+                            { index: 1, name: '传说归识丹', price: 9999 }
+                        ]
+                    }
+                };
+            },
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                return { code: 400, message: '余额不足' };
+            }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    await hooks.MerchantAutoBuyer.handleMerchant();
+
+    assert.deepEqual(toPlain(calls), [
+        ['get', '/api/game/merchant'],
+        ['post', '/api/game/merchant/buy', { index: 1 }]
+    ]);
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.reason, 'purchase-failed');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.triggerReason, 'insufficient-funds');
+});
+
 test('merchant automation context includes the AFK loop without manual shopping', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -128,6 +713,253 @@ test('merchant auto-only panel label mentions AFK loop context', () => {
 
     assert.equal(source.includes('仅自动探索/挂机循环时处理'), true);
     assert.equal(source.includes('仅自动探索挂起时处理'), false);
+    assert.equal(source.includes('无可买商品时自动离开'), true);
+    assert.equal(source.includes('购买后窗口未关闭时自动离开'), true);
+    assert.equal(source.includes('灵石不足时自动离开'), true);
+    assert.equal(source.includes('复制最近卡点'), true);
+    assert.equal(source.includes('复制卡点历史'), true);
+    assert.equal(source.includes('copyLastIssueSnapshot'), true);
+    assert.equal(source.includes('copyIssueHistory'), true);
+});
+
+test('UI panel control hooks expose and toggle the helper panel without game actions', () => {
+    const panel = {
+        style: { display: 'none' },
+        offsetWidth: 0,
+        offsetHeight: 0,
+        getClientRects() { return []; }
+    };
+    const content = {
+        style: { display: 'flex' }
+    };
+    const sidebarButton = {
+        style: {},
+        textContent: '打开面板'
+    };
+    const sandbox = loadUserScript({
+        document: {
+            readyState: 'loading',
+            documentElement: {
+                dataset: {
+                    lingverseAutoMapExtensionVersion: '2.99.0',
+                    lingverseAutoMapInjectedVersion: '2.99.0'
+                },
+                classList: { contains() { return false; } }
+            },
+            addEventListener() {},
+            querySelector(selector) {
+                if (selector === '#am-panel') return panel;
+                if (selector === '#am-content') return content;
+                if (selector === '#am-sidebar-btn') return sidebarButton;
+                return null;
+            },
+            querySelectorAll() { return []; },
+            createElement() { return createElementStub(); },
+            body: { appendChild() {} },
+            head: { appendChild() {} }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.showPanel, 'function');
+    assert.equal(typeof hooks.hidePanel, 'function');
+    assert.equal(typeof hooks.getPanelState, 'function');
+
+    assert.deepEqual(toPlain(hooks.getPanelState()), {
+        exists: true,
+        display: 'none',
+        visible: false,
+        minimized: false,
+        helperVersion: hooks.SCRIPT_VERSION,
+        initializedVersion: '',
+        extensionVersion: '2.99.0',
+        injectedVersion: '2.99.0',
+        afkEnabled: false,
+        merchantEnabled: true,
+        sidebarButtonExists: true
+    });
+
+    assert.equal(hooks.showPanel().visible, true);
+    assert.equal(panel.style.display, 'flex');
+    assert.equal(hooks.hidePanel().visible, false);
+    assert.equal(panel.style.display, 'none');
+});
+
+test('MerchantAutoBuyer refreshes page state after page-function purchases', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        async buyMerchantItem(index) {
+            calls.push(['buy', index]);
+        },
+        clearMerchantState(options) {
+            calls.push(['clear', options]);
+        },
+        loadGameLogs() {
+            calls.push(['logs']);
+        },
+        loadPlayerInfo(force) {
+            calls.push(['player', force]);
+        },
+        _tryResumeAutoExploreAfterMerchant() {
+            calls.push(['resume']);
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.MerchantAutoBuyer?.buySelected, 'function');
+
+    await hooks.MerchantAutoBuyer.buySelected({
+        index: 3,
+        name: '传说归识丹',
+        price: 9999
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['buy', 3],
+        ['clear', { clearItems: true, resume: true }],
+        ['logs'],
+        ['player', true],
+        ['resume']
+    ]);
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.reason, 'purchase-triggered');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.source, 'page-function');
+});
+
+test('MerchantAutoBuyer prefers API purchases over page functions to observe failures', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        async buyMerchantItem(index) {
+            calls.push(['page-buy', index]);
+        },
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: false,
+                            buyDelay: 0,
+                            leaveOnInsufficientFunds: true
+                        }
+                    });
+                }
+                return null;
+            },
+            setItem() {},
+            removeItem() {}
+        },
+        api: {
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                if (url === '/api/game/merchant/buy') {
+                    return { code: 400, message: '灵石不足，无法购买' };
+                }
+                return { code: 200 };
+            }
+        },
+        clearMerchantState(options) {
+            calls.push(['clear', options]);
+        },
+        loadGameLogs() {
+            calls.push(['logs']);
+        },
+        loadPlayerInfo(force) {
+            calls.push(['player', force]);
+        },
+        _tryResumeAutoExploreAfterMerchant() {
+            calls.push(['resume']);
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    await hooks.MerchantAutoBuyer.buySelected({
+        index: 2,
+        name: '传说归识丹',
+        price: 9999
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['post', '/api/game/merchant/buy', { index: 2 }],
+        ['post', '/api/game/merchant/leave', {}],
+        ['clear', { clearItems: true, resume: true }],
+        ['logs'],
+        ['player', true],
+        ['resume']
+    ]);
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.reason, 'leave-triggered');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.triggerReason, 'insufficient-funds');
+    assert.equal(hooks.MerchantAutoBuyer.lastAttempt.source, 'api');
+});
+
+test('MerchantAutoBuyer opens the AFK interaction resume window after purchases', async () => {
+    const sandbox = loadUserScript({
+        async buyMerchantItem() {},
+        clearMerchantState() {},
+        loadGameLogs() {},
+        loadPlayerInfo() {},
+        _tryResumeAutoExploreAfterMerchant() {}
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const buyer = hooks.MerchantAutoBuyer;
+    const manager = hooks.AfkLoopManager;
+
+    assert.equal(typeof buyer?.buySelected, 'function');
+    assert.equal(typeof manager, 'object');
+
+    manager.postInteractionResumeUntil = 0;
+    manager.lastDecisionKey = 'wait:merchant-active';
+    const before = Date.now();
+
+    await buyer.buySelected({
+        index: 1,
+        name: '传说归识丹',
+        price: 9999
+    });
+
+    assert.equal(buyer.lastAttempt.reason, 'purchase-triggered');
+    assert.equal(manager.postInteractionResumeUntil >= before + 59_000, true);
+    assert.equal(manager.lastDecisionKey, '');
+});
+
+test('AfkLoopManager schedules post-interaction ticks only while AFK is enabled', () => {
+    const scheduled = [];
+    const sandbox = loadUserScript({
+        setTimeout(fn, delay) {
+            scheduled.push({ fn, delay });
+            return scheduled.length;
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const ticks = [];
+    let refreshes = 0;
+    const manager = {
+        postInteractionResumeUntil: 0,
+        lastDecisionKey: 'wait:encounter-active',
+        refreshGameData() { refreshes += 1; },
+        tick(force) { ticks.push(force); }
+    };
+
+    const beforeDisabled = Date.now();
+    hooks.AfkLoopManager.schedulePostInteractionResume.call(manager, {
+        enabled: false,
+        resumeWindowSeconds: 60
+    });
+
+    assert.equal(manager.postInteractionResumeUntil >= beforeDisabled + 59_000, true);
+    assert.equal(manager.lastDecisionKey, '');
+    assert.equal(refreshes, 1);
+    assert.equal(scheduled.length, 0);
+
+    hooks.AfkLoopManager.schedulePostInteractionResume.call(manager, {
+        enabled: true,
+        resumeWindowSeconds: 60
+    });
+
+    assert.equal(refreshes, 2);
+    assert.equal(scheduled.length, 1);
+    assert.equal(scheduled[0].delay, 1200);
+    scheduled[0].fn();
+    assert.deepEqual(ticks, [true]);
 });
 
 test('resolveApiObject falls back to page eval for non-window api globals', () => {
@@ -442,6 +1274,44 @@ test('startAutoExplore fails when page does not enter auto explore state', async
     assert.equal(manager.lastExploreProgressAt, 0);
 });
 
+test('startAutoExplore records resource shortage failures for meditation recovery', async () => {
+    const sandbox = loadUserScript({
+        _autoExploreRunning: false,
+        _autoResumeExplorePending: false,
+        toggleAutoExplore() {
+            throw new Error('体力不足，无法继续自动探索');
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const toggle = { checked: false };
+    sandbox.document.querySelector = selector => {
+        if (selector === '#autoExploreToggle') return toggle;
+        return null;
+    };
+    const manager = {
+        lastExploreStartAttempt: null,
+        lastExploreProgressAt: 0,
+        async maybeUseNirvanaRebirthPill() {},
+        setExploreMultiplier() {},
+        readExploreMultiplier() {
+            return 50;
+        },
+        readAutoExploreStartState: hooks.AfkLoopManager.readAutoExploreStartState,
+        refreshGameData() {}
+    };
+
+    await hooks.AfkLoopManager.startAutoExplore.call(manager, 50, {
+        useNirvanaPill: false
+    });
+
+    assert.equal(manager.lastExploreStartAttempt.reason, 'resource-shortage');
+    assert.equal(manager.lastExploreStartAttempt.resourceShortage, true);
+    assert.equal(manager.lastExploreStartAttempt.source, 'toggle');
+    assert.equal(manager.lastExploreStartAttempt.failureMessage, '体力不足，无法继续自动探索');
+    assert.equal(manager.exploreStartResourceShortageUntil > Date.now(), true);
+    assert.equal(manager.lastExploreProgressAt, 0);
+});
+
 test('decideAfkNextAction returns to meditation when auto explore is running with low spirit', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -476,6 +1346,28 @@ test('decideAfkNextAction returns to meditation when auto explore is running wit
     }, 1_000_000)), {
         action: 'startMeditation',
         reason: 'auto-explore-low-spirit'
+    });
+});
+
+test('decideAfkNextAction returns to meditation after explore start resource shortage', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction({
+        isMeditating: false,
+        spirit: 200,
+        maxSpirit: 2758,
+        spiritCost: 10,
+        canExplore: true,
+        exploreStartResourceShortage: true
+    }, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        exploreMultiplier: 1
+    }, 1_000_000)), {
+        action: 'startMeditation',
+        reason: 'explore-start-no-spirit'
     });
 });
 
@@ -609,6 +1501,62 @@ test('AfkLoopManager refreshes explore progress when recent game log changes', a
     assert.match(manager.lastExploreLogSignature, /探索双收获事件/);
 });
 
+test('AfkLoopManager ignores non-log page text when checking explore progress', async () => {
+    const sandbox = loadUserScript({
+        _autoExploreRunning: true,
+        _autoResumeExplorePending: false,
+        _autoExploreCount: 7,
+        _lastPlayerData: {
+            spirit: 977,
+            maxSpirit: 2756,
+            spiritCost: 10,
+            canExplore: true,
+            isMeditating: false,
+            isDead: false
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const now = 1_000_000;
+    const toggle = { checked: true };
+    const logContent = {
+        innerText: [
+            '旧日志',
+            '探索修为事件: 在北荒前哨感悟大道，获得 888 修为。'
+        ].join('\n')
+    };
+    const oldSignature = hooks.getExploreProgressLogSignature(logContent.innerText);
+    sandbox.document.body = {
+        innerText: [
+            '聊天',
+            '[收入] 探索宝地: 999 灵石',
+            '探索双收获事件: 这只是非日志区域文字'
+        ].join('\n')
+    };
+    sandbox.document.querySelector = selector => {
+        if (selector === '#autoExploreToggle') return toggle;
+        if (selector === '#logContent') return logContent;
+        return null;
+    };
+    const manager = {
+        lastAutoExploreCount: 7,
+        lastExploreProgressAt: now - 120_000,
+        lastExploreLogSignature: oldSignature,
+        postReviveResumeUntil: 0,
+        postInteractionResumeUntil: 0,
+        postMeditationResumeUntil: 0,
+        getResourceUsage() { return {}; },
+        recordAdventureSample() {}
+    };
+
+    const snapshot = await hooks.AfkLoopManager.buildSnapshot.call(manager, now, {
+        stallTimeoutSeconds: 90
+    });
+
+    assert.equal(manager.lastExploreProgressAt, now - 120_000);
+    assert.equal(manager.lastExploreLogSignature, oldSignature);
+    assert.equal(snapshot.exploreStalled, true);
+});
+
 test('AfkLoopManager refreshes player info instead of trusting stale cache', async () => {
     const apiCalls = [];
     const sandbox = loadUserScript({
@@ -665,6 +1613,99 @@ test('AfkLoopManager refreshes player info instead of trusting stale cache', asy
     assert.equal(apiCalls.includes('/api/player/info'), true);
     assert.equal(snapshot.spirit, 7);
     assert.equal(snapshot.maxSpirit, 2756);
+});
+
+test('AfkLoopManager detects stale auto-explore toggle and restarts exploration', async () => {
+    const sandbox = loadUserScript({
+        _autoExploreRunning: false,
+        _autoResumeExplorePending: false,
+        _autoExploreCount: 9,
+        _lastPlayerData: {
+            spirit: 900,
+            maxSpirit: 2756,
+            spiritCost: 10,
+            canExplore: true,
+            isMeditating: false,
+            isDead: false
+        },
+        api: {
+            async get(url) {
+                if (url === '/api/player/info') {
+                    return {
+                        code: 200,
+                        data: {
+                            spirit: 900,
+                            maxSpirit: 2756,
+                            spiritCost: 10,
+                            canExplore: true,
+                            isMeditating: false,
+                            isDead: false
+                        }
+                    };
+                }
+                if (url === '/api/game/meditate/status') {
+                    return { code: 200, data: { isMeditating: false } };
+                }
+                return { code: 200, data: {} };
+            }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const toggle = { checked: true };
+    sandbox.document.querySelector = selector => {
+        if (selector === '#autoExploreToggle') return toggle;
+        return null;
+    };
+    const manager = {
+        lastAutoExploreCount: 9,
+        lastExploreProgressAt: 1_000_000 - 30_000,
+        lastExploreLogSignature: '',
+        postReviveResumeUntil: 0,
+        postInteractionResumeUntil: 0,
+        postMeditationResumeUntil: 0,
+        getResourceUsage() { return {}; },
+        recordAdventureSample() {}
+    };
+
+    const snapshot = await hooks.AfkLoopManager.buildSnapshot.call(manager, 1_000_000, {
+        enabled: true,
+        minSpirit: 20,
+        exploreMultiplier: 50,
+        stallTimeoutSeconds: 90
+    });
+
+    assert.equal(snapshot.autoExploreToggleChecked, true);
+    assert.equal(snapshot.autoExploreRunning, false);
+    assert.equal(snapshot.autoExplorePending, false);
+    assert.equal(snapshot.autoExploreToggleStale, true);
+    assert.equal(snapshot.exploreStalled, false);
+
+    assert.deepEqual(toPlain(hooks.decideAfkNextAction(snapshot, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        exploreMultiplier: 50
+    }, 1_000_000)), {
+        action: 'startAutoExplore',
+        reason: 'auto-explore-toggle-stale'
+    });
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot(snapshot, {
+        enabled: true,
+        minSpirit: 20,
+        meditationMinutes: 140,
+        exploreMultiplier: 50
+    }, {
+        action: 'startAutoExplore',
+        reason: 'auto-explore-toggle-stale'
+    }, {
+        capturedAt: '2026-06-09T06:40:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(summary.automation.autoExploreToggleStale, true);
+    assert.equal(report.lines.includes('探索: 开关失配'), true);
+    assert.equal(report.headline, '挂机状态 · 启动探索 · 自动探索开关失配');
 });
 
 test('readAfkResourceDomFallback parses visible spirit and explore cost without actions', () => {
@@ -1243,6 +2284,57 @@ test('resolveEncounterFightAttempt blocks auto fight when all selected talismans
     })).reason, 'fight-ready');
 });
 
+test('fightEncounter prefers API fight result over clicking the fight button', async () => {
+    const calls = [];
+    const fightButton = {
+        disabled: false,
+        click() {
+            calls.push(['button-click']);
+        }
+    };
+    const sandbox = loadUserScript({
+        api: {
+            async post(url, body) {
+                calls.push(['post', url, body]);
+                return { code: 400, message: '战斗状态已变化 token=fight-secret' };
+            }
+        },
+        async handleCombatChoice(choice) {
+            calls.push(['page-function', choice]);
+        }
+    });
+    sandbox.document.querySelector = selector => selector === '#encounterFightBtn' ? fightButton : null;
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const manager = {
+        lastFightEncounterKey: '',
+        lastFightAttempt: null,
+        lastTalismanAttempt: null,
+        schedulePostInteractionResume() {
+            calls.push(['resume']);
+        },
+        refreshGameData() {
+            calls.push(['refresh']);
+        }
+    };
+
+    await hooks.AfkLoopManager.fightEncounter.call(manager, {
+        autoFight: true
+    }, {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['post', '/api/game/combat-choice', { choice: 'fight' }]
+    ]);
+    assert.equal(manager.lastFightAttempt.reason, 'fight-failed');
+    assert.equal(manager.lastFightAttempt.source, 'api');
+    assert.equal(manager.lastFightAttempt.failureMessage, '战斗状态已变化 token=fight-secret');
+    assert.equal(manager.lastFightEncounterKey, '');
+});
+
 test('getCurrentGuardianConfig prefers page auto-hire settings', () => {
     const sandbox = loadUserScript({
         getAutoHireConfig() {
@@ -1266,6 +2358,60 @@ test('getCurrentGuardianConfig prefers page auto-hire settings', () => {
         priorityKey: 'normal,incarnation,body',
         threatLevel: 'danger'
     });
+});
+
+test('tryHireEncounterGuardian prefers page auto-hire result over clicking the hire button', async () => {
+    const calls = [];
+    const hireButton = {
+        disabled: false,
+        click() {
+            calls.push(['button-click']);
+        }
+    };
+    const sandbox = loadUserScript({
+        getAutoHireConfig() {
+            return {
+                enabled: true,
+                mode: 'alone',
+                maxFee: 51,
+                priorityKey: 'normal,incarnation,body',
+                priority: ['normal', 'incarnation', 'body']
+            };
+        },
+        async tryAutoHireProtectorForEncounter(options) {
+            calls.push(['page-function', options]);
+            sandbox._lastAutoHireProtectorFailure = '没有符合条件的护道者';
+            return null;
+        }
+    });
+    sandbox.document.querySelector = selector => selector === '#encounterHireProtectorBtn' ? hireButton : null;
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const manager = {
+        lastGuardianEncounterKey: '',
+        lastGuardianAttempt: null,
+        schedulePostInteractionResume() {
+            calls.push(['resume']);
+        }
+    };
+
+    const handled = await hooks.AfkLoopManager.tryHireEncounterGuardian.call(manager, {
+        autoHireGuardian: true,
+        exploreMultiplier: 1
+    }, {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7
+    });
+
+    assert.equal(handled, false);
+    assert.deepEqual(toPlain(calls), [
+        ['page-function', { silent: false }]
+    ]);
+    assert.equal(manager.lastGuardianAttempt.reason, 'hire-failed');
+    assert.equal(manager.lastGuardianAttempt.failureMessage, '没有符合条件的护道者');
+    assert.equal(manager.lastGuardianAttempt.hireTriggered, false);
+    assert.equal(manager.lastGuardianEncounterKey, 'monster:port_bandit:3:7');
 });
 
 test('selectNirvanaRebirthPill only selects configured five-root rebirth pills', () => {
@@ -1363,6 +2509,86 @@ test('resolveNirvanaRebirthPillAttempt explains rich-mode pill use decisions', (
         activeBuffGrade: null,
         activeBuffExpire: null
     });
+});
+
+test('maybeUseNirvanaRebirthPill records failure when the five-root buff is not confirmed', async () => {
+    const calls = [];
+    const inventory = [
+        { id: 3, templateId: 'bp_pill_rebirth_4', name: '史诗涅槃重生丹', type: 'pill', rarity: 4, quantity: 1 }
+    ];
+    const sandbox = loadUserScript({
+        _lastPlayerData: {
+            spirit: 1200,
+            maxSpirit: 2756,
+            fiveRootBuffGrade: 0,
+            fiveRootBuffExpire: 0
+        },
+        api: {
+            async get(pathname) {
+                calls.push(['get', pathname]);
+                if (pathname === '/api/game/inventory') {
+                    return { code: 200, data: { items: inventory } };
+                }
+                if (pathname === '/api/player/info') {
+                    return {
+                        code: 200,
+                        data: {
+                            spirit: 1200,
+                            maxSpirit: 2756,
+                            fiveRootBuffGrade: 0,
+                            fiveRootBuffExpire: 0
+                        }
+                    };
+                }
+                return { code: 404, message: 'missing' };
+            },
+            async post(pathname, body) {
+                calls.push(['post', pathname, body]);
+                return { code: 200, message: 'ok' };
+            }
+        }
+    });
+    sandbox.setTimeout = (fn) => {
+        fn();
+        return 1;
+    };
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const manager = {
+        lastNirvanaPillAttempt: null,
+        resourceUsage: { nirvanaPills: 0 },
+        getResourceUsage() {
+            return this.resourceUsage;
+        },
+        incrementResourceUsage(kind) {
+            calls.push(['increment', kind]);
+            this.resourceUsage[kind] = (this.resourceUsage[kind] || 0) + 1;
+        },
+        confirmNirvanaPillUsed: hooks.AfkLoopManager.confirmNirvanaPillUsed,
+        readPlayerInfoForConfirmation: hooks.AfkLoopManager.readPlayerInfoForConfirmation,
+        refreshGameData() {
+            calls.push(['refresh']);
+        }
+    };
+
+    await hooks.AfkLoopManager.maybeUseNirvanaRebirthPill.call(manager, {
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4,
+        queueNirvanaPill: false,
+        nirvanaMaxPerRun: 0
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['get', '/api/game/inventory'],
+        ['post', '/api/game/use-item', { itemId: 3 }],
+        ['refresh'],
+        ['get', '/api/player/info'],
+        ['refresh'],
+        ['get', '/api/player/info']
+    ]);
+    assert.equal(manager.lastNirvanaPillAttempt.reason, 'use-not-confirmed');
+    assert.equal(manager.lastNirvanaPillAttempt.failureMessage, '涅槃重生丹入口已调用但未检测到五行通灵效果');
+    assert.equal(manager.resourceUsage.nirvanaPills, 0);
+    assert.equal(sandbox._lastPlayerData.fiveRootBuffGrade, 0);
 });
 
 test('buildAfkResourcePreflight reports rich-mode inventory readiness', () => {
@@ -1549,6 +2775,18 @@ test('classifyExploreInterruption categorizes auto-explore stopping events', () 
         action: 'meditate',
         reason: 'no-spirit'
     });
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption({ status: 'error', message: '体力不足，无法继续自动探索' })), {
+        kind: 'noSpirit',
+        action: 'meditate',
+        reason: 'no-spirit'
+    });
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption({ status: 'error', message: '探索接口异常，请稍后再试' })), {
+        kind: 'error',
+        action: 'pause',
+        reason: 'explore-error'
+    });
 });
 
 test('decideAfkNextAction resumes exploration after revive or interaction windows', () => {
@@ -1713,6 +2951,162 @@ test('decideAfkNextAction handles player encounters only when auto decline is en
         action: 'handlePlayerEncounter',
         reason: 'player-encounter-auto-decline'
     });
+});
+
+test('handlePlayerEncounter ignores hidden player encounter modules and uses the visible invite', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        PvpModule: {
+            dismissEncounter() {
+                calls.push(['pvp-dismiss']);
+            }
+        },
+        EncounterModule: {
+            async respondInvite(accepted) {
+                calls.push(['invite', accepted]);
+            }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const hiddenPvpModal = {
+        classList: { contains(name) { return name === 'hidden'; } },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 320, height: 180 }; },
+        querySelectorAll() { return []; }
+    };
+    const visibleInviteModal = {
+        classList: { contains() { return false; } },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 320, height: 180 }; },
+        querySelectorAll() { return []; }
+    };
+    sandbox.getComputedStyle = el => el === hiddenPvpModal
+        ? { display: 'block', visibility: 'visible', opacity: '1' }
+        : { display: 'block', visibility: 'visible', opacity: '1' };
+    sandbox.document.querySelector = selector => {
+        if (selector === '#pvpEncounterModal') return hiddenPvpModal;
+        if (selector === '#encounterInviteModal') return visibleInviteModal;
+        return null;
+    };
+    const manager = {
+        lastPlayerEncounterAttempt: null,
+        schedulePostInteractionResume(cfg) {
+            calls.push(['resume', !!cfg.enabled]);
+        }
+    };
+
+    assert.equal(typeof hooks.AfkLoopManager?.handlePlayerEncounter, 'function');
+
+    await hooks.AfkLoopManager.handlePlayerEncounter.call(manager, {
+        enabled: true,
+        autoDeclinePlayerEncounter: true,
+        resumeWindowSeconds: 60
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['invite', false],
+        ['resume', true]
+    ]);
+    assert.equal(manager.lastPlayerEncounterAttempt.reason, 'decline-triggered');
+    assert.equal(manager.lastPlayerEncounterAttempt.source, 'invite-decline');
+});
+
+test('handlePlayerEncounter records failure when decline does not close the encounter', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        EncounterModule: {
+            async respondInvite(accepted) {
+                calls.push(['invite', accepted]);
+            }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const visibleInviteModal = {
+        classList: { contains() { return false; } },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 320, height: 180 }; },
+        querySelectorAll() { return []; }
+    };
+    sandbox.getComputedStyle = () => ({ display: 'block', visibility: 'visible', opacity: '1' });
+    sandbox.document.querySelector = selector => selector === '#encounterInviteModal' ? visibleInviteModal : null;
+    const manager = {
+        lastPlayerEncounterAttempt: null,
+        confirmPlayerEncounterClosed: async (source) => {
+            calls.push(['confirm', source]);
+            return {
+                ok: false,
+                reason: 'still-active',
+                failureMessage: '陌生道友弹窗仍未关闭'
+            };
+        },
+        schedulePostInteractionResume(cfg) {
+            calls.push(['resume', !!cfg.enabled]);
+        }
+    };
+
+    await hooks.AfkLoopManager.handlePlayerEncounter.call(manager, {
+        enabled: true,
+        autoDeclinePlayerEncounter: true,
+        resumeWindowSeconds: 60
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['invite', false],
+        ['confirm', 'invite-decline']
+    ]);
+    assert.deepEqual(toPlain(manager.lastPlayerEncounterAttempt), {
+        shouldAttempt: true,
+        reason: 'decline-failed',
+        source: 'invite-decline',
+        failureMessage: '陌生道友弹窗仍未关闭'
+    });
+});
+
+test('clickPlayerEncounterDeclineButton ignores hidden encounter containers', () => {
+    const clicked = [];
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const hiddenButton = {
+        disabled: false,
+        textContent: '离开',
+        click() {
+            clicked.push('hidden');
+        }
+    };
+    const visibleButton = {
+        disabled: false,
+        textContent: '离开',
+        click() {
+            clicked.push('visible');
+        }
+    };
+    const hiddenContainer = {
+        classList: { contains(name) { return name === 'hidden'; } },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 320, height: 180 }; },
+        querySelectorAll(selector) {
+            return selector === 'button' ? [hiddenButton] : [];
+        }
+    };
+    const visibleContainer = {
+        classList: { contains() { return false; } },
+        getAttribute() { return null; },
+        getBoundingClientRect() { return { width: 320, height: 180 }; },
+        querySelectorAll(selector) {
+            return selector === 'button' ? [visibleButton] : [];
+        }
+    };
+    sandbox.getComputedStyle = () => ({ display: 'block', visibility: 'visible', opacity: '1' });
+    sandbox.document.querySelector = selector => {
+        if (selector === '#pvpEncounterModal') return hiddenContainer;
+        if (selector === '#encounterInviteModal') return visibleContainer;
+        return null;
+    };
+
+    assert.equal(typeof hooks.AfkLoopManager?.clickPlayerEncounterDeclineButton, 'function');
+
+    assert.equal(hooks.AfkLoopManager.clickPlayerEncounterDeclineButton(), true);
+    assert.deepEqual(clicked, ['visible']);
 });
 
 test('classifyExploreInterruption can opt into fixed adventure choices', () => {
@@ -2045,6 +3439,7 @@ test('buildAfkDebugSnapshot captures blockers, adventure choices, decision, and 
         adventureActive: true,
         adventureId: 456,
         adventureComplete: false,
+        heavenlyBanActive: false,
         immortalPrisonActive: false
     });
     assert.deepEqual(snapshot.adventure, {
@@ -2616,6 +4011,55 @@ test('applyAfkPreset configures steady, guardian, and rich AFK modes without ena
     });
 });
 
+test('applyAfkAutomationPreset includes safe merchant automation defaults', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.applyAfkAutomationPreset, 'function');
+
+    const previousMerchant = {
+        enabled: false,
+        onlyAutoExplore: false,
+        buyDelay: 2500,
+        leaveWhenNoItems: false,
+        leaveAfterPurchaseStuck: false,
+        leaveOnInsufficientFunds: false
+    };
+
+    const pack = hooks.applyAfkAutomationPreset({
+        afkLoop: {
+            enabled: false,
+            meditationMinutes: 60,
+            exploreMultiplier: 20,
+            autoFight: true
+        },
+        merchant: previousMerchant
+    }, 'rich');
+
+    assert.equal(pack.schema, 'lingverse-afk-automation-preset/v1');
+    assert.deepEqual(toPlain(pack.merchant), {
+        enabled: true,
+        onlyAutoExplore: true,
+        buyDelay: 800,
+        leaveWhenNoItems: true,
+        leaveAfterPurchaseStuck: true,
+        leaveOnInsufficientFunds: true
+    });
+    assert.equal(pack.afkLoop.exploreMultiplier, 50);
+    assert.equal(pack.afkLoop.autoFight, true);
+    assert.equal(pack.afkLoop.useTalismans, true);
+    assert.equal(pack.afkLoop.useNirvanaPill, true);
+    assert.equal(pack.afkLoop.enabled, false);
+
+    const steady = hooks.applyAfkAutomationPreset({
+        afkLoop: { enabled: false },
+        merchant: previousMerchant
+    }, 'steady');
+    assert.equal(steady.afkLoop.exploreMultiplier, 1);
+    assert.equal(steady.afkLoop.autoFight, false);
+    assert.deepEqual(toPlain(steady.merchant), toPlain(pack.merchant));
+});
+
 test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -2675,6 +4119,83 @@ test('buildAfkPresetStatus identifies AFK preset matches and drift', () => {
         }
     });
     assert.equal(report.lines.includes('模式: 自定义 · 接近富裕50倍 · 偏离1项: 自动复活应开启'), true);
+});
+
+test('buildAfkPresetStatus includes merchant preset drift in status reports', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const richAfk = hooks.applyAfkPreset({ enabled: false }, 'rich');
+    const merchantOff = {
+        enabled: false,
+        onlyAutoExplore: true,
+        buyDelay: 800,
+        leaveWhenNoItems: true,
+        leaveAfterPurchaseStuck: true,
+        leaveOnInsufficientFunds: true
+    };
+
+    const status = hooks.buildAfkPresetStatus(richAfk, merchantOff);
+    assert.equal(status.match, false);
+    assert.equal(status.closestPreset, 'rich');
+    assert.equal(status.mismatchTexts.includes('自动商人应开启'), true);
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 2600,
+        maxSpirit: 2758,
+        spiritCost: 10,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, richAfk, {
+        action: 'startAutoExplore',
+        reason: 'spirit-ready'
+    }, {
+        capturedAt: '2026-06-09T05:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        merchantConfig: merchantOff
+    })));
+
+    assert.deepEqual(toPlain(summary.config.merchant), merchantOff);
+    assert.equal(summary.config.presetStatus.match, false);
+    assert.equal(summary.config.presetStatus.mismatchTexts.includes('自动商人应开启'), true);
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('模式: 自定义 · 接近富裕50倍 · 偏离1项: 自动商人应开启'), true);
+});
+
+test('buildAfkStatusReport surfaces current merchant automation config', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const config = hooks.applyAfkPreset({ enabled: false }, 'rich');
+    const merchantConfig = {
+        enabled: true,
+        onlyAutoExplore: true,
+        buyDelay: 800,
+        leaveWhenNoItems: true,
+        leaveAfterPurchaseStuck: true,
+        leaveOnInsufficientFunds: true
+    };
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 2600,
+        maxSpirit: 2758,
+        spiritCost: 10,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, config, {
+        action: 'startAutoExplore',
+        reason: 'spirit-ready'
+    }, {
+        capturedAt: '2026-06-09T05:10:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        merchantConfig
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('商人配置: 开启 · 仅自动探索/挂机循环 · 延迟800ms · 无商品离开 · 购买后卡窗离开 · 灵石不足离开'), true);
 });
 
 test('getResumeWindowMs converts configured resume windows to milliseconds', () => {
@@ -3026,6 +4547,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '阻塞: 死亡/奇遇#456',
             '阶段: 阻塞 · 复活次数已到本轮上限',
             '探索: 停止',
+            '探索续航: 当前3识 · 50倍需200识/组 · 可跑0组 · 约0次1倍探索 · 不足当前倍率',
             '配置: 冥想140分钟 · 神识<20 · 50倍',
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
@@ -3051,6 +4573,7 @@ test('buildAfkStatusReport formats copied summaries for testers', () => {
             '阻塞: 死亡/奇遇#456',
             '阶段: 阻塞 · 复活次数已到本轮上限',
             '探索: 停止',
+            '探索续航: 当前3识 · 50倍需200识/组 · 可跑0组 · 约0次1倍探索 · 不足当前倍率',
             '配置: 冥想140分钟 · 神识<20 · 50倍',
             '资源: 复活 1/1 · 用符 2/3 · 用丹 1/1',
             '风险: 富裕战斗模式 · 风险开关 6/7 · 警告 1',
@@ -3638,9 +5161,106 @@ test('buildAfkStatusReport explains talisman dialog close failures', () => {
 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('用符: 已完成战斗用符 · 成功1/1类 · ancient · 符窗未关闭 · close failed token=<redacted>'), true);
-    assert.equal(report.lines.includes('用符建议: 符箓面板未关闭 · 先关闭符箓面板再自动/手动迎战，并复制摘要排查关闭入口'), true);
+    assert.equal(report.lines.includes('用符建议: 符箓面板未关闭 · 将尝试关闭残留符窗后再迎战，若持续失败请手动处理并复制摘要'), true);
     assert.equal(report.lines.includes('迎战: 符箓面板未关闭'), true);
-    assert.equal(report.lines.includes('迎战建议: 符箓面板未关闭 · 先关闭符箓面板再自动/手动迎战，并复制摘要排查关闭入口'), true);
+    assert.equal(report.lines.includes('迎战建议: 符箓面板未关闭 · 将尝试关闭残留符窗后再迎战，若持续失败请手动处理并复制摘要'), true);
+});
+
+test('resolveCombatTalismanDialogCloseAttempt retries stuck talisman dialogs for the same encounter', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.resolveCombatTalismanDialogCloseAttempt, 'function');
+
+    const snapshot = {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        talismanDialogActive: true
+    };
+    const talismanAttempt = {
+        shouldAttempt: true,
+        reason: 'completed',
+        encounterKey: 'monster:port_bandit:3:7',
+        markEncounterKey: 'monster:port_bandit:3:7',
+        selectedTalismans: [
+            { itemId: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 }
+        ],
+        usedKinds: 1,
+        failedKinds: 0,
+        dialogClosed: false,
+        dialogCloseSource: 'dom',
+        dialogCloseFailureMessage: '符箓面板未隐藏'
+    };
+
+    assert.deepEqual(toPlain(hooks.resolveCombatTalismanDialogCloseAttempt(talismanAttempt, snapshot)), {
+        shouldAttempt: true,
+        reason: 'dialog-stuck',
+        encounterKey: 'monster:port_bandit:3:7'
+    });
+
+    assert.deepEqual(toPlain(hooks.resolveCombatTalismanDialogCloseAttempt(Object.assign({}, talismanAttempt, {
+        dialogClosed: true
+    }), snapshot)), {
+        shouldAttempt: false,
+        reason: 'already-closed',
+        encounterKey: 'monster:port_bandit:3:7'
+    });
+});
+
+test('handleEncounter closes a stuck talisman dialog before fighting on the next tick', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        hideEncounterTalismanDialog() {
+            calls.push('close-dialog');
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const snapshot = {
+        encounterActive: true,
+        encounterMonsterId: 'port_bandit',
+        encounterMonsterStage: 3,
+        encounterMonsterLevel: 7,
+        talismanDialogActive: true
+    };
+    const manager = {
+        encounterBusy: false,
+        lastTalismanEncounterKey: 'monster:port_bandit:3:7',
+        lastTalismanAttempt: {
+            shouldAttempt: true,
+            reason: 'completed',
+            encounterKey: 'monster:port_bandit:3:7',
+            markEncounterKey: 'monster:port_bandit:3:7',
+            selectedTalismans: [
+                { itemId: 8, templateId: 'talisman_ancient_4', name: '史诗荒古符箓', family: 'ancient', rarity: 4, quantity: 1 }
+            ],
+            usedKinds: 1,
+            failedKinds: 0,
+            dialogClosed: false,
+            dialogCloseSource: 'dom',
+            dialogCloseFailureMessage: '符箓面板未隐藏'
+        },
+        closeStuckTalismanDialog: hooks.AfkLoopManager.closeStuckTalismanDialog,
+        async useCombatTalismans() {
+            calls.push('talismans');
+        },
+        async fightEncounter() {
+            calls.push('fight');
+        }
+    };
+
+    await hooks.AfkLoopManager.handleEncounter.call(manager, {
+        useTalismans: true,
+        autoFight: true,
+        autoHireGuardian: false
+    }, snapshot);
+
+    assert.deepEqual(calls, ['close-dialog', 'talismans', 'fight']);
+    assert.equal(snapshot.talismanDialogActive, false);
+    assert.equal(manager.lastTalismanAttempt.dialogClosed, true);
+    assert.equal(manager.lastTalismanAttempt.dialogCloseSource, 'page-function');
 });
 
 test('buildAfkStatusReport explains failed nirvana pill attempts', () => {
@@ -3686,6 +5306,49 @@ test('buildAfkStatusReport explains failed nirvana pill attempts', () => {
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('用丹: 涅槃重生丹使用失败 · 史诗+ · 史诗涅槃重生丹 · use-item failed token=<redacted>'), true);
     assert.equal(report.lines.includes('用丹建议: 涅槃重生丹使用失败 · 检查丹药库存和页面用丹接口，必要时关闭自动用丹后继续挂机'), true);
+});
+
+test('buildAfkStatusReport explains unconfirmed nirvana pill attempts', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 1200,
+        maxSpirit: 2758,
+        spiritCost: 50,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, {
+        enabled: true,
+        autoFight: true,
+        useNirvanaPill: true,
+        nirvanaMinRarity: 4,
+        exploreMultiplier: 50
+    }, {
+        action: 'startAutoExplore',
+        reason: 'spirit-ready'
+    }, {
+        capturedAt: '2026-06-08T10:26:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        nirvanaPillAttempt: {
+            shouldUse: false,
+            reason: 'use-not-confirmed',
+            pill: {
+                itemId: 9,
+                templateId: 'bp_pill_rebirth_4',
+                name: '史诗涅槃重生丹',
+                rarity: 4,
+                quantity: 1
+            },
+            minRarity: 4,
+            failureMessage: '涅槃重生丹入口已调用但未检测到五行通灵效果'
+        }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('用丹: 涅槃重生丹未确认 · 史诗+ · 史诗涅槃重生丹 · 涅槃重生丹入口已调用但未检测到五行通灵效果'), true);
+    assert.equal(report.lines.includes('用丹建议: 涅槃重生丹未确认生效 · 检查五行通灵状态/接口刷新，必要时关闭自动用丹后继续挂机'), true);
 });
 
 test('buildAfkStatusReport explains failed revive attempts', () => {
@@ -3764,6 +5427,105 @@ test('AfkLoopManager.revive does not open resume window when death state remains
     });
     assert.equal(manager.resourceUsage.revive, 1);
     assert.equal(manager.postReviveResumeUntil, 0);
+    assert.equal(manager.lastDecisionKey, '');
+});
+
+test('AfkLoopManager.stopMeditation does not open resume window when meditation remains active', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        handleStopMeditate: async () => {
+            calls.push(['page-function']);
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const manager = {
+        lastMeditationAttempt: null,
+        postMeditationResumeUntil: 12345,
+        lastDecisionKey: 'stopMeditation:meditation-duration-reached',
+        refreshGameData() {
+            calls.push(['refresh']);
+        },
+        confirmMeditationStopped: async (source) => {
+            calls.push(['confirm', source]);
+            return {
+                ok: false,
+                reason: 'still-meditating',
+                failureMessage: '收功入口已调用但页面仍显示冥想中'
+            };
+        }
+    };
+
+    await hooks.AfkLoopManager.stopMeditation.call(manager, {
+        meditationDurationSeconds: 8400
+    }, {
+        meditationMinutes: 140,
+        resumeWindowSeconds: 60
+    }, 'meditation-duration-reached');
+
+    assert.deepEqual(toPlain(calls), [
+        ['page-function'],
+        ['confirm', 'page-function'],
+        ['refresh']
+    ]);
+    assert.deepEqual(toPlain(manager.lastMeditationAttempt), {
+        shouldAttempt: true,
+        action: 'stop',
+        reason: 'stop-failed',
+        triggerReason: 'meditation-duration-reached',
+        source: 'page-function',
+        targetMinutes: 140,
+        elapsedSeconds: 8400,
+        failureMessage: '收功入口已调用但页面仍显示冥想中'
+    });
+    assert.equal(manager.postMeditationResumeUntil, 0);
+    assert.equal(manager.lastDecisionKey, '');
+});
+
+test('AfkLoopManager.startMeditation records failure when meditation does not become active', async () => {
+    const calls = [];
+    const sandbox = loadUserScript({
+        handleMeditate: async () => {
+            calls.push(['page-function']);
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const manager = {
+        lastMeditationAttempt: null,
+        lastDecisionKey: 'startMeditation:spirit-below-threshold',
+        refreshGameData() {
+            calls.push(['refresh']);
+        },
+        confirmMeditationStarted: async (source) => {
+            calls.push(['confirm', source]);
+            return {
+                ok: false,
+                reason: 'not-meditating',
+                failureMessage: '冥想入口已调用但页面仍未显示冥想中'
+            };
+        }
+    };
+
+    await hooks.AfkLoopManager.startMeditation.call(manager, {
+        meditationDurationSeconds: null
+    }, {
+        meditationMinutes: 140
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['page-function'],
+        ['confirm', 'page-function'],
+        ['refresh']
+    ]);
+    assert.deepEqual(toPlain(manager.lastMeditationAttempt), {
+        shouldAttempt: true,
+        action: 'start',
+        reason: 'start-failed',
+        triggerReason: '',
+        source: 'page-function',
+        targetMinutes: 140,
+        elapsedSeconds: null,
+        failureMessage: '冥想入口已调用但页面仍未显示冥想中'
+    });
     assert.equal(manager.lastDecisionKey, '');
 });
 
@@ -3882,6 +5644,120 @@ test('buildAfkStatusReport explains failed merchant purchase attempts', () => {
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('商人: 购买最高价商品失败 · 稀有化神归识丹 · 9972灵石 · 接口 · buy failed token=<redacted>'), true);
     assert.equal(report.lines.includes('商人建议: 自动购买失败 · 检查灵石、商人窗口和购买接口，必要时手动处理或复制摘要'), true);
+});
+
+test('buildAfkStatusReport diagnoses merchant windows that remain after purchase is triggered', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 88,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        merchantActive: true
+    }, {
+        enabled: true,
+        exploreMultiplier: 1,
+        tickInterval: 5000,
+        stallTimeoutSeconds: 0
+    }, {
+        action: 'wait',
+        reason: 'merchant-active'
+    }, {
+        capturedAt: '2026-06-08T11:05:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decisionHistory: [
+            { at: '2026-06-08T11:01:00.000Z', action: 'wait', reason: 'merchant-active' },
+            { at: '2026-06-08T11:02:00.000Z', action: 'wait', reason: 'merchant-active' },
+            { at: '2026-06-08T11:03:00.000Z', action: 'wait', reason: 'merchant-active' },
+            { at: '2026-06-08T11:04:00.000Z', action: 'wait', reason: 'merchant-active' }
+        ],
+        merchantAttempt: {
+            shouldAttempt: false,
+            reason: 'purchase-triggered',
+            source: 'page-function',
+            item: {
+                index: 1,
+                name: '传说归识丹',
+                price: 9999
+            }
+        }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('商人: 已触发购买最高价商品 · 传说归识丹 · 9999灵石 · 页面函数'), true);
+    assert.equal(report.lines.includes('诊断归因: 云游商人购买已触发但窗口仍未关闭，将尝试离开残留商人窗口并恢复探索'), true);
+});
+
+test('buildAfkStatusReport explains merchant leave after stuck purchases', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 88,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        merchantActive: true
+    }, {
+        enabled: true,
+        exploreMultiplier: 1
+    }, {
+        action: 'wait',
+        reason: 'merchant-active'
+    }, {
+        capturedAt: '2026-06-08T11:05:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        merchantAttempt: {
+            shouldAttempt: true,
+            reason: 'leave-ready',
+            triggerReason: 'purchase-stuck',
+            source: 'api'
+        }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('商人: 准备离开云游商人 · 接口 · 购买后窗口未关闭'), true);
+    assert.equal(report.lines.includes('商人建议: 已触发购买但窗口仍在 · 将自动离开残留商人窗口并恢复挂机'), true);
+});
+
+test('buildAfkStatusReport explains merchant leave after insufficient funds', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 88,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        merchantActive: true
+    }, {
+        enabled: true,
+        exploreMultiplier: 1
+    }, {
+        action: 'wait',
+        reason: 'merchant-active'
+    }, {
+        capturedAt: '2026-06-08T11:05:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        merchantAttempt: {
+            shouldAttempt: true,
+            reason: 'leave-ready',
+            triggerReason: 'insufficient-funds',
+            source: 'api'
+        }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('商人: 准备离开云游商人 · 接口 · 灵石不足'), true);
+    assert.equal(report.lines.includes('商人建议: 最高价商品灵石不足 · 将自动离开商人并恢复挂机'), true);
 });
 
 test('buildAfkStatusReport explains failed meditation stop attempts', () => {
@@ -4019,6 +5895,96 @@ test('buildAfkStatusReport forecasts meditation spirit recovery from the visible
     assert.equal(report.lines.includes('冥想预计: 已恢复600识 · 当前估算700/2000 · 计划收功约1500/2000'), true);
 });
 
+test('buildAfkStatusReport flags wasted meditation overflow from the visible bar', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 966,
+        maxSpirit: 2756,
+        spiritCost: 10,
+        canExplore: true,
+        isDead: false,
+        isMeditating: true,
+        meditationDurationSeconds: 7 * 3600 + 17 * 60,
+        meditationRecoveredSpirit: 4011,
+        meditationSpiritFromBar: true
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        exploreMultiplier: 50
+    }, {
+        action: 'stopMeditation',
+        reason: 'spirit-full'
+    }, {
+        capturedAt: '2026-06-09T07:05:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('冥想溢出: 估算4977/2756 · 超出2221识 · 可收功探索或缩短冥想时间'), true);
+    assert.equal(report.lines.includes('冥想调时: 约195分钟可满识 · 已冥想437分钟 · 超出满识约242分钟 · 当前配置140分钟'), true);
+});
+
+test('buildAfkStatusReport explains exploration capacity for the configured multiplier', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 120,
+        maxSpirit: 2000,
+        spiritCost: 10,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 50
+    }, {
+        action: 'startMeditation',
+        reason: 'explore-batch-low-spirit'
+    }, {
+        capturedAt: '2026-06-09T02:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('探索续航: 当前120识 · 50倍需500识/组 · 可跑0组 · 约12次1倍探索 · 不足当前倍率'), true);
+});
+
+test('buildAfkStatusReport estimates exploration capacity while meditating', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 100,
+        maxSpirit: 2000,
+        spiritCost: 10,
+        canExplore: true,
+        isDead: false,
+        isMeditating: true,
+        meditationDurationSeconds: 3600,
+        meditationRecoveredSpirit: 600,
+        meditationSpiritFromBar: false
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        exploreMultiplier: 50
+    }, {
+        action: 'wait',
+        reason: 'meditating'
+    }, {
+        capturedAt: '2026-06-09T02:10:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('探索续航: 当前估算700识 · 50倍需500识/组 · 可跑1组 · 约70次1倍探索 · 计划收功约1500识/3组'), true);
+});
+
 test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -4094,6 +6060,158 @@ test('buildAfkWaitingDiagnosis flags repeated manual waits for tester reports', 
     assert.equal(report.lines.includes('诊断归因: 奇遇#456未配置自动策略'), true);
 });
 
+test('AfkLoopManager saves active wait diagnosis snapshots for later tester readback', async () => {
+    const store = new Map();
+    const sandbox = loadUserScript({
+        location: { href: 'https://ling.muge.info/game.html?token=secret#state' },
+        localStorage: {
+            getItem(key) {
+                if (key === 'lingverse_auto_map_config') {
+                    return JSON.stringify({
+                        afkLoop: {
+                            enabled: true,
+                            meditationMinutes: 140,
+                            minSpirit: 20,
+                            tickInterval: 30000,
+                            stallTimeoutSeconds: 90,
+                            adventureMode: 'pause'
+                        },
+                        merchant: {
+                            enabled: true,
+                            onlyAutoExplore: true,
+                            buyDelay: 800
+                        }
+                    });
+                }
+                return store.get(key) || null;
+            },
+            setItem(key, value) {
+                store.set(key, String(value));
+            },
+            removeItem(key) {
+                store.delete(key);
+            }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const manager = hooks.AfkLoopManager;
+    const oldWaits = Array.from({ length: 4 }, (_, index) => ({
+        at: `2026-06-08T06:${String(index * 2).padStart(2, '0')}:00.000Z`,
+        action: 'wait',
+        reason: 'adventure-active',
+        spirit: 88,
+        maxSpirit: 2758,
+        isMeditating: false,
+        adventureActive: true,
+        adventureId: 456
+    }));
+
+    assert.equal(typeof hooks.getLastAfkIssueSnapshot, 'function');
+
+    manager.decisionHistory = oldWaits.slice();
+    manager.lastEvaluationAt = 0;
+    manager.buildSnapshot = async () => ({
+        spirit: 88,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        adventureActive: true,
+        adventureId: 456,
+        adventureStep: 1,
+        adventureTotalSteps: 1,
+        adventureChoices: ['继续观察']
+    });
+
+    await manager.tick(true);
+
+    const saved = hooks.getLastAfkIssueSnapshot();
+    assert.equal(saved.schema, 'lingverse-afk-last-issue-snapshot/v1');
+    assert.equal(saved.reason, 'adventure-active');
+    assert.equal(saved.diagnosis.active, true);
+    assert.equal(saved.summary.automation.waitDiagnosis.likelyCause, '奇遇#456未配置自动策略');
+    assert.equal(saved.report.lines.some(line => line.startsWith('诊断: 奇遇链等待处理已持续')), true);
+    assert.equal(saved.summary.page.url.includes('token=secret'), false);
+});
+
+test('AFK issue history keeps recent distinct stuck snapshots without duplicate spam', () => {
+    const store = new Map();
+    const sandbox = loadUserScript({
+        localStorage: {
+            getItem(key) {
+                return store.get(key) || null;
+            },
+            setItem(key, value) {
+                store.set(key, String(value));
+            },
+            removeItem(key) {
+                store.delete(key);
+            }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.saveAfkLastIssueSnapshot, 'function');
+    assert.equal(typeof hooks.getAfkIssueHistory, 'function');
+    assert.equal(typeof hooks.clearAfkIssueHistory, 'function');
+
+    function summary(reason, index, firstAtMinute) {
+        return {
+            schema: 'lingverse-afk-debug-summary/v1',
+            scriptVersion: hooks.SCRIPT_VERSION,
+            capturedAt: `2026-06-09T08:${String(firstAtMinute + 10).padStart(2, '0')}:00.000Z`,
+            page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+            decision: { action: 'wait', reason },
+            player: { spirit: 88 + index, maxSpirit: 2758, spiritCost: 4 },
+            blockers: {},
+            automation: {
+                waitDiagnosis: {
+                    schema: 'lingverse-afk-wait-diagnosis/v1',
+                    active: true,
+                    severity: 'warning',
+                    category: 'manual-action',
+                    action: 'wait',
+                    reason,
+                    label: `卡点${index}`,
+                    repeatCount: 5,
+                    elapsedSeconds: 600,
+                    firstAt: `2026-06-09T08:${String(firstAtMinute).padStart(2, '0')}:00.000Z`,
+                    lastAt: `2026-06-09T08:${String(firstAtMinute + 8).padStart(2, '0')}:00.000Z`,
+                    likelyCause: `原因${index}`,
+                    message: `卡点${index}已持续10分钟`,
+                    suggestion: `处理卡点${index}`
+                }
+            },
+            config: { meditationMinutes: 140, minSpirit: 20, exploreMultiplier: 1 },
+            history: { decisionTail: [], logTail: [] }
+        };
+    }
+
+    hooks.saveAfkLastIssueSnapshot(summary('adventure-active', 1, 0), { savedAt: '2026-06-09T08:10:00.000Z' });
+    hooks.saveAfkLastIssueSnapshot(summary('adventure-active', 1, 0), { savedAt: '2026-06-09T08:11:00.000Z' });
+    for (let index = 2; index <= 6; index += 1) {
+        hooks.saveAfkLastIssueSnapshot(summary(`custom-stuck-${index}`, index, index * 2), {
+            savedAt: `2026-06-09T08:${String(20 + index).padStart(2, '0')}:00.000Z`
+        });
+    }
+
+    const history = hooks.getAfkIssueHistory();
+    assert.equal(history.schema, 'lingverse-afk-issue-history/v1');
+    assert.equal(history.entries.length, 5);
+    assert.deepEqual(toPlain(history.entries.map(item => item.reason)), [
+        'custom-stuck-2',
+        'custom-stuck-3',
+        'custom-stuck-4',
+        'custom-stuck-5',
+        'custom-stuck-6'
+    ]);
+    assert.equal(history.entries[4].diagnosis.likelyCause, '原因6');
+
+    hooks.clearAfkIssueHistory();
+    assert.deepEqual(toPlain(hooks.getAfkIssueHistory().entries), []);
+});
+
 test('buildAfkWaitingDiagnosis explains repeated encounter stalls from automation attempts', () => {
     const sandbox = loadUserScript();
     const hooks = sandbox.LingVerseAutoMapTestHooks;
@@ -4158,6 +6276,65 @@ test('buildAfkWaitingDiagnosis explains repeated encounter stalls from automatio
 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.lines.includes('诊断归因: 符箓面板未关闭 · close failed token=<redacted>'), true);
+});
+
+test('buildAfkWaitingDiagnosis explains unconfirmed nirvana pill stalls', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const history = Array.from({ length: 5 }, (_, index) => ({
+        at: `2026-06-08T10:${String(index * 2).padStart(2, '0')}:00.000Z`,
+        action: 'startAutoExplore',
+        reason: 'spirit-ready',
+        spirit: 1200,
+        maxSpirit: 2758,
+        isMeditating: false
+    }));
+    const now = Date.parse('2026-06-08T10:10:00.000Z');
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 1200,
+        maxSpirit: 2758,
+        spiritCost: 50,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20,
+        tickInterval: 30000,
+        stallTimeoutSeconds: 90,
+        exploreMultiplier: 50,
+        useNirvanaPill: true
+    }, {
+        action: 'startAutoExplore',
+        reason: 'spirit-ready'
+    }, {
+        capturedAt: '2026-06-08T10:10:00.000Z',
+        now,
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' },
+        decisionHistory: history,
+        nirvanaPillAttempt: {
+            shouldUse: false,
+            reason: 'use-not-confirmed',
+            pill: {
+                itemId: 9,
+                templateId: 'bp_pill_rebirth_4',
+                name: '史诗涅槃重生丹',
+                rarity: 4,
+                quantity: 1
+            },
+            minRarity: 4,
+            failureMessage: '涅槃重生丹入口已调用但未检测到五行通灵效果'
+        }
+    })));
+
+    assert.equal(summary.automation.waitDiagnosis.active, true);
+    assert.equal(summary.automation.waitDiagnosis.likelyCause, '涅槃重生丹未确认生效 · 涅槃重生丹入口已调用但未检测到五行通灵效果');
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('诊断归因: 涅槃重生丹未确认生效 · 涅槃重生丹入口已调用但未检测到五行通灵效果'), true);
 });
 
 test('buildAfkWaitingDiagnosis explains guardian already-attempted stalls without retrying hire', () => {
@@ -4379,6 +6556,7 @@ test('handleAdventure does not repeat the same adventure choice while the step i
         postInteractionResumeUntil: 0,
         findAdventureChoiceButtons() { return makeButtons(); },
         findAdventureCloseButton() { return null; },
+        schedulePostInteractionResume: hooks.AfkLoopManager.schedulePostInteractionResume,
         refreshGameData() {},
         tick() {}
     };
@@ -4421,6 +6599,240 @@ test('handleAdventure does not repeat the same adventure choice while the step i
     await hooks.AfkLoopManager.handleAdventure.call(manager, cfg);
 
     assert.deepEqual(clicks, ['choice-2', 'choice-2']);
+});
+
+test('handleAdventure records failure when a choice does not advance the adventure step', async () => {
+    const overlay = {
+        style: {},
+        hidden: false,
+        classList: { contains() { return false; } },
+        getBoundingClientRect() { return { width: 240, height: 160 }; }
+    };
+    const sandbox = loadUserScript({
+        document: {
+            readyState: 'loading',
+            documentElement: {
+                dataset: {},
+                classList: { contains() { return false; } }
+            },
+            addEventListener() {},
+            querySelector(selector) {
+                return selector === '#adventureOverlay' ? overlay : null;
+            },
+            querySelectorAll() { return []; },
+            createElement() { return createElementStub(); },
+            body: { appendChild() {} },
+            head: { appendChild() {} }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const calls = [];
+    const manager = {
+        lastAdventureChoiceKey: '',
+        lastAdventureAttempt: null,
+        findAdventureChoiceButtons() {
+            return [
+                { disabled: false, textContent: '入谷探查', click() { calls.push(['choice', 1]); } },
+                { disabled: false, textContent: '绕路离开', click() { calls.push(['choice', 2]); } }
+            ];
+        },
+        findAdventureCloseButton() { return null; },
+        confirmAdventureProgressed: async (kind, previousKey) => {
+            calls.push(['confirm', kind, previousKey]);
+            return {
+                ok: false,
+                reason: 'same-step',
+                failureMessage: '奇遇选择入口已调用但页面仍停在同一步'
+            };
+        },
+        schedulePostInteractionResume(cfg) {
+            calls.push(['resume', !!cfg.enabled]);
+        }
+    };
+    sandbox._lingverseAutoMapLastAdventureStep = {
+        adventureId: 456,
+        step: 1,
+        totalSteps: 3,
+        isComplete: false,
+        choices: ['入谷探查', '绕路离开']
+    };
+
+    await hooks.AfkLoopManager.handleAdventure.call(manager, {
+        enabled: true,
+        adventureMode: 'strategy',
+        adventureChoiceMap: { 456: 2 },
+        autoCloseCompletedAdventure: true,
+        resumeWindowSeconds: 60
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['choice', 2],
+        ['confirm', 'choice', '456:1:3:2']
+    ]);
+    assert.deepEqual(toPlain(manager.lastAdventureAttempt), {
+        shouldAttempt: true,
+        reason: 'choice-failed',
+        source: 'choice-button',
+        adventureId: '456',
+        choiceIndex: 2,
+        choiceText: '绕路离开',
+        failureMessage: '奇遇选择入口已调用但页面仍停在同一步'
+    });
+    assert.equal(manager.lastAdventureChoiceKey, '456:1:3:2');
+});
+
+test('handleAdventure confirms choice progress with the current adventure strategy config', async () => {
+    const overlay = {
+        style: {},
+        hidden: false,
+        classList: { contains() { return false; } },
+        getBoundingClientRect() { return { width: 240, height: 160 }; }
+    };
+    const sandbox = loadUserScript({
+        document: {
+            readyState: 'loading',
+            documentElement: {
+                dataset: {},
+                classList: { contains() { return false; } }
+            },
+            addEventListener() {},
+            querySelector(selector) {
+                return selector === '#adventureOverlay' ? overlay : null;
+            },
+            querySelectorAll() { return []; },
+            createElement() { return createElementStub(); },
+            body: { appendChild() {} },
+            head: { appendChild() {} }
+        }
+    });
+    sandbox.setTimeout = (fn) => {
+        fn();
+        return 1;
+    };
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const calls = [];
+    const manager = {
+        lastAdventureChoiceKey: '',
+        lastAdventureAttempt: null,
+        findAdventureChoiceButtons() {
+            return [
+                { disabled: false, textContent: '入谷探查', click() { calls.push(['choice', 1]); } },
+                { disabled: false, textContent: '绕路离开', click() { calls.push(['choice', 2]); } }
+            ];
+        },
+        findAdventureCloseButton() { return null; },
+        confirmAdventureProgressed: hooks.AfkLoopManager.confirmAdventureProgressed,
+        refreshGameData() {
+            calls.push(['refresh']);
+        },
+        schedulePostInteractionResume(cfg) {
+            calls.push(['resume', !!cfg.enabled]);
+        }
+    };
+    sandbox._lingverseAutoMapLastAdventureStep = {
+        adventureId: 456,
+        step: 1,
+        totalSteps: 3,
+        isComplete: false,
+        choices: ['入谷探查', '绕路离开']
+    };
+
+    await hooks.AfkLoopManager.handleAdventure.call(manager, {
+        enabled: true,
+        adventureMode: 'strategy',
+        adventureChoiceMap: { 456: 2 },
+        autoCloseCompletedAdventure: true,
+        resumeWindowSeconds: 60
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['choice', 2],
+        ['refresh'],
+        ['refresh']
+    ]);
+    assert.equal(manager.lastAdventureAttempt.reason, 'choice-failed');
+    assert.equal(manager.lastAdventureAttempt.failureMessage, '奇遇选择入口已调用但页面仍停在同一步');
+    assert.equal(manager.lastAdventureChoiceKey, '456:1:3:2');
+});
+
+test('handleAdventure records failure when completed adventure close does not close the overlay', async () => {
+    const overlay = {
+        style: {},
+        hidden: false,
+        classList: { contains() { return false; } },
+        getBoundingClientRect() { return { width: 240, height: 160 }; }
+    };
+    const sandbox = loadUserScript({
+        document: {
+            readyState: 'loading',
+            documentElement: {
+                dataset: {},
+                classList: { contains() { return false; } }
+            },
+            addEventListener() {},
+            querySelector(selector) {
+                return selector === '#adventureOverlay' ? overlay : null;
+            },
+            querySelectorAll() { return []; },
+            createElement() { return createElementStub(); },
+            body: { appendChild() {} },
+            head: { appendChild() {} }
+        }
+    });
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+    const calls = [];
+    const manager = {
+        lastAdventureChoiceKey: '456:1:3:2',
+        lastAdventureAttempt: null,
+        findAdventureChoiceButtons() { return []; },
+        findAdventureCloseButton() {
+            return {
+                disabled: false,
+                textContent: '结束奇遇',
+                click() { calls.push(['close']); }
+            };
+        },
+        confirmAdventureProgressed: async (kind) => {
+            calls.push(['confirm', kind]);
+            return {
+                ok: false,
+                reason: 'overlay-visible',
+                failureMessage: '奇遇关闭入口已调用但面板仍未关闭'
+            };
+        },
+        schedulePostInteractionResume(cfg) {
+            calls.push(['resume', !!cfg.enabled]);
+        }
+    };
+    sandbox._lingverseAutoMapLastAdventureStep = {
+        adventureId: 456,
+        step: 3,
+        totalSteps: 3,
+        isComplete: true,
+        choices: []
+    };
+
+    await hooks.AfkLoopManager.handleAdventure.call(manager, {
+        enabled: true,
+        adventureMode: 'pause',
+        autoCloseCompletedAdventure: true,
+        resumeWindowSeconds: 60
+    });
+
+    assert.deepEqual(toPlain(calls), [
+        ['close'],
+        ['confirm', 'close']
+    ]);
+    assert.deepEqual(toPlain(manager.lastAdventureAttempt), {
+        shouldAttempt: true,
+        reason: 'close-failed',
+        source: 'close-button',
+        adventureId: '456',
+        choiceIndex: null,
+        choiceText: '',
+        failureMessage: '奇遇关闭入口已调用但面板仍未关闭'
+    });
+    assert.equal(manager.lastAdventureChoiceKey, '456:1:3:2');
 });
 
 test('buildAfkStatusReport explains repeated adventure choice suppression', () => {
@@ -4749,7 +7161,68 @@ test('buildAfkStatusReport includes game update blockers from snapshots', () => 
     const report = hooks.buildAfkStatusReport(summary);
     assert.equal(report.headline, '挂机状态 · 等待 · 游戏有更新，等待刷新');
     assert.equal(report.lines.includes('阻塞: 游戏更新'), true);
-    assert.equal(report.lines.includes('环境: helper 2.99.0 · 游戏更新提示，先刷新页面/重载扩展'), true);
+    assert.equal(report.lines.includes(`环境: helper ${hooks.SCRIPT_VERSION} · 游戏更新提示，先刷新页面/重载扩展`), true);
+});
+
+test('heavenly ban is treated as a manual hard stop', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    assert.equal(typeof hooks.detectHeavenlyBanNotice, 'function');
+    assert.equal(hooks.detectHeavenlyBanNotice('探索失败：天道禁闭中'), true);
+    assert.equal(hooks.detectHeavenlyBanNotice('解除天道禁闭需等待'), true);
+    assert.equal(hooks.detectHeavenlyBanNotice('普通探索日志'), false);
+
+    assert.deepEqual(toPlain(hooks.classifyExploreInterruption({
+        code: 430,
+        message: '天道禁闭中，暂不可探索'
+    }, {})), {
+        kind: 'heavenlyBan',
+        action: 'hard-stop',
+        reason: 'heavenly-ban'
+    });
+
+    const decision = hooks.decideAfkNextAction({
+        heavenlyBanActive: true,
+        spirit: 300,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20
+    }, 1_000_000);
+    assert.deepEqual(toPlain(decision), {
+        action: 'wait',
+        reason: 'heavenly-ban'
+    });
+
+    const summary = toPlain(hooks.buildAfkDebugSummary(hooks.buildAfkDebugSnapshot({
+        spirit: 300,
+        maxSpirit: 2758,
+        spiritCost: 4,
+        canExplore: true,
+        isDead: false,
+        isMeditating: false,
+        heavenlyBanActive: true
+    }, {
+        enabled: true,
+        meditationMinutes: 140,
+        minSpirit: 20
+    }, decision, {
+        capturedAt: '2026-06-09T02:00:00.000Z',
+        page: { title: '灵界 LingVerse - 修仙世界', url: 'https://ling.muge.info/game.html' }
+    })));
+
+    assert.equal(summary.blockers.heavenlyBanActive, true);
+
+    const report = hooks.buildAfkStatusReport(summary);
+    assert.equal(report.lines.includes('阻塞: 天道禁闭'), true);
+    assert.equal(report.lines.includes('硬停: 天道禁闭 · 脚本暂停自动探索'), true);
+    assert.equal(report.lines.includes('硬停建议: 天道禁闭需要手动解除或等待 · 脚本不会自动跳过、自动点击或消耗资源'), true);
 });
 
 test('buildAfkStatusReport explains immortal prison hard stops immediately', () => {
@@ -4933,11 +7406,18 @@ test('AFK config packs export normalized settings and import safely', () => {
     }, {
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试?token=secret'
+    }, {
+        enabled: true,
+        onlyAutoExplore: true,
+        buyDelay: 250,
+        leaveWhenNoItems: true,
+        leaveAfterPurchaseStuck: false,
+        leaveOnInsufficientFunds: true
     });
 
     assert.deepEqual(toPlain(pack), {
         schema: 'lingverse-afk-config-pack/v1',
-        scriptVersion: '2.99.0',
+        scriptVersion: hooks.SCRIPT_VERSION,
         createdAt: '2026-06-08T04:00:00.000Z',
         label: '富裕小号测试',
         afkLoop: {
@@ -4977,6 +7457,14 @@ test('AFK config packs export normalized settings and import safely', () => {
             priorityKey: 'normal,incarnation,body',
             threatLevel: 'danger'
         },
+        merchant: {
+            enabled: true,
+            onlyAutoExplore: true,
+            buyDelay: 250,
+            leaveWhenNoItems: true,
+            leaveAfterPurchaseStuck: false,
+            leaveOnInsufficientFunds: true
+        },
         riskStatus: {
             schema: 'lingverse-afk-risk-status/v1',
             profileText: '富裕战斗模式',
@@ -5002,6 +7490,14 @@ test('AFK config packs export normalized settings and import safely', () => {
     assert.equal(imported.sourceSchema, 'lingverse-afk-config-pack/v1');
     assert.equal(imported.afkLoop.enabled, false);
     assert.deepEqual(imported.guardian.priority, ['normal', 'incarnation', 'body']);
+    assert.deepEqual(imported.merchant, {
+        enabled: true,
+        onlyAutoExplore: true,
+        buyDelay: 250,
+        leaveWhenNoItems: true,
+        leaveAfterPurchaseStuck: false,
+        leaveOnInsufficientFunds: true
+    });
     assert.deepEqual(imported.importWarnings, ['导入时已关闭挂机启动状态']);
     assert.equal(imported.riskStatus.enabledRiskCount, 7);
 });
@@ -5066,6 +7562,33 @@ test('mergeAdventureStrategyImport adds replay hints without enabling AFK', () =
         }
     });
     assert.deepEqual(toPlain(fromSummary.afkLoop.adventureChoiceMap), { 999: 3 });
+});
+
+test('mergeAdventureStrategyImport accepts readable status strategy lines', () => {
+    const sandbox = loadUserScript();
+    const hooks = sandbox.LingVerseAutoMapTestHooks;
+
+    const merged = hooks.mergeAdventureStrategyImport({
+        enabled: true,
+        adventureMode: 'pause',
+        adventureChoiceMap: { 456: 1 }
+    }, [
+        '奇遇策略: 456=2 / 789=1',
+        '奇遇动作: 已触发奇遇自动选择 · #888 · 第3项「继续前行」 · 选项按钮',
+        '奇遇: #999 第1/3步 · 1.入谷探查 / 2.绕路离开'
+    ].join('\n'));
+
+    assert.deepEqual(toPlain(merged.afkLoop.adventureChoiceMap), {
+        456: 2,
+        789: 1,
+        888: 3
+    });
+    assert.equal(merged.importedCount, 3);
+    assert.equal(merged.overwrittenCount, 1);
+    assert.deepEqual(toPlain(merged.importLines), ['456=2', '789=1', '888=3']);
+    assert.equal(merged.afkLoop.enabled, false);
+    assert.equal(merged.afkLoop.adventureMode, 'strategy');
+    assert.deepEqual(toPlain(merged.warnings), ['导入策略时已关闭挂机启动状态']);
 });
 
 test('AFK resource budgets cap rich-mode consumables per run', () => {

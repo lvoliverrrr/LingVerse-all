@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         灵界 LingVerse 自动开藏宝图
 // @namespace    lingverse-auto-map
-// @version      2.99.0
+// @version      2.134.0
 // @description  自动开启背包中的藏宝图，并提供冥想-探索挂机循环和自动商人处理
 // @author       LingVerse
 // @match        https://ling.muge.info/*
@@ -20,13 +20,21 @@
     const $ = (sel) => document.querySelector(sel);
     // 延迟函数
     const wait = (ms) => new Promise(r => setTimeout(r, ms));
-    const SCRIPT_VERSION = '2.99.0';
+    const SCRIPT_VERSION = '2.134.0';
     _win.LingVerseAutoMapVersion = SCRIPT_VERSION;
+    const ROOT_DATASET = document.documentElement && document.documentElement.dataset;
+    if (ROOT_DATASET) {
+        ROOT_DATASET.lingverseAutoMapHelperVersion = SCRIPT_VERSION;
+    }
     const DEBUG_DECISION_HISTORY_LIMIT = 20;
     const DEBUG_LOG_HISTORY_LIMIT = 30;
     const DEBUG_SUMMARY_HISTORY_LIMIT = 8;
     const DEBUG_ADVENTURE_SAMPLE_LIMIT = 5;
     const DEBUG_SUMMARY_TEXT_LIMIT = 150;
+    const AFK_LAST_ISSUE_STORAGE_KEY = 'lingverse_afk_last_issue_snapshot_v1';
+    const AFK_ISSUE_HISTORY_STORAGE_KEY = 'lingverse_afk_issue_history_v1';
+    const AFK_LAST_ISSUE_REPORT_LINE_LIMIT = 80;
+    const AFK_ISSUE_HISTORY_LIMIT = 5;
 
     // 配置对象
     const CONFIG = {
@@ -46,7 +54,10 @@
         merchant: {                 // 云游商人相关配置
             enabled: true,          // 自动探索遇到商人时自动购买
             onlyAutoExplore: true,  // 只处理自动探索挂起的商人，避免手动购物被抢单
-            buyDelay: 800           // 遇到商人后延迟购买，给原页面完成渲染
+            buyDelay: 800,          // 遇到商人后延迟购买，给原页面完成渲染
+            leaveWhenNoItems: true, // 已确认没有可买商品时自动离开，避免挂机卡商人
+            leaveAfterPurchaseStuck: true, // 购买已触发但商人窗口仍在时自动离开收尾
+            leaveOnInsufficientFunds: true // 灵石不足等明确货币不足时离开商人继续挂机
         },
         afkLoop: {                   // 冥想-探索挂机循环配置
             enabled: false,          // 默认不自动接管，需要用户在面板启动
@@ -109,7 +120,10 @@
     CONFIG.merchant = Object.assign({
         enabled: true,
         onlyAutoExplore: true,
-        buyDelay: 800
+        buyDelay: 800,
+        leaveWhenNoItems: true,
+        leaveAfterPurchaseStuck: true,
+        leaveOnInsufficientFunds: true
     }, CONFIG.merchant || {});
     CONFIG.afkLoop = Object.assign({
         enabled: false,
@@ -167,6 +181,177 @@
         return selected;
     }
 
+    function detectMerchantInsufficientFundsNotice(message) {
+        const text = String(message || '').replace(/\s+/g, '');
+        if (!text) return false;
+        if (/(神识|体力|精力|灵力)不足/.test(text)) return false;
+        const currency = '(?:灵石|灵晶|灵玉|金币|银两|铜钱|余额|货币|钱|资金)';
+        const shortage = '(?:不足|不够|不敷|不够用)';
+        return new RegExp(`${currency}.*${shortage}|${shortage}.*${currency}|无法购买.*${currency}`).test(text);
+    }
+
+    function getElementText(el) {
+        return String(el && (el.innerText || el.textContent) || '').trim();
+    }
+
+    function readElementAttribute(el, name) {
+        if (!el || typeof el.getAttribute !== 'function') return '';
+        try {
+            return String(el.getAttribute(name) || '');
+        } catch (e) {
+            return '';
+        }
+    }
+
+    function extractMerchantPriceFromText(text) {
+        const source = String(text || '').replace(/\s+/g, ' ').trim();
+        if (!source) return 0;
+        const patterns = [
+            /(?:价格|售价|价值|花费|消耗|需要|需)\s*[:：]?\s*([0-9][0-9,.\s]*)\s*(?:灵石|灵币|金币|铜钱)?/i,
+            /([0-9][0-9,.\s]*)\s*(?:灵石|灵币|金币|铜钱)/i
+        ];
+        for (const pattern of patterns) {
+            const match = source.match(pattern);
+            if (!match) continue;
+            const price = parseMerchantPrice(match[1]);
+            if (price > 0) return price;
+        }
+        return 0;
+    }
+
+    function getMerchantDomName(el) {
+        if (!el) return '';
+        const dataset = el.dataset && typeof el.dataset === 'object' ? el.dataset : {};
+        const attrName = dataset.name ||
+            dataset.itemName ||
+            readElementAttribute(el, 'data-name') ||
+            readElementAttribute(el, 'data-item-name') ||
+            readElementAttribute(el, 'title');
+        if (attrName) return String(attrName).trim();
+        const selectors = [
+            '.merchant-item__name',
+            '.merchant-item-name',
+            '.merchant-goods-name',
+            '.shop-item-name',
+            '.goods-name',
+            '.item-name',
+            '.name',
+            '[data-name]',
+            '[data-item-name]'
+        ];
+        for (const selector of selectors) {
+            try {
+                const node = typeof el.querySelector === 'function' ? el.querySelector(selector) : null;
+                const text = getElementText(node);
+                if (text) return text;
+            } catch (e) {}
+        }
+        const lines = getElementText(el)
+            .split(/\n+/)
+            .map(line => line.trim())
+            .filter(Boolean);
+        const nameLine = lines.find(line => {
+            if (/购买|买入|兑换/.test(line)) return false;
+            if (/价格|售价|价值|花费|消耗|需要|需/.test(line)) return false;
+            if (/(?:灵石|灵币|金币|铜钱)/.test(line)) return false;
+            return true;
+        });
+        return nameLine || '';
+    }
+
+    function parseMerchantIndexValue(value) {
+        if (value === null || typeof value === 'undefined' || value === '') return null;
+        const parsed = Number(String(value).trim());
+        return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+    }
+
+    function extractMerchantIndexFromHandler(text) {
+        const source = String(text || '');
+        const match = source.match(/buyMerchantItem\s*\(\s*([0-9]+)/i) ||
+            source.match(/merchant\/buy[^0-9]+([0-9]+)/i) ||
+            source.match(/index\s*[:=]\s*([0-9]+)/i);
+        return match ? parseMerchantIndexValue(match[1]) : null;
+    }
+
+    function getMerchantDomIndex(el, fallbackIndex) {
+        if (!el) return fallbackIndex;
+        const dataset = el.dataset && typeof el.dataset === 'object' ? el.dataset : {};
+        const directCandidates = [
+            dataset.merchantIndex,
+            dataset.index,
+            dataset.itemIndex,
+            readElementAttribute(el, 'data-merchant-index'),
+            readElementAttribute(el, 'data-index'),
+            readElementAttribute(el, 'data-item-index')
+        ];
+        for (const candidate of directCandidates) {
+            const direct = parseMerchantIndexValue(candidate);
+            if (direct !== null) return direct;
+        }
+        const buttonSelectors = 'button, [role="button"], .merchant-item__buy-btn, .merchant-buy-btn, .buy-btn, [onclick]';
+        try {
+            const buttons = typeof el.querySelectorAll === 'function' ? Array.from(el.querySelectorAll(buttonSelectors)) : [];
+            for (const button of buttons) {
+                const buttonDataset = button && button.dataset && typeof button.dataset === 'object' ? button.dataset : {};
+                for (const candidate of [buttonDataset.merchantIndex, buttonDataset.index, buttonDataset.itemIndex]) {
+                    const index = parseMerchantIndexValue(candidate);
+                    if (index !== null) return index;
+                }
+                const handlerIndex = extractMerchantIndexFromHandler(readElementAttribute(button, 'onclick'));
+                if (handlerIndex !== null) return handlerIndex;
+            }
+        } catch (e) {}
+        const ownHandlerIndex = extractMerchantIndexFromHandler(readElementAttribute(el, 'onclick'));
+        return ownHandlerIndex !== null ? ownHandlerIndex : fallbackIndex;
+    }
+
+    function extractMerchantItemsFromDom(root) {
+        const overlay = root || $('#merchantOverlay');
+        if (!overlay || !isElementVisibleForAutomation(overlay)) return [];
+        const selectors = [
+            '[data-merchant-index]',
+            '[data-item-index]',
+            '[data-index]',
+            '.merchant-item',
+            '.merchant-item-card',
+            '.merchant-goods-item',
+            '.merchant-card',
+            '.shop-item',
+            '.shop-card',
+            '.goods-item',
+            '.store-item',
+            '.item-card',
+            '.item-row',
+            'tr',
+            'li'
+        ].join(',');
+        let candidates = [];
+        try {
+            candidates = Array.from(overlay.querySelectorAll(selectors));
+        } catch (e) {
+            candidates = [];
+        }
+        const seen = new Set();
+        const uniqueCandidates = candidates.filter(el => {
+            if (!el || seen.has(el)) return false;
+            seen.add(el);
+            return true;
+        });
+        const items = [];
+        uniqueCandidates.forEach((el, fallbackIndex) => {
+            if (!isElementVisibleForAutomation(el)) return;
+            const text = getElementText(el);
+            const price = extractMerchantPriceFromText(text);
+            if (price <= 0) return;
+            items.push({
+                index: getMerchantDomIndex(el, fallbackIndex),
+                name: getMerchantDomName(el),
+                price
+            });
+        });
+        return items;
+    }
+
     function isMerchantAutomationContext(state) {
         const source = state || {};
         return !!(
@@ -181,6 +366,39 @@
         const source = String(text || '');
         return source.indexOf('灵界已更新新版本') >= 0 ||
             (source.indexOf('已更新新版本') >= 0 && source.indexOf('刷新') >= 0);
+    }
+
+    function detectHeavenlyBanNotice(text) {
+        const source = String(text || '');
+        return source.indexOf('天道禁闭') >= 0 ||
+            (source.indexOf('禁闭中') >= 0 && source.indexOf('探索') >= 0);
+    }
+
+    function detectExploreResourceShortageNotice(text) {
+        const source = String(text || '');
+        if (!source) return false;
+        if (source.indexOf('神识不足') >= 0 ||
+            source.indexOf('体力不足') >= 0 ||
+            source.indexOf('精力不足') >= 0 ||
+            source.indexOf('灵力不足') >= 0) {
+            return true;
+        }
+        const mentionsExplore = source.indexOf('探索') >= 0 || source.indexOf('自动探索') >= 0 || source.indexOf('继续') >= 0;
+        const shortage = source.indexOf('不足') >= 0 || source.indexOf('不够') >= 0;
+        const resource = source.indexOf('神识') >= 0 ||
+            source.indexOf('体力') >= 0 ||
+            source.indexOf('精力') >= 0 ||
+            source.indexOf('灵力') >= 0;
+        return mentionsExplore && shortage && resource;
+    }
+
+    function isMerchantMissingResponse(res) {
+        const message = String(res && res.message || '');
+        return !!(res && (res.code === 400 || res.code === 404) && (
+            message.indexOf('没有遇到云游商人') >= 0 ||
+            message.indexOf('不在云游商人') >= 0 ||
+            message.indexOf('已离开') >= 0
+        ));
     }
 
     function getExtensionVersion() {
@@ -285,7 +503,23 @@
     function parseAdventureChoiceMapText(text) {
         const parsed = {};
         String(text || '').split(/[\n,;]+/).forEach(row => {
-            const match = row.trim().match(/^(.+?)[=:]\s*(.+)$/);
+            const source = row.trim();
+            if (!source) return;
+            let found = false;
+            const pairPattern = /(^|[^\w#])#?([A-Za-z0-9_-]+)\s*[=:]\s*([1-9]\d*)/g;
+            let pair;
+            while ((pair = pairPattern.exec(source))) {
+                parsed[pair[2].trim()] = pair[3].trim();
+                found = true;
+            }
+            const readableChoicePattern = /#([A-Za-z0-9_-]+)[^\n]*?第\s*([1-9]\d*)\s*项/g;
+            let readableChoice;
+            while ((readableChoice = readableChoicePattern.exec(source))) {
+                parsed[readableChoice[1].trim()] = readableChoice[2].trim();
+                found = true;
+            }
+            if (found) return;
+            const match = source.match(/^(.+?)[=:]\s*(.+)$/);
             if (!match) return;
             parsed[match[1].trim()] = match[2].trim();
         });
@@ -417,13 +651,16 @@
             'player-encounter-active': '陌生道友邂逅等待处理',
             'player-encounter-auto-decline': '自动婉拒陌生道友',
             'immortal-prison': '混天典狱状态，挂机暂停',
+            'heavenly-ban': '天道禁闭状态，挂机暂停',
             dead: '角色已陨落',
             meditating: '冥想未到结束条件',
             'spirit-full': '神识已满',
             'meditation-duration-reached': '冥想时长已到',
             'auto-explore-running': '自动探索运行中',
+            'auto-explore-toggle-stale': '自动探索开关失配',
             'auto-explore-low-spirit': '自动探索中神识低于阈值',
             'explore-stalled': '探索疑似卡住',
+            'explore-start-no-spirit': '探索启动提示资源不足',
             'explore-disabled-no-spirit': '不可探索且疑似神识不足',
             'explore-disabled': '当前区域不可探索',
             'spirit-below-threshold': '神识低于阈值',
@@ -682,6 +919,7 @@
         }
 
         if (snapshot.gameUpdateNoticeActive ||
+            snapshot.heavenlyBanActive ||
             snapshot.immortalPrisonActive ||
             snapshot.isDead ||
             snapshot.merchantActive ||
@@ -839,6 +1077,9 @@
         if ((reasonText === 'merchant-active' || !!snapshot.merchantActive) && merchant.reason === 'purchase-failed') {
             return joinAfkLikelyCause('云游商人购买失败', merchant.failureMessage);
         }
+        if ((reasonText === 'merchant-active' || !!snapshot.merchantActive) && merchant.reason === 'purchase-triggered') {
+            return '云游商人购买已触发但窗口仍未关闭，将尝试离开残留商人窗口并恢复探索';
+        }
 
         const exploreStart = normalizeExploreStartAttempt(source.exploreStartAttempt);
         if ((actionText === 'startAutoExplore' || reasonText.indexOf('explore') >= 0) && exploreStart.reason === 'start-failed') {
@@ -866,6 +1107,9 @@
         const nirvana = normalizeNirvanaPillAttempt(source.nirvanaPillAttempt);
         if ((actionText === 'startAutoExplore' || reasonText.indexOf('explore') >= 0) && nirvana.reason === 'use-failed') {
             return joinAfkLikelyCause('涅槃重生丹使用失败', nirvana.failureMessage);
+        }
+        if ((actionText === 'startAutoExplore' || reasonText.indexOf('explore') >= 0) && nirvana.reason === 'use-not-confirmed') {
+            return joinAfkLikelyCause('涅槃重生丹未确认生效', nirvana.failureMessage);
         }
 
         if (reasonText === 'adventure-active' && snapshot.adventureId) {
@@ -908,6 +1152,10 @@
             'immortal-prison': {
                 category: 'hard-stop',
                 suggestion: '混天典狱需要手动处理，脚本不会自动跳过'
+            },
+            'heavenly-ban': {
+                category: 'hard-stop',
+                suggestion: '天道禁闭需要手动解除或等待，脚本不会自动跳过'
             },
             dead: {
                 category: 'manual-action',
@@ -1161,7 +1409,7 @@
             return `迎战建议: 自动迎战失败 · 检查遭遇面板和${source || '当前'}迎战入口，必要时手动迎战或复制摘要`;
         }
         if (reason === 'talisman-dialog-open') {
-            return '迎战建议: 符箓面板未关闭 · 先关闭符箓面板再自动/手动迎战，并复制摘要排查关闭入口';
+            return '迎战建议: 符箓面板未关闭 · 将尝试关闭残留符窗后再迎战，若持续失败请手动处理并复制摘要';
         }
         if (reason === 'talisman-use-failed') {
             const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
@@ -1322,7 +1570,11 @@
             'no-priced-items': '没有可购买商品',
             'purchase-ready': '准备购买最高价商品',
             'purchase-triggered': '已触发购买最高价商品',
-            'purchase-failed': '购买最高价商品失败'
+            'purchase-failed': '购买最高价商品失败',
+            'leave-ready': '准备离开云游商人',
+            'leave-triggered': '已离开云游商人',
+            'leave-failed': '离开云游商人失败',
+            'stale-cleared': '已清理残留商人状态'
         };
         return labels[reason] || reason || '未知';
     }
@@ -1330,10 +1582,23 @@
     function formatMerchantAttemptSource(source) {
         const labels = {
             api: '接口',
+            'api-read': '接口确认',
             'page-function': '页面函数',
+            dom: '页面弹窗',
             exception: '异常'
         };
         return labels[source] || source || '';
+    }
+
+    function formatMerchantTriggerReason(reason) {
+        const labels = {
+            'no-items': '无可买商品',
+            'no-priced-items': '无可买商品',
+            'purchase-stuck': '购买后窗口未关闭',
+            'insufficient-funds': '灵石不足',
+            'merchant-missing': '商人已不存在'
+        };
+        return labels[reason] || '';
     }
 
     function buildAfkMerchantStatusLine(attempt) {
@@ -1349,6 +1614,8 @@
         if (price !== null && price > 0) parts.push(`${price}灵石`);
         const source = formatMerchantAttemptSource(normalized.source);
         if (source) parts.push(source);
+        const triggerReason = formatMerchantTriggerReason(normalized.triggerReason);
+        if (triggerReason) parts.push(triggerReason);
         const failure = sanitizeDebugText(normalized.failureMessage || '', DEBUG_SUMMARY_TEXT_LIMIT);
         if (failure) parts.push(failure);
         return `商人: ${parts.join(' · ')}`;
@@ -1365,7 +1632,34 @@
             return '商人建议: 已触发自动购买 · 等待商人离开和自动探索恢复';
         }
         if (reason === 'purchase-failed') {
+            if (normalized.triggerReason === 'insufficient-funds') {
+                return '商人建议: 最高价商品灵石不足 · 当前停留商人窗口，开启灵石不足自动离开可恢复挂机';
+            }
             return '商人建议: 自动购买失败 · 检查灵石、商人窗口和购买接口，必要时手动处理或复制摘要';
+        }
+        if (reason === 'leave-ready') {
+            if (normalized.triggerReason === 'insufficient-funds') {
+                return '商人建议: 最高价商品灵石不足 · 将自动离开商人并恢复挂机';
+            }
+            if (normalized.triggerReason === 'purchase-stuck') {
+                return '商人建议: 已触发购买但窗口仍在 · 将自动离开残留商人窗口并恢复挂机';
+            }
+            return '商人建议: 没有可买商品 · 将自动离开商人并恢复挂机';
+        }
+        if (reason === 'leave-triggered') {
+            if (normalized.triggerReason === 'insufficient-funds') {
+                return '商人建议: 最高价商品灵石不足，已离开云游商人 · 等待自动探索恢复';
+            }
+            if (normalized.triggerReason === 'purchase-stuck') {
+                return '商人建议: 已离开购买后的残留商人窗口 · 等待自动探索恢复';
+            }
+            return '商人建议: 已离开云游商人 · 等待自动探索恢复';
+        }
+        if (reason === 'stale-cleared') {
+            return '商人建议: 接口确认商人已不存在 · 已清理残留窗口并恢复挂机';
+        }
+        if (reason === 'leave-failed') {
+            return '商人建议: 自动离开商人失败 · 必要时手动关闭商人窗口后继续挂机';
         }
         if (reason === 'read-failed') {
             return '商人建议: 商人信息读取失败 · 检查页面 API 或刷新页面后再试';
@@ -1374,6 +1668,20 @@
             return '商人建议: 没有可自动购买的商品 · 必要时手动关闭商人窗口后继续挂机';
         }
         return '';
+    }
+
+    function buildAfkMerchantConfigStatusLine(config) {
+        if (!config || typeof config !== 'object') return '';
+        const normalized = normalizeMerchantConfig(config);
+        const parts = [
+            normalized.enabled ? '开启' : '关闭',
+            normalized.onlyAutoExplore ? '仅自动探索/挂机循环' : '不限上下文',
+            `延迟${normalized.buyDelay}ms`,
+            normalized.leaveWhenNoItems ? '无商品离开' : '无商品停留',
+            normalized.leaveAfterPurchaseStuck ? '购买后卡窗离开' : '购买后卡窗停留',
+            normalized.leaveOnInsufficientFunds ? '灵石不足离开' : '灵石不足停留'
+        ];
+        return `商人配置: ${parts.join(' · ')}`;
     }
 
     function formatPlayerEncounterAttemptReason(reason) {
@@ -1519,6 +1827,7 @@
             'already-running': '自动探索已在运行',
             'start-ready': '准备启动自动探索',
             'start-triggered': '已触发自动探索',
+            'resource-shortage': '自动探索资源不足',
             'start-failed': '自动探索启动失败'
         };
         return labels[reason] || reason || '未知';
@@ -1566,6 +1875,9 @@
         }
         if (reason === 'start-failed') {
             return '探索建议: 自动探索启动失败 · 检查探索倍率控件和自动探索入口，必要时刷新页面/重载扩展';
+        }
+        if (reason === 'resource-shortage') {
+            return '探索建议: 启动探索时提示资源不足 · 下一轮将回冥想恢复';
         }
         return '';
     }
@@ -1651,7 +1963,7 @@
             return '用符建议: 战斗用符已到本轮上限 · 本轮不会继续消耗符箓，可重启挂机或调高上限';
         }
         if (normalized.dialogClosed === false) {
-            return '用符建议: 符箓面板未关闭 · 先关闭符箓面板再自动/手动迎战，并复制摘要排查关闭入口';
+            return '用符建议: 符箓面板未关闭 · 将尝试关闭残留符窗后再迎战，若持续失败请手动处理并复制摘要';
         }
         if (reason === 'already-handled') {
             return '用符建议: 本次遭遇已处理过用符 · 不会重复消耗符箓，仍停住请复制摘要';
@@ -1677,7 +1989,8 @@
             'no-matching-pill': '未找到涅槃重生丹',
             'pill-ready': '找到可用涅槃重生丹',
             used: '已使用涅槃重生丹',
-            'use-failed': '涅槃重生丹使用失败'
+            'use-failed': '涅槃重生丹使用失败',
+            'use-not-confirmed': '涅槃重生丹未确认'
         };
         return labels[reason] || reason || '未知';
     }
@@ -1735,6 +2048,9 @@
         }
         if (reason === 'use-failed') {
             return '用丹建议: 涅槃重生丹使用失败 · 检查丹药库存和页面用丹接口，必要时关闭自动用丹后继续挂机';
+        }
+        if (reason === 'use-not-confirmed') {
+            return '用丹建议: 涅槃重生丹未确认生效 · 检查五行通灵状态/接口刷新，必要时关闭自动用丹后继续挂机';
         }
         return '';
     }
@@ -1836,10 +2152,28 @@
         };
     }
 
-    function buildAfkConfigPack(config, guardianConfig, context) {
+    function normalizeMerchantConfig(config) {
+        const cfg = Object.assign({}, CONFIG.merchant, config || {});
+        return {
+            enabled: !!cfg.enabled,
+            onlyAutoExplore: typeof cfg.onlyAutoExplore === 'undefined' ? true : !!cfg.onlyAutoExplore,
+            buyDelay: clampNumber(cfg.buyDelay, 0, 10000, 800),
+            leaveWhenNoItems: typeof cfg.leaveWhenNoItems === 'undefined' ? true : !!cfg.leaveWhenNoItems,
+            leaveAfterPurchaseStuck: typeof cfg.leaveAfterPurchaseStuck === 'undefined' ? true : !!cfg.leaveAfterPurchaseStuck,
+            leaveOnInsufficientFunds: typeof cfg.leaveOnInsufficientFunds === 'undefined' ? true : !!cfg.leaveOnInsufficientFunds
+        };
+    }
+
+    function buildAfkConfigPack(config, guardianConfig, context, merchantConfig) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const guardian = normalizeGuardianConfig(guardianConfig || {});
         const meta = context && typeof context === 'object' ? context : {};
+        const merchant = normalizeMerchantConfig(
+            merchantConfig ||
+            meta.merchant ||
+            meta.merchantConfig ||
+            CONFIG.merchant
+        );
         return {
             schema: 'lingverse-afk-config-pack/v1',
             scriptVersion: SCRIPT_VERSION,
@@ -1847,6 +2181,7 @@
             label: sanitizeDebugName(meta.label || '', 80),
             afkLoop: cfg,
             guardian: guardian,
+            merchant: merchant,
             riskStatus: buildAfkRiskStatus(cfg, guardian)
         };
     }
@@ -1865,7 +2200,7 @@
         const parsed = parseAfkConfigPackSource(source);
         const pack = parsed && parsed.schema === 'lingverse-afk-config-pack/v1'
             ? parsed
-            : buildAfkConfigPack(parsed.afkLoop || parsed, parsed.guardian || {}, parsed);
+            : buildAfkConfigPack(parsed.afkLoop || parsed, parsed.guardian || {}, parsed, parsed.merchant || parsed.merchantConfig || {});
         const importOptions = options && typeof options === 'object' ? options : {};
         const cfg = normalizeAfkLoopConfig(pack.afkLoop || {});
         const importWarnings = [];
@@ -1874,6 +2209,7 @@
             importWarnings.push('导入时已关闭挂机启动状态');
         }
         const guardian = normalizeGuardianConfig(pack.guardian || {});
+        const merchant = normalizeMerchantConfig(pack.merchant || CONFIG.merchant);
         return {
             schema: 'lingverse-afk-config-import/v1',
             sourceSchema: String(pack.schema || ''),
@@ -1882,6 +2218,7 @@
             label: sanitizeDebugName(pack.label || '', 80),
             afkLoop: cfg,
             guardian: guardian,
+            merchant: merchant,
             riskStatus: buildAfkRiskStatus(cfg, guardian),
             importWarnings
         };
@@ -2008,6 +2345,29 @@
         return current;
     }
 
+    function applyAfkAutomationPreset(configs, presetName) {
+        const source = configs && typeof configs === 'object' ? configs : {};
+        const afkSource = source.afkLoop || source.afk || source;
+        const merchantSource = source.merchant || CONFIG.merchant;
+        const afkLoop = applyAfkPreset(afkSource, presetName);
+        const merchant = ['steady', 'guardian', 'rich'].includes(presetName)
+            ? normalizeMerchantConfig(Object.assign({}, merchantSource, {
+                enabled: true,
+                onlyAutoExplore: true,
+                buyDelay: 800,
+                leaveWhenNoItems: true,
+                leaveAfterPurchaseStuck: true,
+                leaveOnInsufficientFunds: true
+            }))
+            : normalizeMerchantConfig(merchantSource);
+        return {
+            schema: 'lingverse-afk-automation-preset/v1',
+            preset: String(presetName || ''),
+            afkLoop,
+            merchant
+        };
+    }
+
     const AFK_PRESET_LABELS = {
         steady: '稳妥1倍',
         guardian: '护道1倍',
@@ -2031,6 +2391,15 @@
         { key: 'queueNirvanaPill', label: '丹药排队', format: formatAfkPresetBoolean, when: (cfg, expected) => cfg.useNirvanaPill || expected.useNirvanaPill }
     ];
 
+    const MERCHANT_PRESET_COMPARE_FIELDS = [
+        { key: 'enabled', label: '自动商人', format: formatAfkPresetBoolean },
+        { key: 'onlyAutoExplore', label: '商人自动上下文', format: formatAfkPresetBoolean },
+        { key: 'buyDelay', label: '商人延迟', format: value => `${value}ms` },
+        { key: 'leaveWhenNoItems', label: '商人无商品离开', format: formatAfkPresetBoolean },
+        { key: 'leaveAfterPurchaseStuck', label: '商人卡窗离开', format: formatAfkPresetBoolean },
+        { key: 'leaveOnInsufficientFunds', label: '商人灵石不足离开', format: formatAfkPresetBoolean }
+    ];
+
     function formatAfkPresetBoolean(value) {
         return value ? '开启' : '关闭';
     }
@@ -2041,7 +2410,7 @@
         return normalizeAfkLoopConfig(Object.assign({}, source, risks));
     }
 
-    function compareAfkPreset(config, presetName) {
+    function compareAfkPreset(config, presetName, merchantConfig) {
         const cfg = normalizeAfkPresetInputConfig(config || {});
         const expected = applyAfkPreset(cfg, presetName);
         const mismatchTexts = [];
@@ -2051,6 +2420,18 @@
             const connector = typeof expected[field.key] === 'boolean' ? '应' : '应为';
             mismatchTexts.push(`${field.label}${connector}${field.format(expected[field.key])}`);
         });
+        if (merchantConfig && typeof merchantConfig === 'object') {
+            const merchant = normalizeMerchantConfig(merchantConfig);
+            const expectedMerchant = applyAfkAutomationPreset({
+                afkLoop: cfg,
+                merchant
+            }, presetName).merchant;
+            MERCHANT_PRESET_COMPARE_FIELDS.forEach(field => {
+                if (merchant[field.key] === expectedMerchant[field.key]) return;
+                const connector = typeof expectedMerchant[field.key] === 'boolean' ? '应' : '应为';
+                mismatchTexts.push(`${field.label}${connector}${field.format(expectedMerchant[field.key])}`);
+            });
+        }
         return {
             preset: presetName,
             label: AFK_PRESET_LABELS[presetName] || presetName,
@@ -2070,12 +2451,15 @@
         return ['steady', 'guardian', 'rich'];
     }
 
-    function buildAfkPresetStatus(config) {
+    function buildAfkPresetStatus(config, merchantConfig) {
         const cfg = normalizeAfkPresetInputConfig(config || {});
         const preference = getAfkPresetPreference(cfg);
+        const merchant = merchantConfig && typeof merchantConfig === 'object'
+            ? normalizeMerchantConfig(merchantConfig)
+            : null;
         const byPreset = {};
         preference.forEach(preset => {
-            byPreset[preset] = compareAfkPreset(cfg, preset);
+            byPreset[preset] = compareAfkPreset(cfg, preset, merchant);
         });
         const best = preference
             .map(preset => byPreset[preset])
@@ -2639,6 +3023,58 @@
         return !!currentKey && (!attemptKey || attemptKey === currentKey);
     }
 
+    function resolveCombatTalismanDialogCloseAttempt(talismanAttempt, snapshot) {
+        const encounterKey = buildEncounterKey(snapshot || {});
+        if (!encounterKey) {
+            return { shouldAttempt: false, reason: 'no-encounter', encounterKey: '' };
+        }
+        const normalized = normalizeCombatTalismanAttempt(talismanAttempt);
+        const attemptKey = sanitizeDebugName(normalized.encounterKey || normalized.markEncounterKey, 120);
+        if (attemptKey && attemptKey !== encounterKey) {
+            return { shouldAttempt: false, reason: 'different-encounter', encounterKey };
+        }
+        const currentDialogState = getSnapshotTalismanDialogState(snapshot);
+        if (normalized.dialogClosed === true || currentDialogState === false) {
+            return { shouldAttempt: false, reason: 'already-closed', encounterKey };
+        }
+        if (normalized.reason === 'completed' &&
+            normalized.dialogClosed === false &&
+            currentDialogState === true) {
+            return { shouldAttempt: true, reason: 'dialog-stuck', encounterKey };
+        }
+        return {
+            shouldAttempt: false,
+            reason: currentDialogState === true ? 'dialog-open-without-completed-use' : 'not-needed',
+            encounterKey
+        };
+    }
+
+    function closeEncounterTalismanDialogWindow() {
+        try {
+            if (typeof _win.hideEncounterTalismanDialog === 'function') {
+                _win.hideEncounterTalismanDialog();
+                return { closed: true, source: 'page-function', failureMessage: '' };
+            }
+            const dialog = $('#encounterTalismanDialog');
+            if (!dialog) {
+                return { closed: true, source: 'no-dialog', failureMessage: '' };
+            }
+            dialog.classList.add('hidden');
+            const closed = !isElementVisibleForAutomation(dialog);
+            return {
+                closed,
+                source: 'dom',
+                failureMessage: closed ? '' : '符箓面板未隐藏'
+            };
+        } catch (e) {
+            return {
+                closed: false,
+                source: 'exception',
+                failureMessage: e.message || String(e)
+            };
+        }
+    }
+
     function hasFailedTalismanUseForEncounter(talismanAttempt, encounterKey) {
         const normalized = normalizeCombatTalismanAttempt(talismanAttempt);
         if (normalized.reason !== 'completed') return false;
@@ -2704,6 +3140,7 @@
         return {
             shouldAttempt: !!raw.shouldAttempt,
             reason: String(raw.reason || ''),
+            triggerReason: String(raw.triggerReason || ''),
             source: String(raw.source || ''),
             item: normalizeMerchantItem(itemSource),
             failureMessage: String(raw.failureMessage || '')
@@ -2741,6 +3178,7 @@
             multiplier: optionalNumberOrNull(raw.multiplier),
             actualMultiplier: optionalNumberOrNull(raw.actualMultiplier),
             source: String(raw.source || ''),
+            resourceShortage: !!raw.resourceShortage,
             failureMessage: String(raw.failureMessage || '')
         };
     }
@@ -3220,11 +3658,14 @@
         if (status === 'immortal_prison' || status === 'prison_material') {
             return { kind: 'immortalPrison', action: 'hard-stop', reason: 'immortal-prison' };
         }
+        if (payload.code === 430 || status === 'heavenly_ban' || detectHeavenlyBanNotice(message)) {
+            return { kind: 'heavenlyBan', action: 'hard-stop', reason: 'heavenly-ban' };
+        }
         if (status === 'dead' || status === 'death') {
             return { kind: 'death', action: 'revive-or-wait', reason: 'death' };
         }
         if (status === 'error') {
-            if (message.indexOf('神识不足') >= 0) {
+            if (detectExploreResourceShortageNotice(message)) {
                 return { kind: 'noSpirit', action: 'meditate', reason: 'no-spirit' };
             }
             return { kind: 'error', action: 'pause', reason: 'explore-error' };
@@ -3273,6 +3714,9 @@
             return cfg.autoReloadOnUpdate
                 ? { action: 'reloadPage', reason: 'game-update-auto-reload' }
                 : { action: 'wait', reason: 'game-update-available' };
+        }
+        if (snapshot.heavenlyBanActive) {
+            return { action: 'wait', reason: 'heavenly-ban' };
         }
         if (snapshot.immortalPrisonActive) {
             return { action: 'wait', reason: 'immortal-prison' };
@@ -3334,6 +3778,10 @@
             return { action: 'wait', reason: 'meditating' };
         }
 
+        if (snapshot.exploreStartResourceShortage) {
+            return { action: 'startMeditation', reason: 'explore-start-no-spirit' };
+        }
+
         if (snapshot.autoExploreRunning || snapshot.autoExplorePending) {
             if (exploreDisabledForSpirit) {
                 return { action: 'startMeditation', reason: 'explore-disabled-no-spirit' };
@@ -3382,6 +3830,10 @@
             return { action: 'startMeditation', reason: lowExploreBatchSpirit ? 'explore-batch-low-spirit' : 'spirit-below-threshold' };
         }
 
+        if (snapshot.autoExploreToggleStale) {
+            return { action: 'startAutoExplore', reason: 'auto-explore-toggle-stale' };
+        }
+
         return { action: 'startAutoExplore', reason: 'spirit-ready' };
     }
 
@@ -3411,6 +3863,18 @@
     function readElementText(el) {
         if (!el) return '';
         return String(el.innerText || el.textContent || '');
+    }
+
+    function readAfkExploreProgressLogText() {
+        if (typeof document === 'undefined' || typeof document.querySelector !== 'function') {
+            return '';
+        }
+        const selectors = ['#logContent', '.log-content', '#logPanel', '.log-area'];
+        for (const selector of selectors) {
+            const text = readElementText(document.querySelector(selector)).trim();
+            if (text) return text;
+        }
+        return readElementText(document.body).trim();
     }
 
     function findAfkResourceElement(selector, id) {
@@ -3472,6 +3936,7 @@
             isMeditating: !!(record && record.isMeditating),
             autoExploreRunning: !!(record && record.autoExploreRunning),
             gameUpdateNoticeActive: !!(record && record.gameUpdateNoticeActive),
+            heavenlyBanActive: !!(record && record.heavenlyBanActive),
             merchantActive: !!(record && record.merchantActive),
             encounterActive: !!(record && record.encounterActive),
             playerEncounterActive: !!(record && record.playerEncounterActive),
@@ -3615,6 +4080,7 @@
         return {
             shouldAttempt: normalized.shouldAttempt,
             reason: normalized.reason,
+            triggerReason: sanitizeDebugText(normalized.triggerReason, 80),
             source: sanitizeDebugText(normalized.source, 40),
             itemIndex: optionalNumberOrNull(item.index),
             itemName: sanitizeDebugName(item.name, 80),
@@ -3654,6 +4120,7 @@
             multiplier: optionalNumberOrNull(normalized.multiplier),
             actualMultiplier: optionalNumberOrNull(normalized.actualMultiplier),
             source: sanitizeDebugText(normalized.source, 40),
+            resourceShortage: !!normalized.resourceShortage,
             failureMessage: sanitizeDebugText(normalized.failureMessage, DEBUG_SUMMARY_TEXT_LIMIT)
         };
     }
@@ -3840,7 +4307,9 @@
             : buildAfkPhaseStatus(Object.assign({}, player, blockers, {
                 autoExploreRunning: !!automation.autoExploreRunning,
                 autoExplorePending: !!automation.autoExplorePending,
+                autoExploreToggleStale: !!automation.autoExploreToggleStale,
                 exploreStalled: !!automation.exploreStalled,
+                exploreStartResourceShortage: !!automation.exploreStartResourceShortage,
                 postReviveResume: !!automation.postReviveResume,
                 postInteractionResume: !!automation.postInteractionResume,
                 postMeditationResume: !!automation.postMeditationResume
@@ -3881,12 +4350,16 @@
                 adventureActive: !!blockers.adventureActive,
                 adventureId: blockers.adventureId || null,
                 adventureComplete: !!blockers.adventureComplete,
+                heavenlyBanActive: !!blockers.heavenlyBanActive,
                 immortalPrisonActive: !!blockers.immortalPrisonActive
             },
             automation: {
                 autoExploreRunning: !!automation.autoExploreRunning,
                 autoExplorePending: !!automation.autoExplorePending,
+                autoExploreToggleChecked: !!automation.autoExploreToggleChecked,
+                autoExploreToggleStale: !!automation.autoExploreToggleStale,
                 exploreStalled: !!automation.exploreStalled,
+                exploreStartResourceShortage: !!automation.exploreStartResourceShortage,
                 postReviveResume: !!automation.postReviveResume,
                 postInteractionResume: !!automation.postInteractionResume,
                 postMeditationResume: !!automation.postMeditationResume,
@@ -3935,8 +4408,11 @@
                     queueNirvanaPill: !!config.queueNirvanaPill,
                     autoDeclinePlayerEncounter: !!config.autoDeclinePlayerEncounter
                 },
+                ...(config.merchant && typeof config.merchant === 'object'
+                    ? { merchant: normalizeMerchantConfig(config.merchant) }
+                    : {}),
                 riskStatus: buildAfkRiskStatus(config, config.guardian, automation.resourceUsage),
-                presetStatus: buildAfkPresetStatus(config)
+                presetStatus: buildAfkPresetStatus(config, config.merchant)
             },
             history: {
                 decisionTail: tailRecords(history.decisionTail, DEBUG_SUMMARY_HISTORY_LIMIT).map(record => ({
@@ -3981,6 +4457,7 @@
         const labels = [];
         if (blockers.gameUpdateNoticeActive) labels.push('游戏更新');
         if (player.isDead) labels.push('死亡');
+        if (blockers.heavenlyBanActive) labels.push('天道禁闭');
         if (blockers.immortalPrisonActive) labels.push('混天典狱');
         if (blockers.merchantActive) labels.push('云游商人');
         if (blockers.encounterActive) labels.push('遭遇');
@@ -4105,6 +4582,7 @@
     function getAfkMeditationReturnLabel(reason) {
         const labels = {
             'auto-explore-low-spirit': '自动探索神识不足',
+            'explore-start-no-spirit': '探索启动资源不足',
             'explore-disabled-no-spirit': '页面提示神识不足',
             'spirit-below-threshold': '神识低于阈值',
             'explore-batch-low-spirit': '神识不足当前倍率',
@@ -4150,6 +4628,9 @@
     function buildAfkHardStopStatusLine(summary) {
         const source = summary && typeof summary === 'object' ? summary : {};
         const blockers = source.blockers && typeof source.blockers === 'object' ? source.blockers : {};
+        if (blockers.heavenlyBanActive) {
+            return '硬停: 天道禁闭 · 脚本暂停自动探索';
+        }
         if (blockers.immortalPrisonActive) {
             return '硬停: 混天典狱 · 脚本暂停自动探索';
         }
@@ -4159,6 +4640,9 @@
     function buildAfkHardStopAdviceStatusLine(summary) {
         const source = summary && typeof summary === 'object' ? summary : {};
         const blockers = source.blockers && typeof source.blockers === 'object' ? source.blockers : {};
+        if (blockers.heavenlyBanActive) {
+            return '硬停建议: 天道禁闭需要手动解除或等待 · 脚本不会自动跳过、自动点击或消耗资源';
+        }
         if (blockers.immortalPrisonActive) {
             return '硬停建议: 混天典狱需要手动处理 · 脚本不会自动跳过、自动点击或消耗资源';
         }
@@ -4299,6 +4783,7 @@
         const source = automation && typeof automation === 'object' ? automation : {};
         if (source.autoExploreRunning) return '运行中';
         if (source.autoExplorePending) return '恢复挂起';
+        if (source.autoExploreToggleStale) return '开关失配';
         if (source.exploreStalled) return '疑似卡住';
         if (source.postReviveResume) return '复活恢复窗口';
         if (source.postInteractionResume) return '事件恢复窗口';
@@ -4381,6 +4866,97 @@
         return `冥想预计: ${parts.join(' · ')}`;
     }
 
+    function buildAfkMeditationOverflowStatusLine(player) {
+        const source = player && typeof player === 'object' ? player : {};
+        if (!source.isMeditating) return '';
+        const spirit = numberOrNull(source.spirit);
+        const maxSpirit = numberOrNull(source.maxSpirit);
+        const recoveredSpirit = optionalNumberOrNull(source.meditationRecoveredSpirit);
+        if (spirit === null || maxSpirit === null || maxSpirit <= 0 || recoveredSpirit === null || recoveredSpirit <= 0) {
+            return '';
+        }
+        const estimatedSpirit = Math.max(0, spirit) + Math.max(0, recoveredSpirit);
+        const overflowSpirit = estimatedSpirit - maxSpirit;
+        if (overflowSpirit <= 0) return '';
+        return `冥想溢出: 估算${formatAfkReportNumber(Math.round(estimatedSpirit))}/${formatAfkReportNumber(maxSpirit)} · 超出${formatAfkReportNumber(Math.round(overflowSpirit))}识 · 可收功探索或缩短冥想时间`;
+    }
+
+    function buildAfkMeditationTimingAdviceStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const player = source.player && typeof source.player === 'object' ? source.player : {};
+        if (!player.isMeditating) return '';
+        const spirit = numberOrNull(player.spirit);
+        const maxSpirit = numberOrNull(player.maxSpirit);
+        const recoveredSpirit = optionalNumberOrNull(player.meditationRecoveredSpirit);
+        if (spirit === null || maxSpirit === null || maxSpirit <= 0 || recoveredSpirit === null || recoveredSpirit <= 0) {
+            return '';
+        }
+        const estimatedSpirit = Math.max(0, spirit) + Math.max(0, recoveredSpirit);
+        if (estimatedSpirit <= maxSpirit || spirit >= maxSpirit) return '';
+        const phase = source.phase && typeof source.phase === 'object' ? source.phase : {};
+        const elapsedSeconds = optionalNumberOrNull(phase.elapsedSeconds);
+        if (elapsedSeconds === null || elapsedSeconds <= 0) return '';
+        const recoveryPerSecond = Math.max(0, recoveredSpirit) / elapsedSeconds;
+        if (!Number.isFinite(recoveryPerSecond) || recoveryPerSecond <= 0) return '';
+        const neededSpirit = Math.max(0, maxSpirit - Math.max(0, spirit));
+        const fullSeconds = neededSpirit / recoveryPerSecond;
+        if (!Number.isFinite(fullSeconds) || fullSeconds <= 0 || fullSeconds >= elapsedSeconds) return '';
+        const config = source.config && typeof source.config === 'object' ? source.config : {};
+        const configuredMinutes = numberOrNull(config.meditationMinutes);
+        const parts = [
+            `冥想调时: 约${formatAfkReportNumber(Math.max(1, Math.round(fullSeconds / 60)))}分钟可满识`,
+            `已冥想${formatAfkReportNumber(Math.max(0, Math.round(elapsedSeconds / 60)))}分钟`,
+            `超出满识约${formatAfkReportNumber(Math.max(0, Math.round((elapsedSeconds - fullSeconds) / 60)))}分钟`
+        ];
+        if (configuredMinutes !== null && configuredMinutes > 0) {
+            parts.push(`当前配置${formatAfkReportNumber(configuredMinutes)}分钟`);
+        }
+        return parts.join(' · ');
+    }
+
+    function buildAfkExploreCapacityStatusLine(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const player = source.player && typeof source.player === 'object' ? source.player : {};
+        const config = source.config && typeof source.config === 'object' ? source.config : {};
+        const phase = source.phase && typeof source.phase === 'object' ? source.phase : {};
+        const spirit = numberOrNull(player.spirit);
+        const spiritCost = numberOrNull(player.spiritCost);
+        if (spirit === null || spiritCost === null || spiritCost <= 0) return '';
+
+        const multiplier = Math.max(1, Math.floor(toFiniteNumber(config.exploreMultiplier, 1)));
+        const batchCost = Math.max(1, Math.ceil(spiritCost * multiplier));
+        const maxSpirit = numberOrNull(player.maxSpirit);
+        const capSpirit = value => (maxSpirit === null || maxSpirit <= 0 ? value : Math.min(value, maxSpirit));
+        const recoveredSpirit = optionalNumberOrNull(player.meditationRecoveredSpirit);
+        const hasMeditationEstimate = !!player.isMeditating && recoveredSpirit !== null && recoveredSpirit > 0;
+        const currentSpirit = Math.round(capSpirit(Math.max(0, spirit) + (hasMeditationEstimate ? Math.max(0, recoveredSpirit) : 0)));
+        const batchCount = Math.floor(Math.max(0, currentSpirit) / batchCost);
+        const singleCount = Math.floor(Math.max(0, currentSpirit) / Math.max(1, spiritCost));
+        const parts = [
+            `${hasMeditationEstimate ? '当前估算' : '当前'}${formatAfkReportNumber(currentSpirit)}识`,
+            `${formatAfkReportNumber(multiplier)}倍需${formatAfkReportNumber(batchCost)}识/组`,
+            `可跑${formatAfkReportNumber(batchCount)}组`
+        ];
+        if (multiplier > 1) {
+            parts.push(`约${formatAfkReportNumber(singleCount)}次1倍探索`);
+        }
+        const elapsedSeconds = optionalNumberOrNull(phase.elapsedSeconds);
+        const targetFromPhase = optionalNumberOrNull(phase.targetSeconds);
+        const targetFromConfig = Math.max(0, toFiniteNumber(config.meditationMinutes, 0)) * 60;
+        const targetSeconds = targetFromPhase !== null ? targetFromPhase : (targetFromConfig > 0 ? targetFromConfig : null);
+        if (hasMeditationEstimate && elapsedSeconds !== null && elapsedSeconds > 0 && targetSeconds !== null && targetSeconds > elapsedSeconds) {
+            const recoveredPerSecond = Math.max(0, recoveredSpirit) / elapsedSeconds;
+            const remainingSeconds = Math.max(0, targetSeconds - elapsedSeconds);
+            const plannedSpirit = Math.round(capSpirit(Math.max(0, spirit) + Math.max(0, recoveredSpirit) + recoveredPerSecond * remainingSeconds));
+            const plannedBatchCount = Math.floor(Math.max(0, plannedSpirit) / batchCost);
+            parts.push(`计划收功约${formatAfkReportNumber(plannedSpirit)}识/${formatAfkReportNumber(plannedBatchCount)}组`);
+        }
+        if (batchCount <= 0) {
+            parts.push('不足当前倍率');
+        }
+        return `探索续航: ${parts.join(' · ')}`;
+    }
+
     function buildAfkRecentLogStatusLine(summary) {
         const source = summary && typeof summary === 'object' ? summary : {};
         const automation = source.automation && typeof source.automation === 'object' ? source.automation : {};
@@ -4447,6 +5023,20 @@
             const configLineIndex = lines.findIndex(line => line.indexOf('配置: ') === 0);
             lines.splice(configLineIndex >= 0 ? configLineIndex + 1 : lines.length, 0, presetStatusLine);
         }
+        const merchantConfigLine = buildAfkMerchantConfigStatusLine(config.merchant);
+        if (merchantConfigLine) {
+            const presetLineIndex = lines.findIndex(line => line.indexOf('模式: ') === 0);
+            const configLineIndex = lines.findIndex(line => line.indexOf('配置: ') === 0);
+            const insertIndex = presetLineIndex >= 0
+                ? presetLineIndex + 1
+                : (configLineIndex >= 0 ? configLineIndex + 1 : lines.length);
+            lines.splice(insertIndex, 0, merchantConfigLine);
+        }
+        const exploreCapacityStatusLine = buildAfkExploreCapacityStatusLine(summary);
+        if (exploreCapacityStatusLine) {
+            const exploreLineIndex = lines.findIndex(line => line.indexOf('探索: ') === 0);
+            lines.splice(exploreLineIndex >= 0 ? exploreLineIndex + 1 : lines.length, 0, exploreCapacityStatusLine);
+        }
         (Array.isArray(riskStatus.warnings) ? riskStatus.warnings : [])
             .map(item => sanitizeDebugText(item, DEBUG_SUMMARY_TEXT_LIMIT))
             .filter(Boolean)
@@ -4466,6 +5056,14 @@
         const meditationForecastStatusLine = buildAfkMeditationForecastStatusLine(summary);
         if (meditationForecastStatusLine) {
             lines.push(meditationForecastStatusLine);
+        }
+        const meditationOverflowStatusLine = buildAfkMeditationOverflowStatusLine(player);
+        if (meditationOverflowStatusLine) {
+            lines.push(meditationOverflowStatusLine);
+        }
+        const meditationTimingAdviceStatusLine = buildAfkMeditationTimingAdviceStatusLine(summary);
+        if (meditationTimingAdviceStatusLine) {
+            lines.push(meditationTimingAdviceStatusLine);
         }
         const meditationFallbackStatusLine = buildAfkMeditationFallbackStatusLine(player);
         if (meditationFallbackStatusLine) {
@@ -4615,6 +5213,161 @@
         };
     }
 
+    function shouldPersistAfkIssueSummary(summary) {
+        const source = summary && typeof summary === 'object' ? summary : {};
+        const automation = source.automation && typeof source.automation === 'object' ? source.automation : {};
+        const diagnosis = automation.waitDiagnosis && typeof automation.waitDiagnosis === 'object'
+            ? automation.waitDiagnosis
+            : null;
+        return !!(diagnosis && diagnosis.active);
+    }
+
+    function buildAfkLastIssueSnapshotRecord(source, context) {
+        const parsed = source && typeof source === 'object' ? source : parseAfkIssueReplaySource(source);
+        const summary = parsed && parsed.schema === 'lingverse-afk-debug-summary/v1'
+            ? parsed
+            : buildAfkDebugSummary(parsed);
+        if (!shouldPersistAfkIssueSummary(summary)) return null;
+
+        const report = buildAfkStatusReport(summary);
+        const automation = summary.automation && typeof summary.automation === 'object' ? summary.automation : {};
+        const decision = summary.decision && typeof summary.decision === 'object' ? summary.decision : {};
+        const diagnosis = automation.waitDiagnosis && typeof automation.waitDiagnosis === 'object'
+            ? automation.waitDiagnosis
+            : {};
+        const savedAt = context && context.savedAt
+            ? String(context.savedAt)
+            : new Date().toISOString();
+
+        return {
+            schema: 'lingverse-afk-last-issue-snapshot/v1',
+            sourceSchema: String(summary.schema || summary.sourceSchema || ''),
+            scriptVersion: String(summary.scriptVersion || SCRIPT_VERSION),
+            capturedAt: String(summary.capturedAt || ''),
+            savedAt,
+            action: sanitizeDebugText(diagnosis.action || decision.action || '', 40),
+            reason: sanitizeDebugText(diagnosis.reason || decision.reason || '', 80),
+            diagnosis: summarizeAfkWaitingDiagnosis(diagnosis),
+            summary,
+            report: {
+                schema: report.schema,
+                sourceSchema: report.sourceSchema,
+                scriptVersion: report.scriptVersion,
+                capturedAt: report.capturedAt,
+                headline: sanitizeDebugText(report.headline, DEBUG_SUMMARY_TEXT_LIMIT),
+                text: truncateDebugText(report.text, 12000),
+                lines: report.lines.slice(0, AFK_LAST_ISSUE_REPORT_LINE_LIMIT)
+                    .map(line => sanitizeDebugText(line, 300))
+            }
+        };
+    }
+
+    function saveAfkLastIssueSnapshot(source, context) {
+        const record = buildAfkLastIssueSnapshotRecord(source, context);
+        if (!record) return null;
+        try {
+            localStorage.setItem(AFK_LAST_ISSUE_STORAGE_KEY, JSON.stringify(record));
+        } catch (e) {}
+        saveAfkIssueHistoryRecord(record);
+        return record;
+    }
+
+    function getLastAfkIssueSnapshot() {
+        try {
+            const raw = localStorage.getItem(AFK_LAST_ISSUE_STORAGE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            if (!parsed || parsed.schema !== 'lingverse-afk-last-issue-snapshot/v1') return null;
+            return parsed;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function clearLastAfkIssueSnapshot() {
+        try {
+            localStorage.removeItem(AFK_LAST_ISSUE_STORAGE_KEY);
+        } catch (e) {}
+    }
+
+    function buildAfkIssueHistoryKey(record) {
+        const source = record && typeof record === 'object' ? record : {};
+        const diagnosis = source.diagnosis && typeof source.diagnosis === 'object' ? source.diagnosis : {};
+        return [
+            source.action || '',
+            source.reason || '',
+            diagnosis.firstAt || source.capturedAt || '',
+            diagnosis.likelyCause || '',
+            diagnosis.message || ''
+        ].map(item => sanitizeDebugText(item, 160)).join('|');
+    }
+
+    function normalizeAfkIssueHistoryRecord(record) {
+        const source = record && typeof record === 'object' ? record : {};
+        if (source.schema !== 'lingverse-afk-last-issue-snapshot/v1') return null;
+        return source;
+    }
+
+    function getAfkIssueHistory() {
+        try {
+            const raw = localStorage.getItem(AFK_ISSUE_HISTORY_STORAGE_KEY);
+            if (!raw) {
+                return {
+                    schema: 'lingverse-afk-issue-history/v1',
+                    scriptVersion: SCRIPT_VERSION,
+                    updatedAt: '',
+                    entries: []
+                };
+            }
+            const parsed = JSON.parse(raw);
+            if (!parsed || parsed.schema !== 'lingverse-afk-issue-history/v1') {
+                throw new Error('history schema mismatch');
+            }
+            const entries = (Array.isArray(parsed.entries) ? parsed.entries : [])
+                .map(normalizeAfkIssueHistoryRecord)
+                .filter(Boolean)
+                .slice(-AFK_ISSUE_HISTORY_LIMIT);
+            return {
+                schema: 'lingverse-afk-issue-history/v1',
+                scriptVersion: String(parsed.scriptVersion || SCRIPT_VERSION),
+                updatedAt: String(parsed.updatedAt || ''),
+                entries
+            };
+        } catch (e) {
+            return {
+                schema: 'lingverse-afk-issue-history/v1',
+                scriptVersion: SCRIPT_VERSION,
+                updatedAt: '',
+                entries: []
+            };
+        }
+    }
+
+    function saveAfkIssueHistoryRecord(record) {
+        const normalized = normalizeAfkIssueHistoryRecord(record);
+        if (!normalized) return getAfkIssueHistory();
+        const history = getAfkIssueHistory();
+        const key = buildAfkIssueHistoryKey(normalized);
+        const entries = history.entries.filter(item => buildAfkIssueHistoryKey(item) !== key);
+        entries.push(normalized);
+        const next = {
+            schema: 'lingverse-afk-issue-history/v1',
+            scriptVersion: SCRIPT_VERSION,
+            updatedAt: String(normalized.savedAt || new Date().toISOString()),
+            entries: entries.slice(-AFK_ISSUE_HISTORY_LIMIT)
+        };
+        try {
+            localStorage.setItem(AFK_ISSUE_HISTORY_STORAGE_KEY, JSON.stringify(next));
+        } catch (e) {}
+        return next;
+    }
+
+    function clearAfkIssueHistory() {
+        try {
+            localStorage.removeItem(AFK_ISSUE_HISTORY_STORAGE_KEY);
+        } catch (e) {}
+    }
+
     function buildAfkDebugSnapshot(state, config, decision, context) {
         const cfg = normalizeAfkLoopConfig(config || {});
         const snapshot = state || {};
@@ -4625,6 +5378,9 @@
         const guardianCfg = debugContext.guardianConfig
             ? normalizeGuardianConfig(debugContext.guardianConfig)
             : getCurrentGuardianConfig();
+        const merchantCfg = debugContext.merchantConfig && typeof debugContext.merchantConfig === 'object'
+            ? normalizeMerchantConfig(debugContext.merchantConfig)
+            : null;
 
         return {
             schema: 'lingverse-afk-debug-snapshot/v1',
@@ -4664,12 +5420,16 @@
                 adventureActive: !!snapshot.adventureActive,
                 adventureId,
                 adventureComplete: !!snapshot.adventureComplete,
+                heavenlyBanActive: !!snapshot.heavenlyBanActive,
                 immortalPrisonActive: !!snapshot.immortalPrisonActive
             },
             automation: {
                 autoExploreRunning: !!snapshot.autoExploreRunning,
                 autoExplorePending: !!snapshot.autoExplorePending,
+                autoExploreToggleChecked: !!snapshot.autoExploreToggleChecked,
+                autoExploreToggleStale: !!snapshot.autoExploreToggleStale,
                 exploreStalled: !!snapshot.exploreStalled,
+                exploreStartResourceShortage: !!snapshot.exploreStartResourceShortage,
                 postReviveResume: !!snapshot.postReviveResume,
                 postInteractionResume: !!snapshot.postInteractionResume,
                 postMeditationResume: !!snapshot.postMeditationResume,
@@ -4756,7 +5516,8 @@
                     priority: guardianCfg.priority.slice(),
                     threatLevel: guardianCfg.threatLevel
                 },
-                presetStatus: buildAfkPresetStatus(cfg)
+                ...(merchantCfg ? { merchant: merchantCfg } : {}),
+                presetStatus: buildAfkPresetStatus(cfg, merchantCfg)
             },
             history: {
                 decisionTail: normalizeDecisionHistory(debugContext.decisionHistory),
@@ -4770,12 +5531,17 @@
         SCRIPT_VERSION,
         parseMerchantPrice,
         selectMerchantItem,
+        extractMerchantItemsFromDom,
+        detectMerchantInsufficientFundsNotice,
         isMerchantAutomationContext,
         detectGameUpdateNotice,
+        detectHeavenlyBanNotice,
+        detectExploreResourceShortageNotice,
         resolveApiObject,
         isElementVisibleForAutomation,
         parseMeditationBarState,
         getExploreProgressLogSignature,
+        readAfkExploreProgressLogText,
         normalizeAfkLoopConfig,
         normalizeAfkResourceUsage,
         resolveAfkResourceBudget,
@@ -4801,6 +5567,7 @@
         buildEncounterKey,
         shouldUseCombatTalismansForEncounter,
         resolveCombatTalismanAttempt,
+        resolveCombatTalismanDialogCloseAttempt,
         resolveEncounterFightAttempt,
         normalizeEncounterFightAttempt,
         normalizeReviveAttempt,
@@ -4811,6 +5578,7 @@
         normalizeExploreStartAttempt,
         resolveExploreMultiplierSetting,
         normalizeGuardianConfig,
+        normalizeMerchantConfig,
         buildGuardianHirePayload,
         resolveEncounterGuardianAttempt,
         selectNirvanaRebirthPill,
@@ -4823,6 +5591,12 @@
         buildAfkDebugSnapshot,
         buildAfkDebugSummary,
         buildAfkIssueReplay,
+        buildAfkLastIssueSnapshotRecord,
+        saveAfkLastIssueSnapshot,
+        getLastAfkIssueSnapshot,
+        clearLastAfkIssueSnapshot,
+        getAfkIssueHistory,
+        clearAfkIssueHistory,
         buildAfkEnvironmentInfo,
         buildAfkEnvironmentStatusLine,
         buildAfkAdventureStatusLine,
@@ -4845,8 +5619,10 @@
         buildAfkMeditationStatusLine,
         buildAfkMeditationAdviceStatusLine,
         buildAfkMeditationSyncStatusLine,
+        buildAfkExploreCapacityStatusLine,
         buildAfkMerchantStatusLine,
         buildAfkMerchantAdviceStatusLine,
+        buildAfkMerchantConfigStatusLine,
         buildAfkPlayerEncounterStatusLine,
         buildAfkPlayerEncounterAdviceStatusLine,
         buildAfkAdventureAttemptStatusLine,
@@ -4855,7 +5631,8 @@
         buildAfkExploreStartAdviceStatusLine,
         buildAfkStatusReport,
         mergeAdventureStrategyImport,
-        applyAfkPreset
+        applyAfkPreset,
+        applyAfkAutomationPreset
     });
 
     // 状态对象
@@ -5033,6 +5810,14 @@
         },
 
         /**
+         * 离开当前云游商人
+         */
+        async leaveMerchant() {
+            const apiObj = this.getApiObj();
+            return await apiObj.post('/api/game/merchant/leave', {});
+        },
+
+        /**
          * 灵石复活
          */
         async revive() {
@@ -5110,6 +5895,21 @@
         cfg.adventureChoiceMap = normalizeAdventureChoiceMap($('#am-afk-adventure-map')?.value ?? cfg.adventureChoiceMap);
         CONFIG.afkLoop = normalizeAfkLoopConfig(cfg);
         return CONFIG.afkLoop;
+    }
+
+    function readMerchantConfigFromUI(base) {
+        const cfg = Object.assign({}, base || CONFIG.merchant || {});
+        cfg.enabled = $('#am-merchant-enabled')?.checked ?? cfg.enabled;
+        cfg.onlyAutoExplore = $('#am-merchant-auto-only')?.checked ?? cfg.onlyAutoExplore;
+        cfg.leaveWhenNoItems = $('#am-merchant-leave-empty')?.checked ?? cfg.leaveWhenNoItems;
+        cfg.leaveAfterPurchaseStuck = $('#am-merchant-leave-stuck')?.checked ?? cfg.leaveAfterPurchaseStuck;
+        cfg.leaveOnInsufficientFunds = $('#am-merchant-leave-insufficient')?.checked ?? cfg.leaveOnInsufficientFunds;
+        const merchantDelay = parseInt($('#am-merchant-delay')?.value);
+        if (!isNaN(merchantDelay)) {
+            cfg.buyDelay = merchantDelay;
+        }
+        CONFIG.merchant = normalizeMerchantConfig(cfg);
+        return CONFIG.merchant;
     }
 
     // 统计管理器
@@ -5325,6 +6125,18 @@
                             <input type="checkbox" id="am-merchant-auto-only" ${CONFIG.merchant.onlyAutoExplore?'checked':''} style="cursor:pointer;">
                             <span style="font-size:13px;color:${text};">仅自动探索/挂机循环时处理</span>
                         </label>
+                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+                            <input type="checkbox" id="am-merchant-leave-empty" ${CONFIG.merchant.leaveWhenNoItems?'checked':''} style="cursor:pointer;">
+                            <span style="font-size:13px;color:${text};">无可买商品时自动离开</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+                            <input type="checkbox" id="am-merchant-leave-stuck" ${CONFIG.merchant.leaveAfterPurchaseStuck?'checked':''} style="cursor:pointer;">
+                            <span style="font-size:13px;color:${text};">购买后窗口未关闭时自动离开</span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;cursor:pointer;">
+                            <input type="checkbox" id="am-merchant-leave-insufficient" ${CONFIG.merchant.leaveOnInsufficientFunds?'checked':''} style="cursor:pointer;">
+                            <span style="font-size:13px;color:${text};">灵石不足时自动离开</span>
+                        </label>
                         <div>
                             <div style="font-size:11px;color:${isDark?'#94a3b8':'#64748b'};margin-bottom:4px;">购买延迟 (ms)</div>
                             <input type="number" id="am-merchant-delay" value="${CONFIG.merchant.buyDelay}" min="0" max="10000" step="100" style="width:100%;padding:6px;background:${isDark?'#252b3a':'#fff'};border:1px solid ${border};border-radius:4px;color:${text};font-size:12px;">
@@ -5493,6 +6305,8 @@
                             <button id="am-afk-stop" style="flex:1 1 90px;padding:8px;background:#64748b;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">停止挂机</button>
                             <button id="am-afk-copy-status" style="flex:1 1 90px;padding:8px;background:#0369a1;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制状态</button>
                             <button id="am-afk-copy-debug" style="flex:1 1 90px;padding:8px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制摘要</button>
+                            <button id="am-afk-copy-last-issue" style="flex:1 1 90px;padding:8px;background:#854d0e;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制最近卡点</button>
+                            <button id="am-afk-copy-issue-history" style="flex:1 1 90px;padding:8px;background:#713f12;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;">复制卡点历史</button>
                         </div>
                         <div style="margin-top:8px;padding-top:8px;border-top:1px solid ${border};">
                             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
@@ -5557,6 +6371,8 @@
             $('#am-afk-stop')?.addEventListener('click', () => AfkLoopManager.stop());
             $('#am-afk-copy-status')?.addEventListener('click', () => AfkLoopManager.copyStatusReport());
             $('#am-afk-copy-debug')?.addEventListener('click', () => AfkLoopManager.copyDebugSnapshot());
+            $('#am-afk-copy-last-issue')?.addEventListener('click', () => AfkLoopManager.copyLastIssueSnapshot());
+            $('#am-afk-copy-issue-history')?.addEventListener('click', () => AfkLoopManager.copyIssueHistory());
             $('#am-afk-preset-steady')?.addEventListener('click', () => AfkLoopManager.applyPreset('steady'));
             $('#am-afk-preset-guardian')?.addEventListener('click', () => AfkLoopManager.applyPreset('guardian'));
             $('#am-afk-preset-rich')?.addEventListener('click', () => AfkLoopManager.applyPreset('rich'));
@@ -5584,11 +6400,7 @@
                 CONFIG.guardian.priority = $('#am-guardian-priority')?.value || 'incarnation,normal,body';
                 CONFIG.guardian.threatLevel = $('#am-guardian-threat')?.value || 'danger';
 
-                CONFIG.merchant.enabled = $('#am-merchant-enabled')?.checked ?? true;
-                CONFIG.merchant.onlyAutoExplore = $('#am-merchant-auto-only')?.checked ?? true;
-                CONFIG.merchant.buyDelay = parseInt($('#am-merchant-delay')?.value || '800') || 0;
-                if (CONFIG.merchant.buyDelay < 0) CONFIG.merchant.buyDelay = 0;
-                if (CONFIG.merchant.buyDelay > 10000) CONFIG.merchant.buyDelay = 10000;
+                readMerchantConfigFromUI();
 
                 readAfkLoopConfigFromUI();
                 saveConfig();
@@ -5710,6 +6522,9 @@
             const priorityEl = $('#am-guardian-priority');
             const merchantEnabledEl = $('#am-merchant-enabled');
             const merchantAutoOnlyEl = $('#am-merchant-auto-only');
+            const merchantLeaveEmptyEl = $('#am-merchant-leave-empty');
+            const merchantLeaveStuckEl = $('#am-merchant-leave-stuck');
+            const merchantLeaveInsufficientEl = $('#am-merchant-leave-insufficient');
             const merchantDelayEl = $('#am-merchant-delay');
             const afkEnabledEl = $('#am-afk-enabled');
             const afkMeditationMinutesEl = $('#am-afk-meditation-minutes');
@@ -5748,6 +6563,9 @@
             if (threatEl) threatEl.value = CONFIG.guardian.threatLevel || 'danger';
             if (merchantEnabledEl) merchantEnabledEl.checked = CONFIG.merchant.enabled;
             if (merchantAutoOnlyEl) merchantAutoOnlyEl.checked = CONFIG.merchant.onlyAutoExplore;
+            if (merchantLeaveEmptyEl) merchantLeaveEmptyEl.checked = CONFIG.merchant.leaveWhenNoItems;
+            if (merchantLeaveStuckEl) merchantLeaveStuckEl.checked = CONFIG.merchant.leaveAfterPurchaseStuck;
+            if (merchantLeaveInsufficientEl) merchantLeaveInsufficientEl.checked = CONFIG.merchant.leaveOnInsufficientFunds;
             if (merchantDelayEl) merchantDelayEl.value = CONFIG.merchant.buyDelay;
             if (afkEnabledEl) afkEnabledEl.checked = CONFIG.afkLoop.enabled;
             if (afkMeditationMinutesEl) afkMeditationMinutesEl.value = CONFIG.afkLoop.meditationMinutes;
@@ -5819,9 +6637,10 @@
         async copyAfkConfigPack() {
             try {
                 const cfg = readAfkLoopConfigFromUI();
+                const merchant = readMerchantConfigFromUI();
                 const pack = buildAfkConfigPack(cfg, getCurrentGuardianConfig(), {
                     label: document.title || 'LingVerse AFK'
-                });
+                }, merchant);
                 const text = JSON.stringify(pack, null, 2);
                 await AfkLoopManager.copyText(text);
                 const outputEl = $('#am-afk-config-pack-output');
@@ -5847,6 +6666,7 @@
                     priority: imported.guardian.priorityKey || imported.guardian.priority.join(','),
                     threatLevel: imported.guardian.threatLevel
                 };
+                CONFIG.merchant = imported.merchant;
                 saveConfig();
                 this.updatePanelFromConfig();
                 if (outputEl) {
@@ -5917,6 +6737,50 @@
             if (outputEl) outputEl.textContent = '未导入';
         },
 
+        getPanelState() {
+            const panel = $('#am-panel');
+            const content = $('#am-content');
+            const sidebarButton = $('#am-sidebar-btn');
+            const rootDataset = document.documentElement && document.documentElement.dataset || {};
+            const display = panel && panel.style && panel.style.display
+                ? panel.style.display
+                : (panel && typeof getComputedStyle === 'function' ? getComputedStyle(panel).display : '');
+            const exists = !!panel;
+            const visible = exists && display !== 'none';
+            const minimized = !!(content && content.style && content.style.display === 'none');
+            return {
+                exists,
+                display: exists ? display : '',
+                visible,
+                minimized,
+                helperVersion: SCRIPT_VERSION,
+                initializedVersion: getInitializedHelperVersion(),
+                extensionVersion: String(rootDataset.lingverseAutoMapExtensionVersion || ''),
+                injectedVersion: String(rootDataset.lingverseAutoMapInjectedVersion || ''),
+                afkEnabled: !!(CONFIG.afkLoop && CONFIG.afkLoop.enabled),
+                merchantEnabled: !!(CONFIG.merchant && CONFIG.merchant.enabled),
+                sidebarButtonExists: !!sidebarButton
+            };
+        },
+
+        showPanel() {
+            const panel = $('#am-panel');
+            const sidebarButton = $('#am-sidebar-btn');
+            if (!panel) return this.getPanelState();
+            panel.style.display = 'flex';
+            if (sidebarButton) sidebarButton.textContent = '关闭面板';
+            return this.getPanelState();
+        },
+
+        hidePanel() {
+            const panel = $('#am-panel');
+            const sidebarButton = $('#am-sidebar-btn');
+            if (!panel) return this.getPanelState();
+            panel.style.display = 'none';
+            if (sidebarButton) sidebarButton.textContent = '打开面板';
+            return this.getPanelState();
+        },
+
         /**
          * 创建侧边栏按钮
          */
@@ -5944,7 +6808,11 @@
             `;
             btn.addEventListener('click', () => {
                 const panel = $('#am-panel');
-                if (panel) panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+                if (!panel || panel.style.display === 'none') {
+                    this.showPanel();
+                } else {
+                    this.hidePanel();
+                }
             });
 
             section.appendChild(btn);
@@ -6266,42 +7134,67 @@
             if (!this.shouldHandle()) return;
 
             let res;
+            let items = [];
+            let readFailureMessage = '';
             try {
                 res = await API.getMerchant();
             } catch (e) {
-                const failureMessage = e.message || String(e);
+                readFailureMessage = e.message || String(e);
+            }
+
+            if (res && res.code === 200 && res.data) {
+                items = Array.isArray(res.data.items) ? res.data.items : [];
+            } else if (isMerchantMissingResponse(res)) {
+                this.clearStaleMerchant('merchant-missing');
+                return;
+            } else if (!readFailureMessage) {
+                readFailureMessage = res && res.message || '未知错误';
+            }
+
+            let itemSource = 'api';
+            let selected = selectMerchantItem(items);
+            if (!selected) {
+                const domItems = this.readMerchantItemsFromDom();
+                const domSelected = selectMerchantItem(domItems);
+                if (domSelected) {
+                    items = domItems;
+                    selected = domSelected;
+                    itemSource = 'dom';
+                }
+            }
+
+            if (!selected && readFailureMessage) {
                 this.lastAttempt = normalizeMerchantAttempt({
                     shouldAttempt: true,
                     reason: 'read-failed',
                     source: 'api',
-                    failureMessage
+                    failureMessage: readFailureMessage
                 });
-                Logger.warn(`自动商人读取失败: ${failureMessage}`);
+                Logger.warn(`自动商人读取失败: ${readFailureMessage}`);
                 return;
             }
 
-            if (res.code !== 200 || !res.data) {
-                this.lastAttempt = normalizeMerchantAttempt({
-                    shouldAttempt: true,
-                    reason: 'read-failed',
-                    source: 'api',
-                    failureMessage: res && res.message || '未知错误'
-                });
-                return;
-            }
-
-            const items = res.data.items || [];
             const merchantKey = this.getMerchantKey(items);
-            if (merchantKey && merchantKey === this.lastAttemptKey) return;
+            if (merchantKey && merchantKey === this.lastAttemptKey) {
+                if (CONFIG.merchant.leaveAfterPurchaseStuck &&
+                    this.lastAttempt &&
+                    this.lastAttempt.reason === 'purchase-triggered') {
+                    await this.leaveMerchant('purchase-stuck');
+                }
+                return;
+            }
 
-            const selected = selectMerchantItem(items);
             if (!selected) {
                 Logger.warn('云游商人没有可自动购买的商品');
-                this.lastAttemptKey = merchantKey;
+                const noItemReason = Array.isArray(items) && items.length > 0 ? 'no-priced-items' : 'no-items';
+                this.lastAttemptKey = merchantKey || `merchant:${noItemReason}`;
                 this.lastAttempt = normalizeMerchantAttempt({
                     shouldAttempt: false,
-                    reason: Array.isArray(items) && items.length > 0 ? 'no-priced-items' : 'no-items'
+                    reason: noItemReason
                 });
+                if (CONFIG.merchant.leaveWhenNoItems) {
+                    await this.leaveMerchant(noItemReason);
+                }
                 return;
             }
 
@@ -6311,26 +7204,105 @@
             this.lastAttempt = normalizeMerchantAttempt({
                 shouldAttempt: true,
                 reason: 'purchase-ready',
+                source: itemSource,
                 item: selected
             });
             await this.buySelected(selected);
         },
 
-        async buySelected(item) {
+        readMerchantItemsFromDom() {
+            return extractMerchantItemsFromDom();
+        },
+
+        clearStaleMerchant(reason) {
+            this.lastAttemptKey = '';
+            this.lastAttempt = normalizeMerchantAttempt({
+                shouldAttempt: false,
+                reason: 'stale-cleared',
+                triggerReason: reason || '',
+                source: 'api-read'
+            });
+            Logger.info('接口确认当前没有云游商人，已清理残留商人状态');
+            this.refreshAfterLeave();
+        },
+
+        async leaveMerchant(reason) {
             let source = 'api';
+            this.lastAttempt = normalizeMerchantAttempt({
+                shouldAttempt: true,
+                reason: 'leave-ready',
+                triggerReason: reason || '',
+                source
+            });
             try {
-                if (typeof _win.buyMerchantItem === 'function') {
-                    source = 'page-function';
-                    await _win.buyMerchantItem(item.index);
+                const res = await API.leaveMerchant();
+                if (res.code === 200 || isMerchantMissingResponse(res)) {
                     this.lastAttempt = normalizeMerchantAttempt({
                         shouldAttempt: false,
-                        reason: 'purchase-triggered',
-                        source,
-                        item
+                        reason: 'leave-triggered',
+                        triggerReason: reason || '',
+                        source
                     });
-                    return;
+                    Logger.info('已自动离开云游商人');
+                    this.refreshAfterLeave();
+                } else {
+                    const failureMessage = res.message || '未知错误';
+                    this.lastAttempt = normalizeMerchantAttempt({
+                        shouldAttempt: true,
+                        reason: 'leave-failed',
+                        triggerReason: reason || '',
+                        source,
+                        failureMessage
+                    });
+                    Logger.warn(`自动离开云游商人失败: ${failureMessage}`);
                 }
+            } catch (e) {
+                if (typeof _win.leaveMerchant === 'function') {
+                    source = 'page-function';
+                    try {
+                        await _win.leaveMerchant();
+                        this.lastAttempt = normalizeMerchantAttempt({
+                            shouldAttempt: false,
+                            reason: 'leave-triggered',
+                            triggerReason: reason || '',
+                            source
+                        });
+                        this.refreshAfterLeave();
+                        return;
+                    } catch (pageError) {
+                        e = pageError;
+                    }
+                }
+                const failureMessage = e.message || String(e);
+                this.lastAttempt = normalizeMerchantAttempt({
+                    shouldAttempt: true,
+                    reason: 'leave-failed',
+                    triggerReason: reason || '',
+                    source,
+                    failureMessage
+                });
+                Logger.warn(`自动离开云游商人失败: ${failureMessage}`);
+            }
+        },
 
+        async buySelected(item) {
+            let source = 'api';
+            const recordPurchaseFailure = async (failureMessage) => {
+                const triggerReason = detectMerchantInsufficientFundsNotice(failureMessage) ? 'insufficient-funds' : '';
+                this.lastAttempt = normalizeMerchantAttempt({
+                    shouldAttempt: true,
+                    reason: 'purchase-failed',
+                    triggerReason,
+                    source,
+                    item,
+                    failureMessage
+                });
+                Logger.warn(`云游商人购买失败: ${failureMessage}`);
+                if (triggerReason === 'insufficient-funds' && CONFIG.merchant.leaveOnInsufficientFunds) {
+                    await this.leaveMerchant(triggerReason);
+                }
+            };
+            try {
                 const res = await API.buyMerchantItem(item.index);
                 if (res.code === 200) {
                     this.lastAttempt = normalizeMerchantAttempt({
@@ -6343,25 +7315,51 @@
                     this.refreshAfterBuy();
                 } else {
                     const failureMessage = res.message || '未知错误';
-                    this.lastAttempt = normalizeMerchantAttempt({
-                        shouldAttempt: true,
-                        reason: 'purchase-failed',
-                        source,
-                        item,
-                        failureMessage
-                    });
-                    Logger.warn(`云游商人购买失败: ${failureMessage}`);
+                    await recordPurchaseFailure(failureMessage);
                 }
             } catch (e) {
+                if (typeof _win.buyMerchantItem === 'function') {
+                    source = 'page-function';
+                    try {
+                        await _win.buyMerchantItem(item.index);
+                        this.lastAttempt = normalizeMerchantAttempt({
+                            shouldAttempt: false,
+                            reason: 'purchase-triggered',
+                            source,
+                            item
+                        });
+                        this.refreshAfterBuy();
+                        return;
+                    } catch (pageError) {
+                        e = pageError;
+                    }
+                }
                 const failureMessage = e.message || String(e);
-                this.lastAttempt = normalizeMerchantAttempt({
-                    shouldAttempt: true,
-                    reason: 'purchase-failed',
-                    source,
-                    item,
-                    failureMessage
-                });
-                Logger.warn(`云游商人购买失败: ${failureMessage}`);
+                await recordPurchaseFailure(failureMessage);
+            }
+        },
+
+        refreshAfterLeave() {
+            try {
+                if (typeof _win.clearMerchantState === 'function') {
+                    _win.clearMerchantState({ clearItems: true, resume: true });
+                } else {
+                    const overlay = $('#merchantOverlay');
+                    if (overlay) overlay.classList.add('hidden');
+                }
+                _win._merchantActive = false;
+                if (_win.loadGameLogs) _win.loadGameLogs();
+                if (_win.loadPlayerInfo) _win.loadPlayerInfo(true);
+                if (typeof _win._tryResumeAutoExploreAfterMerchant === 'function') {
+                    _win._tryResumeAutoExploreAfterMerchant();
+                }
+                if (typeof AfkLoopManager !== 'undefined' &&
+                    AfkLoopManager &&
+                    typeof AfkLoopManager.openPostInteractionResumeWindow === 'function') {
+                    AfkLoopManager.openPostInteractionResumeWindow(CONFIG.afkLoop);
+                }
+            } catch (e) {
+                // 页面刷新失败不影响离开商人请求本身
             }
         },
 
@@ -6373,10 +7371,16 @@
                     const overlay = $('#merchantOverlay');
                     if (overlay) overlay.classList.add('hidden');
                 }
+                _win._merchantActive = false;
                 if (_win.loadGameLogs) _win.loadGameLogs();
                 if (_win.loadPlayerInfo) _win.loadPlayerInfo(true);
                 if (typeof _win._tryResumeAutoExploreAfterMerchant === 'function') {
                     _win._tryResumeAutoExploreAfterMerchant();
+                }
+                if (typeof AfkLoopManager !== 'undefined' &&
+                    AfkLoopManager &&
+                    typeof AfkLoopManager.openPostInteractionResumeWindow === 'function') {
+                    AfkLoopManager.openPostInteractionResumeWindow(CONFIG.afkLoop);
                 }
             } catch (e) {
                 // 页面刷新失败不影响购买请求本身
@@ -6410,6 +7414,7 @@
         postReviveResumeUntil: 0,
         postInteractionResumeUntil: 0,
         postMeditationResumeUntil: 0,
+        exploreStartResourceShortageUntil: 0,
         resourceUsage: normalizeAfkResourceUsage({}),
         decisionHistory: [],
         adventureSamples: [],
@@ -6431,6 +7436,7 @@
             readAfkLoopConfigFromUI();
             CONFIG.afkLoop.enabled = true;
             this.resetResourceUsage();
+            this.exploreStartResourceShortageUntil = 0;
             saveConfig();
             UI.updateAfkState();
             this.refreshPanelStatus();
@@ -6441,6 +7447,7 @@
 
         stop() {
             CONFIG.afkLoop.enabled = false;
+            this.exploreStartResourceShortageUntil = 0;
             saveConfig();
             UI.updateAfkState();
             this.lastDecisionKey = '';
@@ -6457,6 +7464,18 @@
             return Object.assign({}, this.resourceUsage);
         },
 
+        openPostInteractionResumeWindow(cfg) {
+            const normalizedCfg = normalizeAfkLoopConfig(cfg || CONFIG.afkLoop);
+            const windowMs = getResumeWindowMs(normalizedCfg);
+            this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
+            this.lastDecisionKey = '';
+            this.refreshPanelStatus();
+            if (normalizedCfg.enabled && windowMs > 0) {
+                setTimeout(() => this.tick(true), 1200);
+            }
+            return this.postInteractionResumeUntil;
+        },
+
         incrementResourceUsage(kind) {
             const usage = this.getResourceUsage();
             const spec = getAfkResourceBudgetSpec(kind);
@@ -6467,7 +7486,13 @@
 
         applyPreset(name) {
             readAfkLoopConfigFromUI();
-            CONFIG.afkLoop = applyAfkPreset(CONFIG.afkLoop, name);
+            readMerchantConfigFromUI();
+            const preset = applyAfkAutomationPreset({
+                afkLoop: CONFIG.afkLoop,
+                merchant: CONFIG.merchant
+            }, name);
+            CONFIG.afkLoop = preset.afkLoop;
+            CONFIG.merchant = preset.merchant;
             saveConfig();
             UI.updatePanelFromConfig();
             this.refreshPanelStatus();
@@ -6483,6 +7508,7 @@
         async copyDebugSnapshot() {
             try {
                 const cfg = readAfkLoopConfigFromUI();
+                const merchantCfg = readMerchantConfigFromUI();
                 const now = Date.now();
                 const snapshot = await this.buildSnapshot(now, cfg);
                 const decision = decideAfkNextAction(snapshot, cfg, now);
@@ -6504,7 +7530,8 @@
                     talismanAttempt: this.lastTalismanAttempt,
                     fightAttempt: this.lastFightAttempt,
                     reviveAttempt: this.lastReviveAttempt,
-                    guardianAttempt: this.lastGuardianAttempt
+                    guardianAttempt: this.lastGuardianAttempt,
+                    merchantConfig: merchantCfg
                 });
                 const debugSummary = buildAfkDebugSummary(debugSnapshot);
                 const text = JSON.stringify(debugSummary, null, 2);
@@ -6518,6 +7545,7 @@
         async copyStatusReport() {
             try {
                 const cfg = readAfkLoopConfigFromUI();
+                const merchantCfg = readMerchantConfigFromUI();
                 const now = Date.now();
                 const snapshot = await this.buildSnapshot(now, cfg);
                 const decision = decideAfkNextAction(snapshot, cfg, now);
@@ -6539,13 +7567,72 @@
                     talismanAttempt: this.lastTalismanAttempt,
                     fightAttempt: this.lastFightAttempt,
                     reviveAttempt: this.lastReviveAttempt,
-                    guardianAttempt: this.lastGuardianAttempt
+                    guardianAttempt: this.lastGuardianAttempt,
+                    merchantConfig: merchantCfg
                 });
                 const report = buildAfkStatusReport(buildAfkDebugSummary(debugSnapshot));
                 await this.copyText(report.text);
                 Logger.success('已复制挂机状态报告，可发给测试者或开发者快速查看');
             } catch (e) {
                 Logger.warn(`复制挂机状态报告失败: ${e.message || e}`);
+            }
+        },
+
+        recordIssueSnapshotIfNeeded(snapshot, cfg, decision, now) {
+            try {
+                const capturedAt = new Date(now || Date.now()).toISOString();
+                return saveAfkLastIssueSnapshot(buildAfkDebugSnapshot(snapshot, cfg, decision, {
+                    capturedAt,
+                    now,
+                    page: {
+                        title: document.title || '',
+                        url: typeof location !== 'undefined' && location.href ? location.href : ''
+                    },
+                    decisionHistory: this.getDecisionHistory(),
+                    recentLogs: Logger.getRecentEntries(),
+                    adventureSamples: this.getAdventureSamples(),
+                    meditationAttempt: this.lastMeditationAttempt,
+                    merchantAttempt: MerchantAutoBuyer.lastAttempt,
+                    playerEncounterAttempt: this.lastPlayerEncounterAttempt,
+                    adventureAttempt: this.lastAdventureAttempt,
+                    exploreStartAttempt: this.lastExploreStartAttempt,
+                    nirvanaPillAttempt: this.lastNirvanaPillAttempt,
+                    talismanAttempt: this.lastTalismanAttempt,
+                    fightAttempt: this.lastFightAttempt,
+                    reviveAttempt: this.lastReviveAttempt,
+                    guardianAttempt: this.lastGuardianAttempt,
+                    merchantConfig: CONFIG.merchant
+                }), { savedAt: capturedAt });
+            } catch (e) {
+                return null;
+            }
+        },
+
+        async copyLastIssueSnapshot() {
+            try {
+                const snapshot = getLastAfkIssueSnapshot();
+                if (!snapshot) {
+                    Logger.warn('还没有自动保存的挂机卡点摘要');
+                    return;
+                }
+                await this.copyText(JSON.stringify(snapshot, null, 2));
+                Logger.success('已复制最近一次自动保存的挂机卡点摘要');
+            } catch (e) {
+                Logger.warn(`复制最近挂机卡点摘要失败: ${e.message || e}`);
+            }
+        },
+
+        async copyIssueHistory() {
+            try {
+                const history = getAfkIssueHistory();
+                if (!history.entries.length) {
+                    Logger.warn('还没有自动保存的挂机卡点历史');
+                    return;
+                }
+                await this.copyText(JSON.stringify(history, null, 2));
+                Logger.success(`已复制最近${history.entries.length}条挂机卡点历史`);
+            } catch (e) {
+                Logger.warn(`复制挂机卡点历史失败: ${e.message || e}`);
             }
         },
 
@@ -6606,6 +7693,7 @@
                 const snapshot = await this.buildSnapshot(now, cfg);
                 const decision = decideAfkNextAction(snapshot, cfg, now);
                 this.recordDecision(decision, snapshot, now);
+                this.recordIssueSnapshotIfNeeded(snapshot, cfg, decision, now);
                 await this.executeDecision(decision, snapshot, cfg);
             } catch (e) {
                 Logger.warn(`自动挂机循环检查失败: ${e.message || e}`);
@@ -6626,6 +7714,7 @@
                 isMeditating: !!(snapshot && snapshot.isMeditating),
                 autoExploreRunning: !!(snapshot && snapshot.autoExploreRunning),
                 gameUpdateNoticeActive: !!(snapshot && snapshot.gameUpdateNoticeActive),
+                heavenlyBanActive: !!(snapshot && snapshot.heavenlyBanActive),
                 merchantActive: !!(snapshot && snapshot.merchantActive),
                 encounterActive: !!(snapshot && snapshot.encounterActive),
                 playerEncounterActive: !!(snapshot && snapshot.playerEncounterActive),
@@ -6749,11 +7838,24 @@
                 !!player.isMeditating;
 
             const toggle = $('#autoExploreToggle');
-            const autoExploreRunning = !!(_win._autoExploreRunning || toggle?.checked);
+            const autoExploreToggleChecked = !!toggle?.checked;
+            const autoExplorePageRunning = !!_win._autoExploreRunning;
             const autoExplorePending = !!_win._autoResumeExplorePending;
+            const hasAutoExplorePageState =
+                typeof _win._autoExploreRunning !== 'undefined' ||
+                typeof _win._autoResumeExplorePending !== 'undefined';
+            const autoExploreRunning = hasAutoExplorePageState
+                ? autoExplorePageRunning
+                : autoExploreToggleChecked;
+            const autoExploreToggleStale = !!(
+                autoExploreToggleChecked &&
+                hasAutoExplorePageState &&
+                !autoExplorePageRunning &&
+                !autoExplorePending
+            );
             const autoExploreCount = toFiniteNumber(_win._autoExploreCount, 0);
             const autoExploreActive = autoExploreRunning || autoExplorePending;
-            const exploreLogSignature = getExploreProgressLogSignature(document.body ? document.body.innerText : '');
+            const exploreLogSignature = getExploreProgressLogSignature(readAfkExploreProgressLogText());
             const exploreLogProgressed = !!(
                 autoExploreActive &&
                 exploreLogSignature &&
@@ -6770,7 +7872,9 @@
             const combatPanel = $('#combatPanel');
             const talismanDialog = $('#encounterTalismanDialog');
             const adventureOverlay = $('#adventureOverlay');
-            const gameUpdateNoticeActive = detectGameUpdateNotice(document.body ? document.body.innerText : '');
+            const pageText = document.body ? document.body.innerText : '';
+            const gameUpdateNoticeActive = detectGameUpdateNotice(pageText);
+            const heavenlyBanActive = detectHeavenlyBanNotice(pageText);
             const adventureStep = _win._lingverseAutoMapLastAdventureStep || null;
             const playerEncounterActive = [
                 '#pvpEncounterModal',
@@ -6820,6 +7924,7 @@
             const postMeditationResumeRemainingSeconds = this.postMeditationResumeUntil > now
                 ? Math.max(0, Math.ceil((this.postMeditationResumeUntil - now) / 1000))
                 : 0;
+            const exploreStartResourceShortage = this.exploreStartResourceShortageUntil > now;
 
             const snapshot = {
                 isMeditating,
@@ -6833,6 +7938,7 @@
                 exploreDisabledReason: player.exploreDisabledReason,
                 isDead: !!(player.isDead || _win.playerDead),
                 gameUpdateNoticeActive,
+                heavenlyBanActive,
                 immortalPrisonActive: !!(player.currentArea && String(player.currentArea).indexOf('immortal_prison_') === 0),
                 adventureActive,
                 adventureId: adventureActive && adventureStep ? adventureStep.adventureId : undefined,
@@ -6853,9 +7959,12 @@
                 guardianAutoHireInProgress,
                 autoExploreRunning,
                 autoExplorePending,
+                autoExploreToggleChecked,
+                autoExploreToggleStale,
                 postReviveResume: this.postReviveResumeUntil > now,
                 postInteractionResume: this.postInteractionResumeUntil > now,
                 postMeditationResume: this.postMeditationResumeUntil > now,
+                exploreStartResourceShortage,
                 postReviveResumeRemainingSeconds,
                 postInteractionResumeRemainingSeconds,
                 postMeditationResumeRemainingSeconds,
@@ -6958,6 +8067,24 @@
                     if (res.code !== 200) throw new Error(res.message || '开始冥想失败');
                     if (typeof _win.startMeditationUI === 'function') _win.startMeditationUI();
                 }
+                const confirmation = typeof this.confirmMeditationStarted === 'function'
+                    ? await this.confirmMeditationStarted(source, snapshot)
+                    : { ok: true, reason: 'not-checked' };
+                if (confirmation && confirmation.ok === false) {
+                    this.lastMeditationAttempt = normalizeMeditationAttempt({
+                        shouldAttempt: true,
+                        action: 'start',
+                        reason: 'start-failed',
+                        source,
+                        targetMinutes: normalizedCfg.meditationMinutes,
+                        elapsedSeconds: snapshot && snapshot.meditationDurationSeconds,
+                        failureMessage: confirmation.failureMessage || '冥想入口已调用但页面仍未显示冥想中'
+                    });
+                    this.lastDecisionKey = '';
+                    this.refreshGameData();
+                    Logger.warn(`自动冥想未确认: ${confirmation.failureMessage || confirmation.reason || '未进入冥想中'}`);
+                    return;
+                }
                 this.lastMeditationAttempt = normalizeMeditationAttempt({
                     shouldAttempt: false,
                     action: 'start',
@@ -6978,6 +8105,29 @@
                 });
                 Logger.warn(`自动冥想失败: ${failureMessage}`);
             }
+        },
+
+        async confirmMeditationStarted() {
+            const readState = () => this.readMeditationState ? this.readMeditationState() : { known: false, isMeditating: false };
+            const buildSuccess = (state) => ({
+                ok: true,
+                reason: state && state.known ? 'meditation-active' : 'meditation-state-unknown'
+            });
+            this.refreshGameData();
+            await wait(500);
+            let state = await readState();
+            if (!state.known || state.isMeditating) return buildSuccess(state);
+
+            this.refreshGameData();
+            await wait(1000);
+            state = await readState();
+            if (!state.known || state.isMeditating) return buildSuccess(state);
+
+            return {
+                ok: false,
+                reason: 'not-meditating',
+                failureMessage: '冥想入口已调用但页面仍未显示冥想中'
+            };
         },
 
         async stopMeditation(snapshot, cfg, triggerReason) {
@@ -7002,6 +8152,26 @@
                     const res = await API.stopMeditation();
                     if (typeof _win.stopMeditationUI === 'function') _win.stopMeditationUI();
                     if (res.code !== 200) throw new Error(res.message || '结束冥想失败');
+                }
+                const confirmation = typeof this.confirmMeditationStopped === 'function'
+                    ? await this.confirmMeditationStopped(source, snapshot)
+                    : { ok: true, reason: 'not-checked' };
+                if (confirmation && confirmation.ok === false) {
+                    this.lastMeditationAttempt = normalizeMeditationAttempt({
+                        shouldAttempt: true,
+                        action: 'stop',
+                        reason: 'stop-failed',
+                        triggerReason: normalizedTriggerReason,
+                        source,
+                        targetMinutes: normalizedCfg.meditationMinutes,
+                        elapsedSeconds,
+                        failureMessage: confirmation.failureMessage || '收功入口已调用但页面仍显示冥想中'
+                    });
+                    this.postMeditationResumeUntil = 0;
+                    this.lastDecisionKey = '';
+                    this.refreshGameData();
+                    Logger.warn(`自动结束冥想未确认: ${confirmation.failureMessage || confirmation.reason || '仍在冥想中'}`);
+                    return;
                 }
                 this.lastMeditationAttempt = normalizeMeditationAttempt({
                     shouldAttempt: false,
@@ -7029,6 +8199,51 @@
                 });
                 Logger.warn(`自动结束冥想失败: ${failureMessage}`);
             }
+        },
+
+        async readMeditationState() {
+            let meditationStatus = null;
+            try {
+                const res = await API.getMeditationStatus();
+                if (res.code === 200 && res.data && typeof res.data === 'object') meditationStatus = res.data;
+            } catch (e) {}
+            const player = _win._lastPlayerData && typeof _win._lastPlayerData === 'object'
+                ? _win._lastPlayerData
+                : {};
+            const barState = readMeditationBarState();
+            const hasPlayerMeditating = Object.prototype.hasOwnProperty.call(player, 'isMeditating');
+            const hasStatusMeditating = !!(meditationStatus && Object.prototype.hasOwnProperty.call(meditationStatus, 'isMeditating'));
+            return {
+                known: hasPlayerMeditating || hasStatusMeditating || !!barState.isMeditating,
+                isMeditating: !!(
+                    (hasStatusMeditating && meditationStatus.isMeditating) ||
+                    (hasPlayerMeditating && player.isMeditating) ||
+                    barState.isMeditating
+                )
+            };
+        },
+
+        async confirmMeditationStopped() {
+            const readState = () => this.readMeditationState ? this.readMeditationState() : { known: false, isMeditating: false };
+            const buildSuccess = (state) => ({
+                ok: true,
+                reason: state && state.known ? 'meditation-cleared' : 'meditation-state-unknown'
+            });
+            this.refreshGameData();
+            await wait(500);
+            let state = await readState();
+            if (!state.known || !state.isMeditating) return buildSuccess(state);
+
+            this.refreshGameData();
+            await wait(1000);
+            state = await readState();
+            if (!state.known || !state.isMeditating) return buildSuccess(state);
+
+            return {
+                ok: false,
+                reason: 'still-meditating',
+                failureMessage: '收功入口已调用但页面仍显示冥想中'
+            };
         },
 
         async startAutoExplore(multiplier, cfg) {
@@ -7076,19 +8291,88 @@
                     actualMultiplier,
                     source
                 });
+                this.exploreStartResourceShortageUntil = 0;
                 this.lastExploreProgressAt = Date.now();
             } catch (e) {
                 const failureMessage = e.message || String(e);
+                const interruption = classifyExploreInterruption({
+                    status: 'error',
+                    message: failureMessage
+                }, cfg || CONFIG.afkLoop);
+                const resourceShortage = interruption && interruption.kind === 'noSpirit';
+                if (resourceShortage) {
+                    const normalizedCfg = normalizeAfkLoopConfig(cfg || CONFIG.afkLoop);
+                    const holdMs = Math.max(60000, Math.min(300000, normalizedCfg.tickInterval * 2));
+                    this.exploreStartResourceShortageUntil = Date.now() + holdMs;
+                } else {
+                    this.exploreStartResourceShortageUntil = 0;
+                }
                 this.lastExploreStartAttempt = normalizeExploreStartAttempt({
                     shouldAttempt: true,
-                    reason: 'start-failed',
+                    reason: resourceShortage ? 'resource-shortage' : 'start-failed',
                     multiplier: normalizedMultiplier,
                     actualMultiplier,
                     source: source || 'exception',
+                    resourceShortage,
                     failureMessage
                 });
                 Logger.warn(`自动探索启动失败: ${failureMessage}`);
             }
+        },
+
+        async readPlayerInfoForConfirmation() {
+            try {
+                const res = await API.getPlayerInfo();
+                if (res && res.code === 200 && res.data && typeof res.data === 'object') {
+                    _win._lastPlayerData = res.data;
+                    return res.data;
+                }
+            } catch (e) {}
+            return _win._lastPlayerData && typeof _win._lastPlayerData === 'object'
+                ? _win._lastPlayerData
+                : {};
+        },
+
+        async confirmNirvanaPillUsed(attempt, now) {
+            const normalized = normalizeNirvanaPillAttempt(attempt);
+            const baseBuff = getActiveFiveRootBuff({
+                fiveRootBuffGrade: normalized.activeBuffGrade,
+                fiveRootBuffExpire: normalized.activeBuffExpire
+            }, now);
+            if (baseBuff.active) {
+                return {
+                    ok: true,
+                    reason: 'buff-already-active',
+                    activeBuffGrade: baseBuff.grade,
+                    activeBuffExpire: baseBuff.expire
+                };
+            }
+            const readBuff = async () => {
+                const player = await this.readPlayerInfoForConfirmation();
+                return getActiveFiveRootBuff(player, Date.now());
+            };
+            const buildSuccess = (buff) => ({
+                ok: true,
+                reason: 'five-root-buff-active',
+                activeBuffGrade: buff.grade,
+                activeBuffExpire: buff.expire
+            });
+
+            this.refreshGameData();
+            await wait(700);
+            let buff = await readBuff();
+            if (buff.active) return buildSuccess(buff);
+
+            this.refreshGameData();
+            await wait(1200);
+            buff = await readBuff();
+            if (buff.active) return buildSuccess(buff);
+
+            return {
+                ok: false,
+                reason: 'buff-not-confirmed',
+                failureMessage: '涅槃重生丹入口已调用但未检测到五行通灵效果'
+            };
         },
 
         async maybeUseNirvanaRebirthPill(cfg) {
@@ -7148,9 +8432,23 @@
                     Logger.warn(`涅槃重生丹使用失败: ${failureMessage}`);
                     return;
                 }
+                const confirmation = typeof this.confirmNirvanaPillUsed === 'function'
+                    ? await this.confirmNirvanaPillUsed(attempt, now)
+                    : { ok: true, reason: 'not-checked' };
+                if (confirmation && confirmation.ok === false) {
+                    this.lastNirvanaPillAttempt = normalizeNirvanaPillAttempt(Object.assign({}, attempt, {
+                        shouldUse: false,
+                        reason: 'use-not-confirmed',
+                        failureMessage: confirmation.failureMessage || '涅槃重生丹入口已调用但未检测到五行通灵效果'
+                    }));
+                    Logger.warn(`涅槃重生丹使用未确认: ${confirmation.failureMessage || confirmation.reason || '未检测到五行通灵效果'}`);
+                    return;
+                }
                 this.lastNirvanaPillAttempt = normalizeNirvanaPillAttempt(Object.assign({}, attempt, {
                     shouldUse: false,
-                    reason: 'used'
+                    reason: 'used',
+                    activeBuffGrade: confirmation && confirmation.activeBuffGrade,
+                    activeBuffExpire: confirmation && confirmation.activeBuffExpire
                 }));
                 this.incrementResourceUsage('nirvanaPills');
                 this.refreshGameData();
@@ -7334,7 +8632,14 @@
             this.encounterBusy = true;
             try {
                 if (cfg.useTalismans) {
+                    const closeStuck = this.closeStuckTalismanDialog || AfkLoopManager.closeStuckTalismanDialog;
+                    if (typeof closeStuck === 'function') {
+                        await closeStuck.call(this, cfg, snapshot);
+                    }
                     await this.useCombatTalismans(cfg, snapshot);
+                    if (typeof closeStuck === 'function') {
+                        await closeStuck.call(this, cfg, snapshot);
+                    }
                     if (hasOpenTalismanDialogForEncounter(this.lastTalismanAttempt, buildEncounterKey(snapshot), null)) {
                         Logger.warn('符箓面板未关闭，暂停自动迎战，等待下一轮确认');
                         return;
@@ -7351,6 +8656,30 @@
             } finally {
                 this.encounterBusy = false;
             }
+        },
+
+        async closeStuckTalismanDialog(cfg, snapshot) {
+            const closeAttempt = resolveCombatTalismanDialogCloseAttempt(this.lastTalismanAttempt, snapshot || {});
+            if (!closeAttempt.shouldAttempt) return false;
+
+            const previous = normalizeCombatTalismanAttempt(this.lastTalismanAttempt);
+            const result = closeEncounterTalismanDialogWindow();
+            this.lastTalismanAttempt = normalizeCombatTalismanAttempt(Object.assign({}, previous, {
+                encounterKey: previous.encounterKey || closeAttempt.encounterKey,
+                markEncounterKey: previous.markEncounterKey || closeAttempt.encounterKey,
+                dialogClosed: !!result.closed,
+                dialogCloseSource: result.source,
+                dialogCloseFailureMessage: result.failureMessage || ''
+            }));
+
+            if (result.closed) {
+                if (snapshot && typeof snapshot === 'object') snapshot.talismanDialogActive = false;
+                Logger.info('已关闭残留符箓面板，继续处理遭遇');
+                return true;
+            }
+
+            Logger.warn(`残留符箓面板关闭失败: ${result.failureMessage || '未知错误'}`);
+            return false;
         },
 
         async tryHireEncounterGuardian(cfg, snapshot) {
@@ -7380,22 +8709,31 @@
             }, guardianCfg);
             try {
                 Logger.info(`自动尝试雇护道：模式${guardianCfg.mode}，最高费用${guardianCfg.maxFee || '不限'}`);
-                const hireBtn = $('#encounterHireProtectorBtn');
-                if (hireBtn && !hireBtn.disabled) {
-                    hireBtn.click();
-                    hireTriggered = true;
-                } else if (typeof _win.tryAutoHireProtectorForEncounter === 'function') {
+                if (typeof _win.tryAutoHireProtectorForEncounter === 'function') {
                     hireTriggered = !!(await _win.tryAutoHireProtectorForEncounter({ silent: false }));
-                } else {
+                    if (!hireTriggered) {
+                        failureMessage = String(_win._lastAutoHireProtectorFailure || '未触发自动雇护道');
+                        Logger.warn(`自动雇护道失败: ${failureMessage}`);
+                    }
+                } else if (resolveApiObject()) {
                     let res = await API.autoHireGuardian(buildGuardianHirePayload(guardianCfg));
                     if (res && res.code === 429) {
                         await wait(600);
                         res = await API.autoHireGuardian(buildGuardianHirePayload(guardianCfg));
                     }
                     hireTriggered = !!(res && res.code === 200 && res.data && res.data.combat);
-                    if (!hireTriggered && res && res.message) {
-                        failureMessage = res.message;
-                        Logger.warn(`自动雇护道失败: ${res.message}`);
+                    if (!hireTriggered) {
+                        failureMessage = res && res.message || '未触发自动雇护道';
+                        Logger.warn(`自动雇护道失败: ${failureMessage}`);
+                    }
+                } else {
+                    const hireBtn = $('#encounterHireProtectorBtn');
+                    if (hireBtn && !hireBtn.disabled) {
+                        hireBtn.click();
+                        hireTriggered = true;
+                    } else {
+                        failureMessage = '未找到可用护道入口';
+                        Logger.warn(`自动雇护道失败: ${failureMessage}`);
                     }
                 }
             } catch (e) {
@@ -7421,11 +8759,7 @@
             }
 
             Logger.success('已触发自动雇护道，等待战斗或遭遇结算');
-            const windowMs = getResumeWindowMs(cfg);
-            this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
-            this.lastDecisionKey = '';
-            this.refreshGameData();
-            setTimeout(() => this.tick(true), 1200);
+            this.schedulePostInteractionResume(cfg);
             return true;
         },
 
@@ -7605,54 +8939,55 @@
                 encounterKey
             });
             try {
+                const markTriggered = (source) => {
+                    const completedAttempt = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop, { attemptTriggered: true });
+                    if (completedAttempt.markEncounterKey) this.lastFightEncounterKey = completedAttempt.markEncounterKey;
+                    this.lastFightAttempt = normalizeEncounterFightAttempt({
+                        shouldAttempt: true,
+                        reason: 'fight-triggered',
+                        encounterKey: completedAttempt.encounterKey,
+                        source
+                    });
+                    this.schedulePostInteractionResume(cfg);
+                };
+
+                const apiObj = resolveApiObject();
+                if (apiObj && typeof apiObj.post === 'function') {
+                    const res = await API.combatChoice('fight');
+                    if (res.code !== 200) {
+                        this.lastFightAttempt = normalizeEncounterFightAttempt({
+                            shouldAttempt: true,
+                            reason: 'fight-failed',
+                            encounterKey,
+                            source: 'api',
+                            failureMessage: res.message || '未知错误'
+                        });
+                        Logger.warn(`自动迎战失败: ${res.message || '未知错误'}`);
+                        return;
+                    }
+                    markTriggered('api');
+                    return;
+                }
+
+                if (typeof _win.handleCombatChoice === 'function') {
+                    await _win.handleCombatChoice('fight');
+                    markTriggered('page-function');
+                    return;
+                }
                 const fightBtn = $('#encounterFightBtn');
                 if (fightBtn && !fightBtn.disabled) {
                     fightBtn.click();
-                    const completedAttempt = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop, { attemptTriggered: true });
-                    if (completedAttempt.markEncounterKey) this.lastFightEncounterKey = completedAttempt.markEncounterKey;
-                    this.lastFightAttempt = normalizeEncounterFightAttempt({
-                        shouldAttempt: true,
-                        reason: 'fight-triggered',
-                        encounterKey: completedAttempt.encounterKey,
-                        source: 'button'
-                    });
-                    this.schedulePostInteractionResume(cfg);
+                    markTriggered('button');
                     return;
                 }
-                if (typeof _win.handleCombatChoice === 'function') {
-                    await _win.handleCombatChoice('fight');
-                    const completedAttempt = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop, { attemptTriggered: true });
-                    if (completedAttempt.markEncounterKey) this.lastFightEncounterKey = completedAttempt.markEncounterKey;
-                    this.lastFightAttempt = normalizeEncounterFightAttempt({
-                        shouldAttempt: true,
-                        reason: 'fight-triggered',
-                        encounterKey: completedAttempt.encounterKey,
-                        source: 'page-function'
-                    });
-                    this.schedulePostInteractionResume(cfg);
-                    return;
-                }
-                const res = await API.combatChoice('fight');
-                if (res.code !== 200) {
-                    this.lastFightAttempt = normalizeEncounterFightAttempt({
-                        shouldAttempt: true,
-                        reason: 'fight-failed',
-                        encounterKey,
-                        source: 'api',
-                        failureMessage: res.message || '未知错误'
-                    });
-                    Logger.warn(`自动迎战失败: ${res.message || '未知错误'}`);
-                    return;
-                }
-                const completedAttempt = resolveEncounterFightAttempt(this.lastFightEncounterKey, snapshot || {}, cfg || CONFIG.afkLoop, { attemptTriggered: true });
-                if (completedAttempt.markEncounterKey) this.lastFightEncounterKey = completedAttempt.markEncounterKey;
                 this.lastFightAttempt = normalizeEncounterFightAttempt({
                     shouldAttempt: true,
-                    reason: 'fight-triggered',
-                    encounterKey: completedAttempt.encounterKey,
-                    source: 'api'
+                    reason: 'fight-failed',
+                    encounterKey,
+                    source: 'unavailable',
+                    failureMessage: '未找到可用迎战入口'
                 });
-                this.schedulePostInteractionResume(cfg);
+                Logger.warn('自动迎战失败: 未找到可用迎战入口');
             } catch (e) {
                 this.lastFightAttempt = normalizeEncounterFightAttempt({
                     shouldAttempt: true,
@@ -7666,11 +9001,12 @@
         },
 
         schedulePostInteractionResume(cfg, delayMs = 1200) {
-            const windowMs = getResumeWindowMs(cfg || CONFIG.afkLoop);
+            const normalizedCfg = normalizeAfkLoopConfig(cfg || CONFIG.afkLoop);
+            const windowMs = getResumeWindowMs(normalizedCfg);
             this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
             this.lastDecisionKey = '';
             this.refreshGameData();
-            if (windowMs > 0) setTimeout(() => this.tick(true), delayMs);
+            if (normalizedCfg.enabled && windowMs > 0) setTimeout(() => this.tick(true), delayMs);
         },
 
         async handleAdventure(cfg) {
@@ -7768,6 +9104,22 @@
                     source = 'choice-button';
                     choiceBtn.click();
                     if (choiceKey) this.lastAdventureChoiceKey = choiceKey;
+                    const confirmation = typeof this.confirmAdventureProgressed === 'function'
+                        ? await this.confirmAdventureProgressed('choice', choiceKey, cfg)
+                        : { ok: true, reason: 'not-checked' };
+                    if (confirmation && confirmation.ok === false) {
+                        this.lastAdventureAttempt = normalizeAdventureAttempt({
+                            shouldAttempt: true,
+                            reason: 'choice-failed',
+                            source,
+                            adventureId,
+                            choiceIndex,
+                            choiceText,
+                            failureMessage: confirmation.failureMessage || '奇遇选择入口已调用但页面仍停在同一步'
+                        });
+                        Logger.warn(`自动选择奇遇未确认: ${confirmation.failureMessage || confirmation.reason || '页面未推进'}`);
+                        return;
+                    }
                     this.lastAdventureAttempt = normalizeAdventureAttempt({
                         shouldAttempt: false,
                         reason: 'choice-triggered',
@@ -7788,6 +9140,20 @@
                     }
                     source = 'close-button';
                     closeBtn.click();
+                    const confirmation = typeof this.confirmAdventureProgressed === 'function'
+                        ? await this.confirmAdventureProgressed('close', '', cfg)
+                        : { ok: true, reason: 'not-checked' };
+                    if (confirmation && confirmation.ok === false) {
+                        this.lastAdventureAttempt = normalizeAdventureAttempt({
+                            shouldAttempt: true,
+                            reason: 'close-failed',
+                            source,
+                            adventureId,
+                            failureMessage: confirmation.failureMessage || '奇遇关闭入口已调用但面板仍未关闭'
+                        });
+                        Logger.warn(`自动关闭奇遇未确认: ${confirmation.failureMessage || confirmation.reason || '面板未关闭'}`);
+                        return;
+                    }
                     this.lastAdventureAttempt = normalizeAdventureAttempt({
                         shouldAttempt: false,
                         reason: 'close-triggered',
@@ -7808,11 +9174,7 @@
                     return;
                 }
 
-                const windowMs = getResumeWindowMs(cfg);
-                this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
-                this.lastDecisionKey = '';
-                this.refreshGameData();
-                setTimeout(() => this.tick(true), 1200);
+                this.schedulePostInteractionResume(cfg);
             } catch (e) {
                 const failureMessage = e.message || String(e);
                 this.lastAdventureAttempt = normalizeAdventureAttempt({
@@ -7826,6 +9188,57 @@
                 });
                 Logger.warn(`自动处理奇遇失败: ${failureMessage}`);
             }
+        },
+
+        async confirmAdventureProgressed(kind, previousKey, cfg) {
+            if (kind === 'close') {
+                const overlayStillVisible = () => isElementVisibleForAutomation($('#adventureOverlay'));
+                const buildSuccess = () => ({
+                    ok: true,
+                    reason: 'adventure-closed'
+                });
+                this.refreshGameData();
+                await wait(500);
+                if (!overlayStillVisible()) return buildSuccess();
+
+                this.refreshGameData();
+                await wait(1000);
+                if (!overlayStillVisible()) return buildSuccess();
+
+                return {
+                    ok: false,
+                    reason: 'overlay-visible',
+                    failureMessage: '奇遇关闭入口已调用但面板仍未关闭'
+                };
+            }
+            if (kind !== 'choice') return { ok: true, reason: 'not-needed' };
+            const normalizedCfg = normalizeAfkLoopConfig(cfg || CONFIG.afkLoop);
+            const readSameStep = () => {
+                const overlay = $('#adventureOverlay');
+                if (!isElementVisibleForAutomation(overlay)) return false;
+                const step = _win._lingverseAutoMapLastAdventureStep || null;
+                if (!step) return false;
+                const choiceNumber = resolveAdventureChoiceIndex(step.adventureId, normalizedCfg);
+                if (choiceNumber <= 0) return false;
+                return buildAdventureChoiceAttemptKey(step, choiceNumber) === previousKey;
+            };
+            const buildSuccess = () => ({
+                ok: true,
+                reason: 'adventure-progressed'
+            });
+            this.refreshGameData();
+            await wait(500);
+            if (!previousKey || !readSameStep()) return buildSuccess();
+
+            this.refreshGameData();
+            await wait(1000);
+            if (!readSameStep()) return buildSuccess();
+
+            return {
+                ok: false,
+                reason: 'same-step',
+                failureMessage: '奇遇选择入口已调用但页面仍停在同一步'
+            };
         },
 
         findAdventureChoiceButtons(root) {
@@ -7862,21 +9275,21 @@
             try {
                 let handled = false;
                 const pvpModal = $('#pvpEncounterModal');
-                if (pvpModal && typeof _win.PvpModule?.dismissEncounter === 'function') {
+                if (isElementVisibleForAutomation(pvpModal) && typeof _win.PvpModule?.dismissEncounter === 'function') {
                     source = 'pvp-dismiss';
                     _win.PvpModule.dismissEncounter();
                     handled = true;
                 }
 
                 const inviteModal = $('#encounterInviteModal');
-                if (!handled && inviteModal && typeof _win.EncounterModule?.respondInvite === 'function') {
+                if (!handled && isElementVisibleForAutomation(inviteModal) && typeof _win.EncounterModule?.respondInvite === 'function') {
                     source = 'invite-decline';
                     await _win.EncounterModule.respondInvite(false);
                     handled = true;
                 }
 
                 const sessionModal = $('#encounterSessionModal');
-                if (!handled && sessionModal && typeof _win.EncounterModule?.leave === 'function') {
+                if (!handled && isElementVisibleForAutomation(sessionModal) && typeof _win.EncounterModule?.leave === 'function') {
                     source = 'session-leave';
                     await _win.EncounterModule.leave();
                     handled = true;
@@ -7898,17 +9311,27 @@
                     return;
                 }
 
+                const confirmation = typeof this.confirmPlayerEncounterClosed === 'function'
+                    ? await this.confirmPlayerEncounterClosed(source)
+                    : { ok: true, reason: 'not-checked' };
+                if (confirmation && confirmation.ok === false) {
+                    this.lastPlayerEncounterAttempt = normalizePlayerEncounterAttempt({
+                        shouldAttempt: true,
+                        reason: 'decline-failed',
+                        source,
+                        failureMessage: confirmation.failureMessage || '陌生道友弹窗仍未关闭'
+                    });
+                    Logger.warn(`自动婉拒陌生道友未确认: ${confirmation.failureMessage || confirmation.reason || '弹窗仍未关闭'}`);
+                    return;
+                }
+
                 this.lastPlayerEncounterAttempt = normalizePlayerEncounterAttempt({
                     shouldAttempt: false,
                     reason: 'decline-triggered',
                     source
                 });
                 Logger.info('已自动婉拒/离开陌生道友邂逅');
-                const windowMs = getResumeWindowMs(cfg);
-                this.postInteractionResumeUntil = windowMs > 0 ? Date.now() + windowMs : 0;
-                this.lastDecisionKey = '';
-                this.refreshGameData();
-                setTimeout(() => this.tick(true), 1200);
+                this.schedulePostInteractionResume(cfg);
             } catch (e) {
                 const failureMessage = e.message || String(e);
                 this.lastPlayerEncounterAttempt = normalizePlayerEncounterAttempt({
@@ -7919,6 +9342,41 @@
                 });
                 Logger.warn(`自动婉拒陌生道友失败: ${failureMessage}`);
             }
+        },
+
+        isPlayerEncounterActive() {
+            return [
+                '#pvpEncounterModal',
+                '#encounterInviteModal',
+                '#encounterSessionModal',
+                '#encounterTradeModal',
+                '#encounterBattleModal',
+                '#encounterRespondPickerModal'
+            ].some(selector => {
+                const el = $(selector);
+                return isElementVisibleForAutomation(el);
+            });
+        },
+
+        async confirmPlayerEncounterClosed() {
+            const readActive = () => this.isPlayerEncounterActive ? this.isPlayerEncounterActive() : false;
+            const buildSuccess = () => ({
+                ok: true,
+                reason: 'player-encounter-closed'
+            });
+            this.refreshGameData();
+            await wait(500);
+            if (!readActive()) return buildSuccess();
+
+            this.refreshGameData();
+            await wait(1000);
+            if (!readActive()) return buildSuccess();
+
+            return {
+                ok: false,
+                reason: 'still-active',
+                failureMessage: '陌生道友弹窗仍未关闭'
+            };
         },
 
         clickPlayerEncounterDeclineButton() {
@@ -7933,9 +9391,12 @@
             const labels = ['婉言告辞', '离开', '取消'];
             for (const selector of containers) {
                 const container = $(selector);
-                if (!container) continue;
+                if (!isElementVisibleForAutomation(container)) continue;
                 const buttons = Array.from(container.querySelectorAll('button'));
-                const btn = buttons.find(button => labels.some(label => String(button.textContent || '').indexOf(label) >= 0));
+                const btn = buttons.find(button =>
+                    isElementVisibleForAutomation(button) &&
+                    labels.some(label => String(button.textContent || '').indexOf(label) >= 0)
+                );
                 if (btn && !btn.disabled) {
                     btn.click();
                     return true;
@@ -8017,12 +9478,7 @@
             CONFIG.guardian.mode = $('#am-guardian-mode')?.value || 'together';
             CONFIG.guardian.priority = $('#am-guardian-priority')?.value || 'incarnation,normal,body';
             CONFIG.guardian.threatLevel = $('#am-guardian-threat')?.value || CONFIG.guardian.threatLevel || 'danger';
-            CONFIG.merchant.enabled = $('#am-merchant-enabled')?.checked ?? CONFIG.merchant.enabled;
-            CONFIG.merchant.onlyAutoExplore = $('#am-merchant-auto-only')?.checked ?? CONFIG.merchant.onlyAutoExplore;
-            const merchantDelay = parseInt($('#am-merchant-delay')?.value);
-            if (!isNaN(merchantDelay)) {
-                CONFIG.merchant.buyDelay = Math.max(0, Math.min(10000, merchantDelay));
-            }
+            readMerchantConfigFromUI();
             readAfkLoopConfigFromUI();
             saveConfig();
         },
@@ -8593,7 +10049,12 @@
     };
 
     _win.LingVerseAutoMapTestHooks = Object.assign({}, _win.LingVerseAutoMapTestHooks, {
-        AfkLoopManager
+        UI,
+        showPanel: () => UI.showPanel(),
+        hidePanel: () => UI.hidePanel(),
+        getPanelState: () => UI.getPanelState(),
+        AfkLoopManager,
+        MerchantAutoBuyer
     });
 
     /**
@@ -8603,6 +10064,9 @@
         if (_win._autoMapInited) return;
         _win._autoMapInited = true;
         _win.LingVerseAutoMapInitializedVersion = SCRIPT_VERSION;
+        if (ROOT_DATASET) {
+            ROOT_DATASET.lingverseAutoMapInitializedVersion = SCRIPT_VERSION;
+        }
 
         installAdventureStepHook();
         UI.init();

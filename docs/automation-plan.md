@@ -1,6 +1,6 @@
 # 自动挂机实现计划
 
-更新时间：2026-06-08
+更新时间：2026-06-09
 
 ## 原则
 
@@ -563,7 +563,7 @@ v2.9.0 新增自动测试：
 
 v2.10.0 新增自动测试：
 
-- `classifyExploreInterruption` 覆盖商人、陌生道友、奇遇链、混天典狱、神识不足。
+- `classifyExploreInterruption` 覆盖商人、陌生道友、奇遇链、混天典狱、天道禁闭、神识不足。
 - `decideAfkNextAction` 覆盖死亡自动复活、复活后继续探索、复活后低神识回冥想。
 
 v2.11.0 新增自动测试：
@@ -844,7 +844,7 @@ v2.69.0 新增自动测试：
 
 v2.70.0 新增自动测试：
 
-- `buildAfkDebugSnapshot` / `buildAfkDebugSummary` / `buildAfkStatusReport` 覆盖混天典狱 hard-stop，状态报告无需等待重复诊断即可输出“硬停:”和“硬停建议:”。
+- `buildAfkDebugSnapshot` / `buildAfkDebugSummary` / `buildAfkStatusReport` 覆盖混天典狱和天道禁闭 hard-stop，状态报告无需等待重复诊断即可输出“硬停:”和“硬停建议:”。
 
 v2.71.0 新增自动测试：
 
@@ -1006,6 +1006,74 @@ v2.99.0 本地候选新增自动测试：
 - 目的：测试者需要判断“冥想 2小时20分钟”是否刚好、过短或浪费。v2.99.0 只在状态报告里用冥想条恢复量和已冥想时长估算当前/计划收功神识，不改变收功条件或任何资源动作。
 - 目的：云游商人自动处理的真实购买接口要求 `{ index }`，如果商品数据只保留数组顺序，脚本不能把最高价商品识别出来却传空 index；该变更只修正自动商人购买参数，不改变只在自动探索/挂机上下文处理的安全边界。
 
+v2.100.0 本地候选新增自动测试：
+
+- `buildAfkStatusReport explains exploration capacity for the configured multiplier` 覆盖当前神识 `120`、单次消耗 `10`、配置 `50` 倍时，状态报告输出 `探索续航: 当前120识 · 50倍需500识/组 · 可跑0组 · 约12次1倍探索 · 不足当前倍率`。
+- `buildAfkStatusReport estimates exploration capacity while meditating` 覆盖冥想中有恢复神识和计划时长时，`探索续航:` 使用当前估算神识，并显示计划收功后约可跑几组当前倍率探索。
+- `AfkLoopManager ignores non-log page text when checking explore progress` 覆盖自动探索运行时，真实游戏日志未变化但页面其他区域含 `探索/收入` 文本，不会刷新探索进度时间。
+- 目的：测试者需要在不触发探索的情况下判断“当前神识到底能不能跑当前倍率”。v2.100.0 只在复制状态里追加报告-only 的 `探索续航:` 行，解释当前神识、当前倍率整组消耗、可跑组数、折算 1 倍次数，以及冥想计划收功后的估算组数；该报告不改变收功、探索、商人购买、护道、战斗、复活、用符、用丹、奇遇或陌生道友动作。
+- 目的：真实页面可能同时显示聊天、说明和隐藏面板，不能让非游戏日志里的“探索/收入/击败”文字误刷新自动探索进度。v2.100.0 将自动探索进展签名来源优先收窄到 `#logContent` / `.log-content` / `#logPanel` / `.log-area`，只有找不到日志容器时才回退 body，减少长跑时该回冥想却继续等待的情况。
+
+v2.101.0 本地候选新增自动测试：
+
+- `heavenly ban is treated as a manual hard stop` 覆盖游戏探索接口 `code=430` / 页面文本 `天道禁闭` 的归类、挂机决策和状态报告：下一步应等待 `heavenly-ban`，报告输出 `硬停: 天道禁闭 · 脚本暂停自动探索` 和 `硬停建议: 天道禁闭需要手动解除或等待 · 脚本不会自动跳过、自动点击或消耗资源`。
+- 目的：游戏源码里 `res.code === 430` 会以“天道禁闭”停止自动探索。该状态不能由外部脚本安全自动解除，所以 v2.101.0 只做只读检测、摘要字段和硬停报告，避免测试者把它误判成商人/神识/恢复窗口故障；不新增收功、探索、商人购买、护道、战斗、复活、用符、用丹、奇遇、陌生道友或解除禁闭动作。
+
+v2.102.0 本地候选新增自动测试：
+
+- `MerchantAutoBuyer refreshes page state after page-function purchases` 覆盖通过页面函数 `buyMerchantItem(index)` 触发云游商人购买后，也会调用 `clearMerchantState({ clearItems: true, resume: true })`、刷新日志/玩家信息并尝试恢复自动探索，与 API 购买路径保持一致。
+- `buildAfkStatusReport diagnoses merchant windows that remain after purchase is triggered` 覆盖连续等待 `merchant-active` 且最近商人尝试为 `purchase-triggered` 时，状态报告输出 `诊断归因: 云游商人购买已触发但窗口仍未关闭，等待游戏关闭商人并恢复探索`。
+- 目的：真实挂机里商人是高频中断点，最高价购买触发后还需要确认商人窗口能离开并恢复自动探索。v2.102.0 不增加额外购买次数，只把页面函数购买后的收尾兜底补齐，并在购买已触发但仍卡商人时给出明确归因，减少测试者误判为神识、天道禁闭或恢复窗口问题。
+
+v2.103.0 本地候选新增自动测试：
+
+- `MerchantAutoBuyer opens the AFK interaction resume window after purchases` 覆盖商人购买触发成功后，AFK manager 会打开 `postInteractionResumeUntil` 恢复窗口并清空 `lastDecisionKey`，让下一轮能按已有事件恢复逻辑接回自动探索。
+- 目的：v2.102.0 已统一商人购买后的页面清理和游戏原生恢复调用；v2.103.0 再把商人购买成功接入 AFK 自己的事件恢复窗口，避免原生 `_autoResumeExplorePending` 丢失或玩家信息短暂滞后时，买完商人后没有像战斗/奇遇/护道那样立刻进入恢复探索链路。该变更不增加额外购买次数，不新增收功、探索启动、护道、战斗、复活、用符、用丹、奇遇或陌生道友动作；是否真正启动探索仍由下一轮 `decideAfkNextAction` 按神识、倍率、阻塞和配置判断。
+
+v2.104.0 本地候选新增自动测试：
+
+- `AfkLoopManager schedules post-interaction ticks only while AFK is enabled` 覆盖事件恢复窗口仍会记录 `postInteractionResumeUntil`、刷新游戏数据并清空 `lastDecisionKey`，但只有传入的 AFK 配置 `enabled=true` 时才安排下一轮 `tick(true)`。
+- 目的：战斗迎战、自动护道、奇遇处理、陌生道友婉拒和商人购买都在用同一类事件恢复窗口。v2.104.0 把恢复窗口调度收敛到 `schedulePostInteractionResume` / `openPostInteractionResumeWindow` 的统一规则，避免 AFK 关闭、手动调试或纯测试钩子调用时后台自己推进下一轮；该变更不增加新的收功、探索启动、商人购买、护道、战斗、复活、用符、用丹、奇遇或陌生道友动作。
+
+v2.105.0 本地候选新增自动测试：
+
+- `mergeAdventureStrategyImport accepts readable status strategy lines` 覆盖测试者只粘贴可读状态文本时，导入策略也能从 `奇遇策略: 456=2 / 789=1` 和 `奇遇动作: ... #888 · 第3项...` 中提取策略；同时不会把 `奇遇: #999 第1/3步` 这类步骤描述误当作选项。
+- 目的：真实众测反馈不一定只发 JSON 摘要，常常会发可读状态报告或只复制几行中文。v2.105.0 让策略导入更宽松，减少手工整理 `adventureChoiceMap` 的成本；导入仍会关闭挂机启动状态，只更新本地配置，不触发探索、商人购买、护道、战斗、复活、用符、用丹、奇遇或陌生道友动作。
+
+v2.106.0 本地候选新增自动测试：
+
+- `extractMerchantItemsFromDom reads visible merchant cards with prices and indexes` 覆盖可见商人弹窗里只有 DOM 商品卡片时，也能解析商品名、价格和购买 index；支持 `data-merchant-index` 和按钮 `buyMerchantItem(index)` 兜底。
+- `MerchantAutoBuyer buys highest priced DOM fallback item when API has no merchant items` 覆盖 `/api/game/merchant` 返回空商品时，自动商人会从可见弹窗 DOM 读取商品并继续按最高价购买。
+- 目的：真实挂机里云游商人是高频中断点，若接口短暂空、页面变量滞后或商品已经渲染但接口没有 items，旧逻辑会停在“没有商品”。v2.106.0 增加页面弹窗只读兜底，仍然遵守自动探索/挂机循环上下文和同一商人 key 去重，不扩大手动购物场景。
+
+v2.107.0 本地候选新增自动测试：
+
+- `MerchantAutoBuyer leaves merchant when confirmed no purchasable items remain` 覆盖 API 成功确认空商品、DOM 也没有可买商品时，自动商人会调用 `/api/game/merchant/leave`，清理商人窗口并恢复自动探索/AFK 事件恢复窗口。
+- `MerchantAutoBuyer does not leave merchant on uncertain API read failures` 覆盖商人 API 读取异常时只记录 `read-failed`，不会强退商人，避免临时读取失败时错过商品。
+- 目的：云游商人即使没有商品也会挡住自动探索，v2.107.0 把“已确认没有可买商品”变成可配置自动离开；不确定的读取失败仍保守等待和报告。
+
+v2.108.0 本地候选新增自动测试：
+
+- `MerchantAutoBuyer leaves a still-active merchant after purchase was triggered` 覆盖最高价购买已触发、同一个商人窗口仍然活跃且商品 key 未变化时，自动商人不再重复购买，而是调用 `/api/game/merchant/leave` 清理残留窗口并恢复挂机。
+- `MerchantAutoBuyer does not leave a stuck post-purchase merchant when disabled` 覆盖测试者关闭“购买后窗口未关闭时自动离开”后，同样的购买后残留窗口只等待和报告，不主动离开。
+- `buildAfkStatusReport explains merchant leave after stuck purchases` 覆盖状态报告能区分“无商品离开”和“购买后窗口未关闭离开”，避免众测反馈只看到英文内部原因。
+- 目的：真实挂机里最高价购买请求可能已经触发，但商人弹窗或 `_merchantActive` 没有及时清掉，旧逻辑会因同一 merchant key 去重而长期等待。v2.108.0 把这个卡点变成可配置收尾动作，仍只在最近一次尝试为 `purchase-triggered` 时触发，不覆盖购买失败、读取失败或手动购物场景。
+
+v2.109.0 本地候选新增自动测试：
+
+- `AFK config packs export normalized settings and import safely` 扩展覆盖配置包中的 `merchant` 字段：自动商人开关、仅自动探索/挂机循环处理、购买延迟、无商品离开、购买后残留窗口离开都会随配置包导出/导入。
+- 目的：众测配置包此前只携带 AFK 循环和护道设置，商人策略会留在本机旧值，导致“同一个配置包”在不同测试者机器上商人行为不一致。v2.109.0 让配置包完整固定自动商人策略，同时旧配置包缺少 `merchant` 字段时仍兼容当前本地设置。
+
+v2.110.0 本地候选新增自动测试：
+
+- `applyAfkAutomationPreset includes safe merchant automation defaults` 覆盖稳妥、护道和富裕预设会一并输出自动商人配置：开启最高价购买、仅自动探索/挂机循环处理、购买延迟 800ms、无商品自动离开、购买后窗口未关闭自动离开。
+- 目的：众测者常用预设按钮开始测试；如果预设只更新 AFK 循环，自动商人仍可能继承本机旧值，导致同一预设在不同浏览器中行为不同。v2.110.0 把“挂机模式预设”和“自动商人安全策略”绑定为同一个可复现测试入口。
+
+v2.111.0 本地候选新增自动测试：
+
+- `buildAfkPresetStatus includes merchant preset drift in status reports` 覆盖 AFK 循环已匹配富裕 50 倍、但自动商人关闭时，预设状态不再显示已匹配，而是输出 `自动商人应开启`；调试摘要会保留当前 `config.merchant`，可读状态报告的 `模式:` 行同步显示该漂移。
+- 目的：预设现在包含商人安全策略，状态报告也必须把商人开关/延迟/离开策略纳入“是否匹配预设”的判断，减少多人测试时“模式一样但商人行为不同”的反馈噪音。
+
 浏览器验证：
 
 - 使用 Agent Browser CLI 读真实 Edge 标签，不用论坛/聊天资料。
@@ -1045,6 +1113,9 @@ v2.99.0 本地候选新增自动测试：
 - v2.98.0 只读 Edge 游戏页证据：同步 main repo、standalone helper 和 Windows 扩展目录后，通过真实 Edge 扩展页 UIA 调用 LingVerse unpacked 扩展“重新加载”，刷新游戏标签 `292345957`。helper/initialized/extension/injected 均为 `2.98.0`；新增 DOM 兜底 hook 从页面读到神识 `144/2756`、单次消耗 `10`，`buildSnapshot` 返回相同 `spirit/maxSpirit/spiritCost`；AFK 关闭、自动探索未运行、无商人/遭遇/奇遇 blocker。本次只重载扩展、刷新页面、读取 DOM/接口/测试钩子，未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
 - v2.99.0 只读 Edge 开发前证据：仍接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。当前页面 helper/initialized/extension/injected 均为 `2.98.0`，AFK 关闭、自动探索未运行；玩家处于冥想中，神识 `144/2756`，单次消耗 `10`，冥想条显示 `1时17分`、恢复 `710识`。旧状态报告只显示 `阶段: 冥想中 · 已冥想1小时18分钟 · 计划剩余1小时2分钟 · 满神识提前结束`，没有显示预计收功神识。本次只读取 DOM/接口/测试钩子，未点击收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
 - v2.99.0 只读 Edge 游戏页证据：同步 main repo、standalone helper 和 Windows 扩展目录后，使用 Windows UIAutomation 打开真实 Edge 用户配置 3 的 `edge://extensions/`，精准调用 LingVerse unpacked 扩展 `pnighlpbfnpjofjglooiallkccdhahec` 的“重新加载”；扩展卡片回读版本 `2.99.0`。刷新游戏标签 `292345957` 后，helper/initialized/extension/injected/test hook 均为 `2.99.0`；AFK 关闭、自动探索未运行、商人未激活，玩家冥想中，神识 `281/2756`、冥想条恢复 `954识`，状态报告输出 `冥想预计: 已恢复954识 · 当前估算1235/2756 · 计划收功约1563/2756`；测试钩子模拟商人商品缺 `index` 时，最高价商品补为 `index: 1`。本次只重载扩展、刷新页面、读取 DOM/接口/测试钩子和纯函数模拟，未点击收功、探索、商人购买、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.100.0 只读 Edge 游戏页证据：同步 main repo、standalone helper 和 Windows 扩展目录后，真实 Edge 用户配置 3 的扩展卡片仍显示 `2.99.0`，但 Windows 侧直接读取 `\\wsl.localhost\\Ubuntu-22.04\\home\\lxh\\LingVerse-all\\manifest.json` 和 helper 文件均为 `2.100.0`；刷新游戏标签 `292345957` 后，页面 helper/initialized/test hook 为 `2.100.0`，extension/injected dataset 仍为 `2.99.0`，状态报告环境行显示 `页面已加载新版，扩展提示待下次重载统一`。测试钩子确认商人最高价缺 index 兜底返回 `index:1`，日志进度读取来自游戏日志容器；当前 DOM 兜底神识 `281/2756`、单次消耗 `10`，50 倍探索续航输出 `当前281识 · 50倍需500识/组 · 可跑0组 · 约28次1倍探索 · 不足当前倍率`，冥想模拟输出当前估算和计划收功组数。本次只刷新页面、重载/读取扩展页、读取 DOM/接口/测试钩子和纯函数模拟，未点击收功、探索、商人购买、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.102.0 只读 Edge 游戏页证据：使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。刷新前 helper/initialized 为 `2.100.0`，AFK 关闭、自动探索未运行、自动恢复挂起 false、商人未激活；刷新游戏页后 helper/initialized 为 `2.102.0`，extension/injected dataset 仍显示 `2.99.0`，`LingVerseAutoMapTestHooks.MerchantAutoBuyer` 存在。纯函数模拟商人 `purchase-triggered` 后持续 `merchant-active`，状态报告输出 `商人: 已触发购买最高价商品 · 传说归识丹 · 9999灵石 · 页面函数` 和 `诊断归因: 云游商人购买已触发但窗口仍未关闭，等待游戏关闭商人并恢复探索`；控制台 error 列表为空。本次只刷新页面和读取/模拟测试钩子，未点击收功、探索、商人购买、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.104.0 只读 Edge 游戏页证据：使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。开发同步后先读到页面仍是 helper/initialized `2.102.0`、AFK 关闭、自动探索未运行、自动恢复挂起 false、商人未激活；在该安全状态下刷新游戏页，随后读回 helper/initialized `2.104.0`，extension/injected dataset 仍为 `2.99.0`，AFK 关闭、自动探索未运行、自动恢复挂起 false、商人未激活；控制台 error 列表为空。本次只刷新游戏页和读取页面变量/控制台，未点击收功、探索、商人购买、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
 - v2.76.0 本地验证目标：重载扩展并刷新页面后，复制状态在冥想条兜底激活时应出现 `冥想兜底:`，同时 `阶段:`/`冥想:` 仍显示神识已满或收功计划；本地自动测试只覆盖报告生成，不执行资源动作。
 - v2.77.0 本地验证目标：成功收功后应进入 `收功恢复窗口`，在缓存神识短暂偏低但页面仍可探索时优先 `post-meditation-ready` 启动自动探索；如果页面明确不可探索，仍按原逻辑回冥想或等待。
 - v2.78.0 本地验证目标：收功恢复窗口连续重启探索失败时，状态报告应出现 `诊断归因: 收功后未能重启探索 · 自动探索启动失败 · ...` 和专属建议。
@@ -1065,10 +1136,88 @@ v2.99.0 本地候选新增自动测试：
 - v2.97.0 本地验证目标：自动护道只作为 1 倍挂机保护；当自动护道与 5/10/20/50 倍探索同时开启时，风险预检应有批量探索护道警告，遭遇处理应记录 `guardian-batch-explore-unavailable` 并等待测试者使用富裕战斗链路或手动处理。
 - v2.98.0 本地验证目标：玩家接口和 `_lastPlayerData` 都不可用时，AFK 快照从可见 `#statSpirit` 与 `#exploreBtn` 只读补齐神识和单次消耗；接口/cache 有新鲜数值时仍优先使用接口/cache。
 - v2.99.0 本地验证目标：冥想条有恢复神识且摘要能确定已冥想/计划时长时，状态报告显示 `冥想预计:`，估算当前有效神识和计划收功神识；该行只用于测试解释，不影响收功决策。
+- v2.100.0 本地验证目标：状态报告在能读到当前神识和单次探索消耗时显示 `探索续航:`，按配置倍率计算每组神识消耗和可跑组数；冥想中应使用已恢复神识给出当前估算和计划收功估算；当前神识不足一组高倍率时显示 `不足当前倍率`，但不影响原有 AFK 决策。自动探索进展签名应优先从游戏日志容器读取，不被聊天/说明等非日志区域误导。
+- v2.101.0 本地验证目标：页面或接口摘要出现 `天道禁闭` / `code=430` 时，挂机决策应等待 `heavenly-ban`，状态报告应显示 `阻塞: 天道禁闭`、`硬停:` 和 `硬停建议:`；该状态只读提示，不自动解除、不点击、不消耗资源。
+- v2.102.0 本地验证目标：云游商人最高价购买通过页面函数触发后应和 API 路径一样执行窗口清理、日志/玩家信息刷新和自动探索恢复兜底；如果购买已触发但连续等待商人窗口，状态报告应显示“云游商人购买已触发但窗口仍未关闭”的诊断归因。
+- v2.103.0 本地验证目标：商人购买成功后应进入 AFK 事件恢复窗口，下一轮状态报告能显示 `恢复: 事件恢复窗口`，并按现有恢复逻辑在神识足够且无阻塞时接回配置倍率自动探索。
+- v2.104.0 本地验证目标：战斗、护道、奇遇、陌生道友和商人购买成功后的事件恢复窗口都应使用同一调度规则；AFK 关闭时只记录恢复窗口/刷新数据，不主动安排下一轮 `tick(true)`，AFK 开启时仍能按 `resumeWindowSeconds` 续上下一轮检查。
+- v2.105.0 本地验证目标：摘要回放“导入策略”应接受 JSON `strategyHints.mapLine`、纯 `456=2` 文本、可读状态里的 `奇遇策略: 456=2 / 789=1`，以及动作行里的 `#456 · 第2项`；导入后挂机状态必须关闭，策略模式打开，且步骤描述如 `#999 第1/3步` 不应被误导入。
+- v2.106.0 本地验证目标：商人接口返回空商品或读取失败时，如果可见商人弹窗已渲染商品卡片，自动商人应从 DOM 解析最高价商品和购买 index，继续走原有购买、清理和事件恢复窗口；隐藏商人 DOM 不应被解析。
+- v2.106.0 只读 Edge 游戏页证据：刷新游戏标签 `292345957` 前确认 AFK 关闭、自动探索未运行、自动恢复挂起 false、商人未激活；刷新后 helper/initialized 为 `2.106.0`，新 hook `extractMerchantItemsFromDom` 存在，纯函数最高价选择补 `index:1`，控制台 error 为空；未点击任何收功、探索、商人购买、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.107.0 本地验证结果：已确认商人无商品/无可买价格且开关开启时，自动离开商人并恢复挂机；商人 API 读取失败时不离开，只记录失败。全量自动测试 118/118 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过。
+- v2.107.0 只读 Edge 游戏页证据：刷新游戏标签 `292345957` 前确认 AFK 关闭、自动探索未运行、自动恢复挂起 false、商人未激活；刷新后 helper/initialized 为 `2.107.0`，`MerchantAutoBuyer.leaveMerchant` 与页面 `leaveMerchant()` 均存在，控制台 error 为空；extension/injected dataset 仍旧，状态报告显示“页面已加载新版，扩展提示待下次重载统一”；未点击任何收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.108.0 本地验证结果：最高价购买已触发但商人窗口仍活跃且 key 未变化时，默认自动离开残留商人窗口并恢复挂机；关闭 `leaveAfterPurchaseStuck` 时不离开；购买失败和读取失败仍不走自动离开。全量自动测试 121/121 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过。
+- v2.108.0 只读 Edge 游戏页证据：刷新游戏标签 `292345957` 前确认 AFK 关闭、自动探索未运行、自动恢复挂起 false、商人未激活；刷新后等待页面稳定，helper/initialized 为 `2.108.0`，新版商人逻辑已加载，页面 `leaveMerchant()` 存在，控制台 error 为空；extension/injected dataset 仍旧；未点击任何收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.109.0 本地验证目标：AFK 配置包导出时包含 `merchant` 配置；导入时同步商人配置但仍关闭 `afkLoop.enabled`，避免导入后自动启动挂机；旧配置包缺少商人字段时继续兼容。
+- v2.109.0 本地验证结果：配置包导出/导入覆盖 `merchant.enabled`、`onlyAutoExplore`、`buyDelay`、`leaveWhenNoItems`、`leaveAfterPurchaseStuck`；导入仍强制关闭 AFK。全量自动测试 121/121 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过，并已同步 standalone helper 与 Windows Edge 扩展目录。
+- v2.109.0 只读 Edge 游戏页证据：刷新游戏标签 `292345957` 后 helper/test hook 为 `2.109.0`，`normalizeMerchantConfig` 和 `buildAfkConfigPack` 存在；页面纯函数生成的配置包包含 `merchant`，导入后 `afkLoop.enabled=false`。AFK 关闭、自动探索未运行、商人/遭遇未激活、玩家冥想中，控制台 error 为空；extension dataset 仍显示旧 `2.99.0` 但页面 helper 已加载新版。未点击任何收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.110.0 本地验证目标：套用稳妥/护道/富裕挂机预设时，一并固定自动商人安全策略，避免预设测试继承本机旧商人开关。
+- v2.110.0 本地验证结果：预设应用新增 `applyAfkAutomationPreset`，三个预设都会一并重置自动商人为最高价购买、仅自动探索/挂机循环处理、购买延迟 800ms、无商品自动离开和购买后卡窗自动离开。全量自动测试 122/122 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过，并已同步 standalone helper 与 Windows Edge 扩展目录。
+- v2.110.0 只读 Edge 游戏页证据：刷新游戏标签 `292345957` 前确认 AFK 关闭、自动探索未运行，商人/遭遇只是隐藏 DOM 残留且不可见；刷新后 helper/test hook 为 `2.110.0`，`applyAfkAutomationPreset` 存在。页面纯函数模拟富裕预设输出 50 倍、自动迎战/用符/用丹开启，并把商人配置重置为 enabled、onlyAutoExplore、800ms、无商品离开、购买后卡窗离开；控制台 error 为空。未点击任何收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.111.0 本地验证目标：状态报告的预设匹配/漂移诊断纳入自动商人策略；AFK 循环匹配但商人配置偏离时，`模式:` 行应提示具体商人差异。
+- v2.112.0 本地验证目标：复制状态报告应直接显示当前自动商人配置，便于测试者确认最高价购买是否开启、是否仅限自动探索/挂机循环、购买延迟、无商品离开和购买后卡窗离开。
+- v2.112.0 本地验证结果：新增 `商人配置:` 状态行，例如 `商人配置: 开启 · 仅自动探索/挂机循环 · 延迟800ms · 无商品离开 · 购买后卡窗离开`。全量自动测试 124/124 通过，helper/loader 语法检查和 manifest 解析通过；该变更只增强报告，不新增商人购买、商人离开或其他游戏资源动作。
+- v2.112.0 只读 Edge 游戏页证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。刷新前 helper/initialized 为 `2.111.0`，AFK 关闭、自动探索未运行、商人未激活；刷新游戏页后 helper/initialized 为 `2.112.0`，`buildAfkMerchantConfigStatusLine` 存在，纯报告模拟输出 `商人配置: 开启 · 仅自动探索/挂机循环 · 延迟800ms · 无商品离开 · 购买后卡窗离开`，控制台 error 为空。extension/injected dataset 仍显示旧 `2.99.0`，但当前页面 helper 已加载新版。本次只刷新游戏页、读取变量和纯函数模拟，未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.113.0 本地验证目标：富裕 50 倍链路中，如果用符已完成但符箓面板关闭失败，下一轮快照确认同一遭遇的符窗仍可见时，应先关闭残留符窗，再恢复后续迎战判断；快照未确认符窗可见时仍保持原来的安全等待。
+- v2.113.0 本地验证结果：新增 `resolveCombatTalismanDialogCloseAttempt` 和 `AfkLoopManager.closeStuckTalismanDialog`，覆盖“同一遭遇符窗残留 -> 关闭 -> 继续迎战”的测试，同时保留“关闭失败且当前快照未确认可见 -> 不迎战”的旧保护。该变更只关闭残留符窗，不新增额外用符、迎战、复活、探索或商人动作。
+- v2.114.0 本地验证目标：页面仍残留云游商人状态，但 `/api/game/merchant` 明确返回“没有遇到云游商人/不在云游商人/已离开”时，应清理残留商人窗口、刷新页面状态并进入事件恢复窗口；临时读取异常仍保持读取失败，不自动离开或购买。
+- v2.114.0 本地验证结果：新增 `MerchantAutoBuyer clears stale merchant state when API says merchant is gone`，目标红灯确认后实现并通过；接口明确商人不存在时记录 `stale-cleared`、清理残留商人 UI 并恢复挂机，读取异常仍保持 `read-failed`。全量自动测试 127/127 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过。
+- v2.114.0 只读 Edge 游戏页证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的 `https://ling.muge.info/game.html` 标签 `292345957`。刷新前 helper/initialized/hook 为 `2.112.0`，AFK 关闭、自动探索未运行、自动恢复挂起 false、商人/遭遇/奇遇/符箓弹窗均未激活；刷新游戏页后等待注入完成，helper/initialized/hook 均为 `2.114.0`，控制台 error 列表为空。extension/injected dataset 仍显示旧 `2.99.0`，但当前页面 helper 已加载新版。本次只刷新游戏页、读取状态和控制台，未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.115.0 本地验证目标：陌生道友自动婉拒执行器必须和快照检测一样只处理可见弹窗；隐藏 PVP 邂逅残留不应抢在可见邀请前被关闭，兜底按钮搜索也不应点击隐藏容器里的“离开/取消”。
+- v2.115.0 本地验证结果：新增 `handlePlayerEncounter ignores hidden player encounter modules and uses the visible invite` 与 `clickPlayerEncounterDeclineButton ignores hidden encounter containers`，目标红灯确认后实现并通过；陌生道友自动婉拒入口和兜底按钮现在都统一跳过隐藏 DOM 残留。全量自动测试 129/129 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过。本次未刷新真实 Edge，等待下次统一实测加载。
+- v2.116.0 本地验证目标：自动探索返回明确资源不足错误时，`体力不足/精力不足/灵力不足` 应和 `神识不足` 一样归类为 `noSpirit/meditate`，让挂机回冥想；普通接口异常仍应保持 `explore-error` 暂停。
+- v2.116.0 本地验证结果：新增 `detectExploreResourceShortageNotice()` 与 `classifyExploreInterruption categorizes auto-explore stopping events` 覆盖，目标红灯确认后实现并通过；自动探索资源不足会进入回冥想，未知探索错误仍暂停。全量自动测试 129/129 通过。
+- v2.117.0 本地验证目标：自动探索启动入口失败且失败消息明确资源不足时，应记录 `resource-shortage`，下一轮快照带 `exploreStartResourceShortage` 并回冥想；普通启动失败仍保持原有 `start-failed` 诊断。
+- v2.117.0 本地验证结果：新增 `startAutoExplore records resource shortage failures for meditation recovery` 与 `decideAfkNextAction returns to meditation after explore start resource shortage`，目标红灯确认后实现并通过；启动入口资源不足不再反复尝试探索，而是进入统一回冥想决策。
+- v2.117.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。重载 LingVerse 扩展并刷新游戏页后，helper/hook/initialized 均为 `2.117.0`，AFK 未启动、自动探索未运行、商人/遭遇/奇遇/陌生道友/符箓弹窗均未激活；纯函数模拟 `exploreStartResourceShortage=true` 返回 `startMeditation/explore-start-no-spirit`。本次未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.118.0 本地验证目标：云游商人最高价商品购买失败且失败消息明确为灵石/余额等货币不足时，应记录 `insufficient-funds` 并按配置自动离开商人恢复挂机；关闭该开关时仍保持购买失败停留，普通购买失败不自动离开。
+- v2.118.0 本地验证结果：新增 `detectMerchantInsufficientFundsNotice()`、`MerchantAutoBuyer leaves merchant after explicit insufficient funds purchase failures`、`MerchantAutoBuyer keeps merchant open after insufficient funds when auto leave is disabled` 和对应状态报告覆盖；全量自动测试 134/134 通过。自动商人配置包、预设匹配和 `商人配置:` 状态行已包含 `leaveOnInsufficientFunds`，默认开启。
+- v2.118.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。刷新前确认 AFK 关闭、自动探索未运行、自动恢复挂起 false、商人/遭遇/奇遇均未激活；刷新游戏页后 helper/hook/initialized 均为 `2.118.0`，新 hook `detectMerchantInsufficientFundsNotice` 存在，纯函数模拟 `灵石不足/余额不足` 返回 true、`神识不足` 返回 false，`商人配置:` 行显示 `灵石不足离开`，控制台 error 为 0。extension/injected dataset 仍显示旧 `2.99.0`，但当前页面 helper 已加载新版。本次只刷新游戏页、读取状态和纯函数模拟，未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.119.0 本地验证目标：当页面自动探索开关仍勾选，但游戏原生 `_autoExploreRunning=false` 且 `_autoResumeExplorePending=false` 时，不应继续把 UI 开关当成运行中；挂机快照应标记 `autoExploreToggleStale`，下一步应以 `auto-explore-toggle-stale` 重新启动自动探索，状态报告显示 `探索: 开关失配`。
+- v2.119.0 本地验证结果：新增 `AfkLoopManager detects stale auto-explore toggle and restarts exploration` 覆盖；`buildSnapshot()` 在有页面原生运行/恢复标志时优先信任页面标志，只在页面标志不可用时才回退 UI 开关；调试摘要和状态报告已暴露 `autoExploreToggleStale` 与“开关失配”。全量自动测试 135/135 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过。
+- v2.119.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。刷新前确认 AFK 关闭、自动探索未运行、自动恢复挂起 false、商人/遭遇/奇遇/符箓弹窗均未激活；刷新游戏页后 helper/hook/initialized 均为 `2.119.0`，纯函数模拟 `autoExploreToggleStale=true` 生成 `挂机状态 · 启动探索 · 自动探索开关失配` 且报告包含 `探索: 开关失配`，控制台 error 为 0。本次只刷新游戏页、读取状态和纯函数模拟，未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.120.0 本地验证目标：当可见冥想条恢复神识加缓存神识已经超过神识上限时，复制状态应显示 `冥想溢出:`，写明估算神识、超出多少识，并提示可收功探索或缩短冥想时间；该行只用于解释自定义冥想时长是否浪费，不新增自动收功/探索/资源动作。
+- v2.120.0 本地验证结果：新增 `buildAfkStatusReport flags wasted meditation overflow from the visible bar` 覆盖真实 Edge 观察到的 `966/2756 + 恢复4011识` 场景，状态报告输出 `冥想溢出: 估算4977/2756 · 超出2221识 · 可收功探索或缩短冥想时间`。全量自动测试 136/136 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过；该变更只增强状态报告，不新增收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇或道友动作。
+- v2.120.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。刷新前确认 AFK 关闭、自动探索未运行、自动恢复挂起 false、商人/遭遇/奇遇/符箓弹窗均未激活；刷新游戏页后 helper/hook/initialized 均为 `2.120.0`。当前可见冥想条 `7时25分`、恢复 `4086识`，状态栏 `966/2,756`；纯状态报告模拟返回 `挂机状态 · 结束冥想 · 神识已满`，并输出 `冥想溢出: 估算5052/2756 · 超出2296识 · 可收功探索或缩短冥想时间`，控制台 error 为 0。本次只刷新游戏页、读取状态和纯函数模拟，未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.121.0 本地验证目标：冥想溢出时，复制状态应同时显示 `冥想调时:`，按当前恢复速度估算约多少分钟可满识、本次已冥想多久、超过满识点多久和当前配置分钟数，便于测试者调整自定义冥想时间；该行只读报告，不新增自动收功、探索或资源动作。
+- v2.121.0 本地验证结果：扩展 `buildAfkStatusReport flags wasted meditation overflow from the visible bar` 覆盖 `冥想调时: 约195分钟可满识 · 已冥想437分钟 · 超出满识约242分钟 · 当前配置140分钟`。全量自动测试 136/136 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过；该变更只增强状态报告，不新增收功、探索、商人、护道、战斗、复活、用符、用丹、奇遇或道友动作。
+- v2.122.0 本地验证目标：自动商人真正购买最高价商品时应优先走 `/api/game/merchant/buy`，读取真实 `code/message`；页面 `buyMerchantItem(index)` 只作为 API 不可用时的兜底，避免真实页函数吞掉失败 toast 后被 helper 误判为购买已触发。自动离开商人同样优先走 `/api/game/merchant/leave`，失败时应保留 `leave-failed` 诊断。
+- v2.122.0 本地验证结果：新增 `MerchantAutoBuyer prefers API purchases over page functions to observe failures` 覆盖页面函数存在但 API 返回 `灵石不足，无法购买` 的场景；脚本没有调用页面函数，而是记录货币不足并按配置调用离开商人恢复挂机。全量自动测试 137/137 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过。
+- v2.122.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957` 并只刷新游戏页；helper/hook/initialized 均为 `2.122.0`。真实页 `buyMerchantItem(index)` 源码确认会吞掉失败只弹 toast；helper 源码读回 `API.buyMerchantItem` 位于 `_win.buyMerchantItem` 前、`API.leaveMerchant` 位于 `_win.leaveMerchant` 前。纯函数模拟最高价选择返回 `index:1`，`灵石不足` 识别 true、`神识不足` 识别 false，归一化 `商人配置:` 显示 `开启 · 仅自动探索/挂机循环 · 延迟800ms · 无商品离开 · 购买后卡窗离开 · 灵石不足离开`。AFK 关闭、自动探索未运行、商人未激活；控制台有 4 条非 LingVerse helper URL 的外部扩展 `chrome-extension://amkb.../content_main.js` `Uncaught (in promise)` 噪声。本次未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.123.0 本地验证目标：低境界 1 倍护道模式下，自动护道应优先使用真实页 `tryAutoHireProtectorForEncounter({ silent:false })` 或 `/api/game/encounter-auto-hire`，读取成功/失败结果；只有页面函数和 API 都不可用时才回退 `#encounterHireProtectorBtn`。如果页面函数返回失败并写入 `_lastAutoHireProtectorFailure`，状态摘要应记录 `hire-failed` 和真实失败消息，不能因为按钮存在就误判 `hire-triggered`。
+- v2.123.0 本地验证结果：新增 `tryHireEncounterGuardian prefers page auto-hire result over clicking the hire button`，先红灯确认旧逻辑会直接点按钮并误报成功；实现后目标测试通过，失败消息 `没有符合条件的护道者` 会进入 `lastGuardianAttempt.failureMessage`，本次遭遇会被标记已尝试，避免重复扣费。全量自动测试 138/138 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过。
+- v2.123.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957` 并只刷新游戏页；helper/hook/initialized 均为 `2.123.0`，真实页 `tryAutoHireProtectorForEncounter` 存在。helper 源码读回 `tryAutoHireProtectorForEncounter` 位于 `#encounterHireProtectorBtn` 前，`API.autoHireGuardian` 也位于按钮前。AFK 关闭、自动探索未运行、商人/遭遇/战斗均未激活，玩家冥想中；控制台 error 为 0。本次未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.124.0 本地验证目标：富裕 50 倍链路里自动迎战应优先调用 `/api/game/combat-choice` 并读取真实 `code/message`；只有 API 不可用时才回退页面 `handleCombatChoice('fight')` 或 `#encounterFightBtn`，避免按钮点击或页面函数吞掉失败 toast 后误记为 `fight-triggered`。
+- v2.124.0 本地验证结果：新增 `fightEncounter prefers API fight result over clicking the fight button`，先红灯确认旧逻辑在按钮存在时直接点击并进入恢复窗口；实现后 API 返回 `战斗状态已变化` 时只记录 `fight-failed · api`，不点击按钮、不调用页面函数、不标记本遭遇已迎战。全量自动测试 139/139 通过，helper/loader 语法检查和 manifest 解析通过。
+- v2.124.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。刷新前确认 AFK 关闭、自动探索未运行、商人/遭遇/战斗/奇遇均未激活；刷新游戏页后 helper/hook/initialized 均为 `2.124.0`，`fightEncounter` 源码确认 `API.combatChoice('fight')` 位于 `handleCombatChoice` 和 `#encounterFightBtn` 前。extension dataset 仍显示旧 `2.99.0`，但当前页面 helper 已加载新版；控制台 error 为 0。本次未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.125.0 本地验证目标：自定义 140 分钟或神识已满触发收功时，`handleStopMeditate()` / `/api/game/meditate/stop` 返回后必须确认页面不再显示冥想中；如果 `_lastPlayerData`、冥想状态接口或可见冥想条仍显示冥想中，应记录 `stop-failed`，清空收功恢复窗口，不能误接自动探索。
+- v2.125.0 本地验证结果：新增 `AfkLoopManager.stopMeditation does not open resume window when meditation remains active`，先红灯确认旧逻辑只调用页面函数并直接刷新；实现后未确认收功会记录 `收功入口已调用但页面仍显示冥想中`，`postMeditationResumeUntil=0`，`lastDecisionKey` 清空以便下一轮重新记录决策。全量自动测试 140/140 通过，helper/loader 语法检查和 manifest 解析通过。
+- v2.126.0 本地验证目标：低神识、探索卡住或资源不足触发回冥想时，`handleMeditate()` / `/api/game/meditate/start` 返回后必须确认页面已经显示冥想中；如果 `_lastPlayerData`、冥想状态接口和可见冥想条仍都没有进入冥想，应记录 `start-failed`，不能误记 `start-triggered` 后静默等待。
+- v2.126.0 本地验证结果：新增 `AfkLoopManager.startMeditation records failure when meditation does not become active`，先红灯确认旧逻辑只调用页面函数并直接刷新；实现后未确认入定会记录 `冥想入口已调用但页面仍未显示冥想中`，并清空 `lastDecisionKey` 让下一轮重新输出诊断。全量自动测试 141/141 通过，helper/loader 语法检查和 manifest 解析通过。
+- v2.127.0 本地验证目标：陌生道友自动婉拒/离开入口返回后，应确认当前可见邂逅弹窗已经关闭；如果 PVP、邀约、会话、交易、战斗或响应选择弹窗仍可见，应记录 `decline-failed`，不能误记 `decline-triggered` 并进入事件恢复窗口。
+- v2.127.0 本地验证结果：新增 `handlePlayerEncounter records failure when decline does not close the encounter`，先红灯确认旧逻辑调用 `respondInvite(false)` 后直接打开恢复窗口；实现后未确认关闭会记录 `陌生道友弹窗仍未关闭`，不调用 `schedulePostInteractionResume`。全量自动测试 142/142 通过，helper/loader 语法检查和 manifest 解析通过。
+- v2.128.0 本地验证目标：奇遇策略/固定选择入口返回后，应确认奇遇页面已经推进或关闭；如果仍停在同一个 `adventureId + step + totalSteps + choiceIndex`，应记录 `choice-failed`，不能误记 `choice-triggered` 并进入事件恢复窗口。
+- v2.128.0 本地验证结果：新增 `handleAdventure records failure when a choice does not advance the adventure step` 与 `handleAdventure confirms choice progress with the current adventure strategy config`，先红灯确认旧确认路径会误判推进并安排恢复；实现后确认逻辑使用本次传入的奇遇策略配置，同一步未推进会记录 `奇遇选择入口已调用但页面仍停在同一步`，不调用 `schedulePostInteractionResume`。
+- v2.128.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。刷新前 helper/hook/initialized 为 `2.124.0`，AFK 关闭、自动探索未运行、商人/遭遇/奇遇/陌生道友均未激活，玩家冥想中；刷新游戏页后 helper/hook/initialized 均为 `2.128.0`，`confirmAdventureProgressed` 测试钩子存在，控制台 error 为 0。extension/injected dataset 仍显示旧 `2.99.0`，但当前页面 helper 已加载新版。本次只刷新游戏页和读取状态，未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.129.0 本地验证目标：已完成奇遇自动关闭入口返回后，应确认奇遇面板已经消失；如果 `#adventureOverlay` 仍可见，应记录 `close-failed`，不能误记 `close-triggered` 并进入事件恢复窗口。
+- v2.129.0 本地验证结果：新增 `handleAdventure records failure when completed adventure close does not close the overlay`，先红灯确认旧逻辑点击关闭后直接安排恢复；实现后关闭未确认会记录 `奇遇关闭入口已调用但面板仍未关闭`，保留本地奇遇选择去重键，不调用 `schedulePostInteractionResume`。
+- v2.130.0 本地验证目标：富裕 50 倍链路里 `API.useItem` / 页面用丹入口返回成功后，必须继续确认五行通灵状态已经出现或刷新；未确认时应记录 `use-not-confirmed`，不能记为 `used`，也不能增加本轮涅槃重生丹次数。
+- v2.130.0 本地验证结果：新增 `maybeUseNirvanaRebirthPill records failure when the five-root buff is not confirmed`、`buildAfkStatusReport explains unconfirmed nirvana pill attempts`、`buildAfkWaitingDiagnosis explains unconfirmed nirvana pill stalls`，覆盖用丹入口成功但未检测到 `fiveRootBuffGrade/fiveRootBuffExpire` 的情况；状态报告显示“用丹未确认”和“涅槃重生丹未确认生效”，等待诊断会把探索启动卡住归因到该失败，不进入误成功路径。
+- v2.131.0 本地验证目标：扩展 content script 如果只留下 `lingverseAutoMapInjected=1` / 旧注入版本，但页面没有 helper 或初始化版本，不能因为重复注入保护而跳过；应重新注入 helper，避免 tester 刷新后只看到旧扩展 dataset 而没有挂机面板。
+- v2.131.0 本地验证结果：新增 `extension loader retries injection when the marker exists but helper is missing`，先红灯确认旧 loader 只看注入标记会跳过；实现后 loader 只有在共享 DOM dataset 或全局里能看到 helper/initialized 版本时才跳过重复注入。helper 现在会把 `lingverseAutoMapHelperVersion` / `lingverseAutoMapInitializedVersion` 写入 `documentElement.dataset`，供扩展隔离世界判断。
+- v2.132.0 本地验证目标：Agent 接管真实 Edge 时，应能直接打开助手面板并读回面板/版本/AFK/商人状态；不能因为主面板默认隐藏而误判“没有安装/没有接管”，也不能为了确认面板而点击收功、探索、商人购买、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.132.0 本地验证结果：新增 `UI panel control hooks expose and toggle the helper panel without game actions`，先红灯确认 `showPanel/getPanelState` 不存在；实现后 `LingVerseAutoMapTestHooks.showPanel()` 会把 `#am-panel` 设为 `display:flex`，`hidePanel()` 会收起面板，`getPanelState()` 可读回 helper/initialized/extension/injected 版本、AFK 开关、商人开关和侧栏按钮存在性。该变更只增强 Agent/测试接管入口，不新增任何游戏资源动作。
+- v2.132.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。当前扩展/注入 dataset 仍为 `2.99.0`，因此手动注入 `/home/lxh/LingVerse-all/lingverse-explore-helper.user.js` 并重建助手面板；读回 helper/hook/initialized/DOM helper/DOM initialized 均为 `2.132.0`，`getPanelState()` 返回 `visible=true`、`display=flex`、`merchantEnabled=true`、`afkEnabled=false`，面板按钮包含“套用稳妥1倍 / 套用护道1倍 / 套用富裕50倍 / 启动挂机 / 复制状态 / 复制摘要”。截图保存到 `/tmp/lingverse-v2.132-panel.png`。本次只操作助手面板显示和只读状态，未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.133.0 本地验证目标：挂机循环出现有效重复等待诊断时，应自动保存最近一次脱敏卡点快照到 `localStorage`，并通过面板“复制最近卡点”和 `LingVerseAutoMapTestHooks.getLastAfkIssueSnapshot()` 读回；保存内容应复用现有脱敏摘要/可读报告，URL query/hash 和敏感参数必须清理，普通巡检不应写入，也不新增收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友动作。
+- v2.133.0 本地验证结果：新增 `AfkLoopManager saves active wait diagnosis snapshots for later tester readback`，先红灯确认没有读回 hook；实现后 AFK tick 在重复奇遇等待诊断 active 时保存 `lingverse-afk-last-issue-snapshot/v1`，读回报告包含 `诊断:` 行，摘要里的 URL 不含 `token=secret`。面板新增“复制最近卡点”，hook 暴露 `buildAfkLastIssueSnapshotRecord` / `saveAfkLastIssueSnapshot` / `getLastAfkIssueSnapshot` / `clearLastAfkIssueSnapshot`。全量自动测试 151/151 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过；该变更只增强诊断留存，不新增任何游戏资源动作。
+- v2.133.0 Edge 读回证据：同步 main repo、standalone helper 和 Windows Edge 扩展目录后，使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。当前扩展/注入 dataset 仍为 `2.99.0`，因此手动注入 `/home/lxh/LingVerse-all/lingverse-explore-helper.user.js` 并重建助手面板；读回 helper/hook/initialized/DOM helper/DOM initialized 均为 `2.133.0`，`panelState.visible=true`、`display=flex`、`merchantEnabled=true`、`afkEnabled=false`，面板包含“复制最近卡点”。纯 hook 演练用脱敏 debug snapshot 保存/读回 `lingverse-afk-last-issue-snapshot/v1`，`reason=adventure-active`、`likelyCause=奇遇#456未配置自动策略`、报告含 `诊断:` 行、摘要 URL 不含 query/hash；演练后已调用 `clearLastAfkIssueSnapshot()` 清除假卡点。当前 AFK 关闭、自动探索未运行、商人/遭遇/奇遇/陌生道友均未激活，玩家冥想中，神识 `1377/2756`。截图保存到 `/tmp/lingverse-v2.133-panel.png`。本次只操作助手面板显示、只读状态和诊断 key 演练，未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或道友按钮。
+- v2.134.0 本地验证目标：多人长跑测试可能一晚出现多个不同卡点，单条“最近卡点”会被后续事件覆盖。应在保存最近卡点的同时维护 `lingverse_afk_issue_history_v1`，保留最近 5 条不同卡点；同一 `action/reason/firstAt/likelyCause/message` 的重复保存只更新不刷屏。面板新增“复制卡点历史”，hook 暴露 `getAfkIssueHistory()` / `clearAfkIssueHistory()`。该功能仍只保存脱敏摘要和可读报告，不新增任何游戏资源动作。
+- v2.134.0 本地验证结果：新增 `AFK issue history keeps recent distinct stuck snapshots without duplicate spam`，覆盖最近 5 条不同卡点、重复卡点去重更新、历史清空和 hook 读回；全量自动测试 152/152 通过，helper/loader 语法检查、manifest 解析和 `git diff --check` 均通过。该变更只增强诊断留存和 Agent/测试者读回，不新增任何收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或陌生道友动作。
+- v2.134.0 Edge 读回证据：使用 Agent Browser CLI 接管真实 Edge profile `edge-personal-lingverse` 的游戏标签 `292345957`。当前扩展/注入 dataset 仍为 `2.99.0`，因此未刷新游戏页，直接手动注入 `/home/lxh/LingVerse-all/lingverse-explore-helper.user.js` 并展开助手面板；读回 helper/hook/initialized/DOM helper/DOM initialized 均为 `2.134.0`，`panelState.visible=true`、`display=flex`、`merchantEnabled=true`、`afkEnabled=false`，面板包含“复制卡点历史”，hook 暴露 `getAfkIssueHistory` / `clearAfkIssueHistory` / `AfkLoopManager.copyIssueHistory`，历史读回 schema 为 `lingverse-afk-issue-history/v1`。截图保存到 `/tmp/lingverse-v2.134-panel.png`。真实游戏日志显示此前自动商人已购买“稀有延寿丹”并离开商人，页面当前无自动探索、商人、奇遇 blocker。本次只手动注入 helper、展开助手面板、截图和读取状态，未点击收功、探索、商人购买、商人离开、护道、战斗、复活、用符、用丹、奇遇或陌生道友按钮。
 
 ## 下一步建议
 
-1. 用户刷新页面/重载扩展后实测 v2.99.0：护道 1 倍预设重点观察“环境/阶段/模式/冥想/冥想预计/冥想兜底/冥想同步/冥想建议/恢复/回冥想/诊断/诊断归因/现场日志/商人/商人建议/护道/护道建议/硬停/硬停建议”；如果页面刚刷新时接口/cache 短暂为空，AFK 快照应能从可见状态栏和探索按钮补齐神识/单次消耗；如果页面可见冥想条和恢复神识，复制状态应显示当前估算神识和计划收功估算；如果页面可见冥想条但状态缓存不同步，复制状态里的“阶段/冥想”应仍显示已冥想时长，即使冥想条文本是一整行，也不应把“最长12小时”当作已冥想时长，并在 140 分钟或缓存神识+冥想条恢复神识达到上限时触发“神识已满”收功，同时“冥想兜底”应显示恢复值、缓存值和估算值，“冥想同步”应说明玩家缓存未标记冥想；AFK 快照应优先读取新鲜玩家信息，神识低于阈值/单次消耗/当前倍率整组消耗时及时显示回冥想；成功收功后应出现“收功恢复窗口”，短时间内优先接上探索而不是马上又回冥想；收功恢复窗口内即使探索按钮短暂禁用，只要没有明确“神识不足/体力不足”，也应继续尝试 `post-meditation-ready`；隐藏在 DOM 里但 `display:none` / `visibility:hidden` / `aria-hidden` / 零尺寸的商人、遭遇、奇遇、陌生道友和冥想条不应误报阻塞；游戏遭遇面板显示“自动雇护道...重试中/处理中/可手动接管”时，状态应显示“护道: 游戏护道处理中”并等待结算；自动护道搭配批量探索时，预检应提示“批量探索遭遇不能雇护道”，遭遇状态/建议应说明改用 1 倍护道或富裕 50 倍战斗链路；如果收功后没续上探索，`诊断归因:` 应显示“收功后未能重启探索 · 自动探索启动失败 · ...”；如果探索按钮禁用但状态没有写“神识不足”，只要神识低于阈值/单次消耗或不足当前倍率整组消耗，应显示回冥想而不是长期等待“当前区域不可探索”；探索疑似卡住回冥想时，`回冥想:` 应显示 `卡住判定...秒`；`环境:` 如提示 helper/扩展版本不一致、helper/面板版本不一致或面板版本未知，先刷新页面确认；如果 helper/面板已是新版但扩展提示仍旧，应显示“页面已加载新版，扩展提示待下次重载统一”；同一遭遇已尝试护道后卡住时 `诊断归因:` 应显示“本遭遇已尝试自动护道，避免重复扣费”；奇遇策略自动处理时状态应显示“奇遇动作:”和“奇遇建议:”，同一步同一选项已触发过时应显示“本步已触发自动选择”并等待页面推进，重复未推进时 `诊断归因:` 应显示“奇遇#... 自动选择第...项...后仍未前进”；奇遇弹窗关闭后复制状态仍应显示最近 `奇遇样本:` 和 `奇遇策略:` 候选；暂停模式下未完成奇遇仍等待，已完成奇遇应显示“奇遇动作: 准备关闭奇遇”和“不自动选择新剧情”；陌生道友自动婉拒尝试后状态应显示“陌生道友:”和“陌生道友建议:”，未关闭时 `诊断归因:` 应显示“陌生道友自动婉拒后仍未关闭”；富裕 50 倍小号测试重点观察“模式/冥想/冥想预计/冥想兜底/冥想同步/冥想建议/商人/商人建议/探索启动/探索建议/用丹/用丹建议/用符/用符建议/符窗关闭/迎战/迎战建议/复活/复活建议/恢复/回冥想/诊断归因/现场日志/预检”，确认同一遭遇不会重复触发迎战，符箓面板未关闭时不会继续自动迎战，手动/自动关窗后可恢复迎战判断，50 倍神识不足整组时状态显示 `50倍需...`，复活入口返回后仍死亡时显示 `自动复活未确认` 且不进入 `复活恢复窗口`，AFK 循环运行时即使原生 `_autoResumeExplorePending` 丢失也能继续处理商人；战斗/事件处理后没续上 50 倍探索时 `诊断归因:` 应显示“事件恢复后未能重启探索”或“复活恢复后未能重启探索”。
+1. 用户刷新页面/重载扩展后实测 v2.134.0：护道 1 倍预设重点观察“环境/阶段/模式/商人配置/冥想/冥想预计/探索续航/冥想兜底/冥想同步/冥想建议/恢复/回冥想/诊断/诊断归因/现场日志/商人/商人建议/护道/护道建议/硬停/硬停建议/最近卡点/卡点历史”；套用稳妥/护道/富裕预设后，自动商人应同步重置为最高价购买、仅自动探索/挂机循环处理、无商品离开、购买后卡窗离开和灵石不足离开，并在 `商人配置:` 行直接显示；Agent 接管时可先调用 `LingVerseAutoMapTestHooks.showPanel()` 展开面板并用 `getPanelState()` 读回状态，长跑卡住后用 `LingVerseAutoMapTestHooks.getLastAfkIssueSnapshot()` 读回最近一次脱敏卡点，或用 `LingVerseAutoMapTestHooks.getAfkIssueHistory()` 读回最近 5 条不同卡点历史；若之后手动改坏商人策略，`模式:` 行应显示对应商人漂移而不是继续显示已匹配预设；配置包复制/导入也应带上自动商人的购买延迟、无商品离开、购买后残留窗口离开和灵石不足离开设置；如果页面刚刷新时接口/cache 短暂为空，AFK 快照应能从可见状态栏和探索按钮补齐神识/单次消耗；如果页面可见冥想条和恢复神识，复制状态应显示当前估算神识和计划收功估算；如果能读到当前神识和单次探索消耗，复制状态应显示“探索续航”，高倍率不足一组时显示“约...次1倍探索”和“不足当前倍率”；如果页面可见冥想条但状态缓存不同步，复制状态里的“阶段/冥想”应仍显示已冥想时长，即使冥想条文本是一整行，也不应把“最长12小时”当作已冥想时长，并在 140 分钟或缓存神识+冥想条恢复神识达到上限时触发“神识已满”收功，同时“冥想兜底”应显示恢复值、缓存值和估算值，“冥想同步”应说明玩家缓存未标记冥想；入定入口返回后应确认页面已进入冥想，未确认时不误记成功；收功入口返回后应确认页面不再冥想，未确认时不进入收功恢复窗口；AFK 快照应优先读取新鲜玩家信息，神识低于阈值/单次消耗/当前倍率整组消耗时及时显示回冥想；成功收功后应出现“收功恢复窗口”，短时间内优先接上探索而不是马上又回冥想；收功恢复窗口内即使探索按钮短暂禁用，只要没有明确“神识不足/体力不足”，也应继续尝试 `post-meditation-ready`；隐藏在 DOM 里但 `display:none` / `visibility:hidden` / `aria-hidden` / 零尺寸的商人、遭遇、奇遇、陌生道友和冥想条不应误报阻塞；云游商人最高价购买应优先走 API 读取真实成功/失败，API 不可用时才回退页面函数；如果接口空商品但商人弹窗已显示商品，应能从弹窗 DOM 解析最高价商品继续购买，已确认无可买商品时应自动离开商人并恢复挂机，购买已触发但窗口仍未关闭时应自动离开残留商人窗口，明确灵石/余额不足时应自动离开商人，接口确认商人已不存在时应清理残留商人状态并恢复挂机，API 临时读取失败/普通购买失败时不应强退商人；事件恢复窗口应只在 AFK 开启时主动安排下一轮检查，AFK 关闭时只记录恢复状态；陌生道友婉拒后应确认弹窗已关闭，未关闭时不进入事件恢复窗口；游戏遭遇面板显示“自动雇护道...重试中/处理中/可手动接管”时，状态应显示“护道: 游戏护道处理中”并等待结算；自动护道搭配批量探索时，预检应提示“批量探索遭遇不能雇护道”，遭遇状态/建议应说明改用 1 倍护道或富裕 50 倍战斗链路；如果收功后没续上探索，`诊断归因:` 应显示“收功后未能重启探索 · 自动探索启动失败 · ...”；如果探索按钮禁用但状态没有写“神识不足”，只要神识低于阈值/单次消耗或不足当前倍率整组消耗，应显示回冥想而不是长期等待“当前区域不可探索”；探索疑似卡住回冥想时，`回冥想:` 应显示 `卡住判定...秒`；`环境:` 如提示 helper/扩展版本不一致、helper/面板版本不一致或面板版本未知，先刷新页面确认；如果 helper/面板已是新版但扩展提示仍旧，应显示“页面已加载新版，扩展提示待下次重载统一”；如果页面只有扩展注入标记但 helper/面板版本缺失，刷新后应由 loader 重新注入而不是长期没有面板；同一遭遇已尝试护道后卡住时 `诊断归因:` 应显示“本遭遇已尝试自动护道，避免重复扣费”；奇遇策略自动处理时状态应显示“奇遇动作:”和“奇遇建议:”，同一步同一选项已触发过时应显示“本步已触发自动选择”并等待页面推进，入口返回后仍停同一步时应显示“自动选择失败”且不进入恢复窗口，已完成奇遇关闭后面板仍可见时应显示“自动关闭失败”且不进入恢复窗口，重复未推进时 `诊断归因:` 应显示“奇遇#... 自动选择第...项...后仍未前进”；奇遇弹窗关闭后复制状态仍应显示最近 `奇遇样本:` 和 `奇遇策略:` 候选；摘要回放导入策略应能识别可读状态里的 `奇遇策略: 456=2 / 789=1` 和 `#456 · 第2项`；暂停模式下未完成奇遇仍等待，已完成奇遇应显示“奇遇动作: 准备关闭奇遇”和“不自动选择新剧情”；陌生道友自动婉拒尝试后状态应显示“陌生道友:”和“陌生道友建议:”，未关闭时 `诊断归因:` 应显示“陌生道友自动婉拒后仍未关闭”；富裕 50 倍小号测试重点观察“模式/商人配置/冥想/冥想预计/探索续航/冥想兜底/冥想同步/冥想建议/商人/商人建议/探索启动/探索建议/用丹/用丹建议/用符/用符建议/符窗关闭/迎战/迎战建议/复活/复活建议/恢复/回冥想/诊断归因/现场日志/预检”，确认自动迎战优先走 API 读取真实失败消息，同一遭遇不会重复触发迎战，符箓面板未关闭时不会继续自动迎战，下一轮确认残留符窗可见时会自动关闭后恢复迎战判断，50 倍神识不足整组时状态显示 `50倍需...`，涅槃重生丹入口返回成功后必须确认五行通灵状态，未确认时状态应显示 `用丹: 涅槃重生丹未确认` / `用丹建议: 涅槃重生丹未确认生效` 且不计入本轮用丹次数，复活入口返回后仍死亡时显示 `自动复活未确认` 且不进入 `复活恢复窗口`，AFK 循环运行时即使原生 `_autoResumeExplorePending` 丢失也能继续处理商人；战斗/事件处理后没续上 50 倍探索时 `诊断归因:` 应显示“事件恢复后未能重启探索”或“复活恢复后未能重启探索”。
 2. 继续用真实挂机摘要收集“自动探索停住”的事件原因，尤其记录 `automation.guardian` 的失败 message。
 3. 富裕 50 倍模式继续小号测试：用符、复活、用丹都保持 opt-in，并先用默认本轮上限观察战斗结算后恢复窗口是否够用。
 4. 用真实奇遇链继续记录每个 adventureId 的选项、奖励和后续步骤，并把摘要里的 `strategyHints.mapLine` 沉淀到策略表。

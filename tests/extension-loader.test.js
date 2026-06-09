@@ -10,6 +10,8 @@ function runLoader(overrides = {}) {
     const appended = [];
     const documentElement = overrides.documentElement || { dataset: {} };
     const sandbox = {
+        LingVerseAutoMapVersion: overrides.LingVerseAutoMapVersion,
+        LingVerseAutoMapInitializedVersion: overrides.LingVerseAutoMapInitializedVersion,
         document: {
             documentElement,
             head: {
@@ -54,11 +56,29 @@ test('extension loader skips duplicate injection for the same extension version'
     const documentElement = {
         dataset: {
             lingverseAutoMapInjected: '1',
-            lingverseAutoMapInjectedVersion: '2.75.0'
+            lingverseAutoMapInjectedVersion: '2.75.0',
+            lingverseAutoMapHelperVersion: '2.75.0',
+            lingverseAutoMapInitializedVersion: '2.75.0'
         }
     };
     const result = runLoader({ documentElement });
 
     assert.equal(result.appended.length, 0);
     assert.equal(documentElement.dataset.lingverseAutoMapInjectedVersion, '2.75.0');
+});
+
+test('extension loader retries injection when the marker exists but helper is missing', () => {
+    const documentElement = {
+        dataset: {
+            lingverseAutoMapInjected: '1',
+            lingverseAutoMapInjectedVersion: '2.75.0'
+        }
+    };
+    const result = runLoader({ documentElement });
+
+    assert.equal(result.appended.length, 1);
+    assert.equal(result.documentElement.dataset.lingverseAutoMapInjected, '1');
+    assert.equal(result.documentElement.dataset.lingverseAutoMapInjectedVersion, '2.75.0');
+    assert.equal(result.documentElement.dataset.lingverseAutoMapExtensionVersion, '2.75.0');
+    assert.equal(result.appended[0].src, 'chrome-extension://lingverse/lingverse-explore-helper.user.js?v=2.75.0');
 });
